@@ -409,8 +409,14 @@ async def run2(
     await product.ensure(session, project_id)
 
     results: list[dict[str, Any]] = []
+    # Seed from the ledger so `--only <shot>` still knows what the shot before it produced.
     paths: dict[str, str] = {}
     media: dict[str, str] = {}
+    for done_row in shots2.plan():
+        clip = clip_file(out_dir, ledger, done_row["job_id"], edited=done_row["edit_to_product"])
+        if clip is not None:
+            paths[done_row["key"]] = str(clip)
+            media[done_row["key"]] = _done_media_id(ledger, done_row["job_id"])
     for row in rows:
         key = row["key"]
         for index, job in enumerate(take_ids(row["job_id"], row["hands_risk"])):

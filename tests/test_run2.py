@@ -155,3 +155,33 @@ def test_run2_skips_shots_already_done(monkeypatch, tmp_path):
 
     result = asyncio.run(pipeline.run2(None, "P", out_dir=tmp_path, wait=1.0))
     assert all(s["status"] == "already done" for s in result["shots"])
+
+
+def test_run2_can_continue_a_single_shot_from_what_the_ledger_already_holds(monkeypatch, tmp_path):
+    # `--only pose` must still find the reveal it continues: the source lives in the ledger, not in a
+    # variable this run happened to fill in.
+    sources: list[str] = []
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("tryon2-04", "done", path=str(tmp_path / "tryon2-04.mp4"), media_id="m4", spent=10)
+    ledger.append("tryon2-04-edit", "done", outputs=[{"media_id": "m4", "path": "x"}], spent=20)
+
+    async def fake_persona(session, project_id, **kwargs):
+        return {"entity_id": "e", "name": "Mai", "created": False}
+
+    async def fake_product(session, project_id):
+        return {"media_id": "p"}
+
+    async def fake_extend(session, project_id, media_id, prompt, **kwargs):
+        sources.append(media_id)
+        return {"outputs": [{"media_id": "m5", "path": str(tmp_path / "ext.mp4")}], "spent": 10}
+
+    async def fake_refetch(session, project_id, media_id, stem):
+        return stem.with_suffix(".mp4")
+
+    monkeypatch.setattr(pipeline.persona, "ensure", fake_persona)
+    monkeypatch.setattr(pipeline.product, "ensure", fake_product)
+    monkeypatch.setattr(pipeline.clips, "extend", fake_extend)
+    monkeypatch.setattr(pipeline, "_refetch_720", fake_refetch)
+
+    asyncio.run(pipeline.run2(None, "P", out_dir=tmp_path, only=["pose"], wait=1.0))
+    assert sources == ["m4", "m4"], "both takes of the pose continue the reveal the ledger knows about"
