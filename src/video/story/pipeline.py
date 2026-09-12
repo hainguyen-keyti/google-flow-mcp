@@ -174,6 +174,70 @@ async def _refetch_720(session, project_id: str, media_id: str, stem: Path) -> P
     return await composer.fetch_720(session, record, stem)
 
 
+def take_ids(job_id: str, hands_risk: bool) -> list[str]:
+    """A shot whose hands touch the clothes is shot twice: Veo mangled a hand in two of five v1 shots,
+    and a spare take costs one shot instead of a whole rerun."""
+    return [job_id, f"{job_id}b"] if hands_risk else [job_id]
+
+
+def _shot_row(key: str) -> dict[str, Any]:
+    for row in shots2.plan():
+        if row["key"] == key:
+            return row
+    raise KeyError(key)
+
+
+def _done_path(ledger: gen.Ledger, job_id: str) -> Path | None:
+    done = [r for r in ledger.rows(job_id) if r.get("status") == "done" and r.get("path")]
+    return Path(done[-1]["path"]) if done else None
+
+
+def picked(ledger: gen.Ledger, row: dict[str, Any]) -> str | None:
+    """The take a human chose for this shot, if one was chosen."""
+    picks = [r for r in ledger.rows(row["job_id"]) if r.get("status") == "selected"]
+    return picks[-1]["take"] if picks else None
+
+
+def inconsistent_chain(out_dir: Path) -> list[str]:
+    """Shots that were continued from a take nobody picked, so their room and outfit no longer match."""
+    ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
+    by_key = {row["key"]: row for row in shots2.plan()}
+    orphaned = []
+    for row in shots2.plan():
+        parent = by_key.get(row["start_from"] or "")
+        if parent is None:
+            continue
+        pick = picked(ledger, parent)
+        if pick and pick != parent["job_id"]:
+            orphaned.append(row["key"])
+    return orphaned
+
+
+def select(out_dir: Path, key: str, take: str, reason: str) -> dict[str, Any]:
+    """Record which take of a shot goes into the cut and why the other was dropped (I9).
+
+    No machine here can tell a broken hand from a good one, so the choice is a human's and the reason is
+    written down next to the money.
+    """
+    row = _shot_row(key)
+    ids = take_ids(row["job_id"], row["hands_risk"])
+    if take not in ids:
+        raise ValueError(f"{take} is not a take of {key}; its takes are {ids}")
+    if not (reason or "").strip():
+        raise ValueError("a pick needs the reason the other take was dropped")
+    rejected = [job for job in ids if job != take]
+    gen.Ledger(Path(out_dir) / "ledger.jsonl").append(
+        row["job_id"], "selected", take=take, rejected=rejected, reason=reason
+    )
+    return {
+        "key": key,
+        "take": take,
+        "rejected": rejected,
+        "reason": reason,
+        "needs_regen": inconsistent_chain(out_dir),
+    }
+
+
 def load_trims(out_dir: Path) -> dict[str, tuple[float, float]]:
     """Optional `trims.json`: the seconds of each shot worth keeping, keyed by shot key."""
     path = Path(out_dir) / "trims.json"
@@ -184,15 +248,28 @@ def load_trims(out_dir: Path) -> dict[str, tuple[float, float]]:
 
 
 def clip_paths(out_dir: Path) -> list[tuple[str, Path]]:
-    """The generated clip of every shot, in story order; a gap is an error, not a shorter video."""
+    """The clip of every shot, in story order; a gap or an unjudged pair of takes stops the cut."""
     ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
     found, missing = [], []
     for row in shots2.plan():
-        done = [r for r in ledger.rows(row["job_id"]) if r.get("status") == "done" and r.get("path")]
+        takes = {job: _done_path(ledger, job) for job in take_ids(row["job_id"], row["hands_risk"])}
+        done = {job: path for job, path in takes.items() if path is not None}
+        pick = picked(ledger, row)
+        if pick and pick in done:
+            found.append((row["key"], done[pick]))
+            continue
+        if pick:
+            missing.append(f"{row['key']} (picked {pick}, which has no clip)")
+            continue
+        if len(done) > 1:
+            raise RuntimeError(
+                f"{row['key']} has {len(done)} takes and nobody chose one: look at the strips in "
+                f"{Path(out_dir) / 'review'} then run 'video story pick'"
+            )
         if not done:
             missing.append(f"{row['key']} ({row['job_id']})")
             continue
-        found.append((row["key"], Path(done[-1]["path"])))
+        found.append((row["key"], next(iter(done.values()))))
     if missing:
         raise RuntimeError(f"no clip for {', '.join(missing)}; run 'video story run2' first")
     return found
@@ -260,61 +337,74 @@ async def run2(
     inherit the garment through their start frame instead of paying for another edit."""
     rows = [r for r in shots2.plan() if not only or r["key"] in only]
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
-    todo = check_resumable(ledger, [r["job_id"] for r in rows])
+    jobs = [job for row in rows for job in take_ids(row["job_id"], row["hands_risk"])]
+    todo = check_resumable(ledger, jobs)
     who = await persona.ensure(session, project_id)
     await product.ensure(session, project_id)
 
     results: list[dict[str, Any]] = []
     paths: dict[str, str] = {}
     for row in rows:
-        job, key = row["job_id"], row["key"]
-        if job not in todo:
-            done = [r for r in ledger.rows(job) if r.get("status") == "done"]
-            paths[key] = done[-1].get("path") if done else None
-            results.append({"job_id": job, "key": key, "status": "already done", "path": paths[key]})
-            continue
+        key = row["key"]
+        for index, job in enumerate(take_ids(row["job_id"], row["hands_risk"])):
+            if job not in todo:
+                done = [r for r in ledger.rows(job) if r.get("status") == "done"]
+                path = done[-1].get("path") if done else None
+                if index == 0:
+                    paths[key] = path
+                results.append({"job_id": job, "key": key, "status": "already done", "path": path})
+                continue
 
-        common = {
-            "prompt": row["prompt"],
-            "job_id": job,
-            "expected_credits": shots2.PRICE,
-            "out_dir": out_dir,
-            "aspect": shots2.ASPECT,
-            "wait": wait,
-        }
-        if row["mode"] == "character":
-            result = await composer.generate_with_character(
-                session, project_id, character=who["name"], **common
-            )
-        elif row["mode"] == "product":
-            result = await _generate_with_product(
-                session, project_id, prompt=row["prompt"], job_id=job, out_dir=out_dir, wait=wait
-            )
-        else:
-            previous = paths.get(row["start_from"])
-            if not previous:
-                raise RuntimeError(f"{job}: {row['start_from']} has no clip to continue from")
-            still = post.last_frame(Path(previous), out_dir / f"{job}_start.png")
-            await uploads_mod.upload(session, project_id, still)
-            result = await composer.generate_from_frame(session, project_id, start_name=still.name, **common)
-
-        if row["edit_to_product"]:
-            edited = await clips.edit(
-                session,
-                project_id,
-                result["media_id"],
-                EDIT_PROMPT,
-                out_dir=out_dir,
-                job_id=f"{job}-edit",
-                wait=wait,
-            )
-            produced = [o for o in edited.get("outputs", []) if o.get("path")]
-            if produced:
-                fresh = await _refetch_720(
-                    session, project_id, produced[0]["media_id"], out_dir / f"{job}_worn"
+            common = {
+                "prompt": row["prompt"],
+                "job_id": job,
+                "expected_credits": shots2.PRICE,
+                "out_dir": out_dir,
+                "aspect": shots2.ASPECT,
+                "wait": wait,
+            }
+            if row["mode"] == "character":
+                result = await composer.generate_with_character(
+                    session, project_id, character=who["name"], **common
                 )
-                result = {**result, "path": str(fresh), "edited": True, "edit_spent": edited.get("spent")}
+            elif row["mode"] == "product":
+                result = await _generate_with_product(
+                    session, project_id, prompt=row["prompt"], job_id=job, out_dir=out_dir, wait=wait
+                )
+            else:
+                previous = paths.get(row["start_from"])
+                if not previous:
+                    raise RuntimeError(f"{job}: {row['start_from']} has no clip to continue from")
+                still = post.last_frame(Path(previous), out_dir / f"{job}_start.png")
+                await uploads_mod.upload(session, project_id, still)
+                result = await composer.generate_from_frame(
+                    session, project_id, start_name=still.name, **common
+                )
 
-        paths[key] = result.get("path")
-        results.append({**result, "key": key, "status": "done"})
+            if row["edit_to_product"]:
+                edited = await clips.edit(
+                    session,
+                    project_id,
+                    result["media_id"],
+                    EDIT_PROMPT,
+                    out_dir=out_dir,
+                    job_id=f"{job}-edit",
+                    wait=wait,
+                )
+                produced = [o for o in edited.get("outputs", []) if o.get("path")]
+                if produced:
+                    fresh = await _refetch_720(
+                        session, project_id, produced[0]["media_id"], out_dir / f"{job}_worn"
+                    )
+                    result = {
+                        **result,
+                        "path": str(fresh),
+                        "edited": True,
+                        "edit_spent": edited.get("spent"),
+                    }
+
+            # The next shot continues from the first take: nobody has judged the spare yet.
+            if index == 0:
+                paths[key] = result.get("path")
+            results.append({**result, "key": key, "status": "done"})
     return {"character": who, "shots": results}

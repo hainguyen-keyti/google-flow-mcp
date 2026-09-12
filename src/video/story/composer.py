@@ -369,6 +369,9 @@ async def _submit(
     )
     frames = await clips._await_submit(session, lambda: start.click(timeout=8_000))
     notice = await _notice(session.page)
+    # Flow can take the click, fire the rpcids, create nothing and charge nothing; the only way to see
+    # why is to look at the screen while the refusal is still on it (measured 2026-09-13 on tryon2-04).
+    await session.page.screenshot(path=str(out_dir / f"{job_id}_submitted.png"))
 
     output, fresh = None, []
     deadline = asyncio.get_running_loop().time() + wait

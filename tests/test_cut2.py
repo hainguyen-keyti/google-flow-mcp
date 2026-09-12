@@ -54,6 +54,51 @@ def test_build2_applies_a_trim_so_a_broken_hand_costs_no_credits(tmp_path):
     assert abs(post.duration(Path(result["final"])) - expected) < 0.15
 
 
+def test_pick_writes_down_which_take_won_and_why_the_other_was_dropped(tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    for job in ("tryon2-02", "tryon2-02b"):
+        ledger.append(job, "done", path=str(tmp_path / f"{job}.mp4"), spent=10)
+
+    chosen = pipeline.select(tmp_path, "wardrobe", "tryon2-02b", "take a lost the left hand on the rail")
+    assert chosen["take"] == "tryon2-02b"
+    assert chosen["rejected"] == ["tryon2-02"]
+    rows = [r for r in ledger.rows("tryon2-02") if r.get("status") == "selected"]
+    assert rows[-1]["reason"].startswith("take a lost")
+
+    with pytest.raises(ValueError, match="reason"):
+        pipeline.select(tmp_path, "wardrobe", "tryon2-02", "")
+    with pytest.raises(ValueError, match="tryon2-99"):
+        pipeline.select(tmp_path, "wardrobe", "tryon2-99", "nope")
+
+
+def test_a_shot_with_two_takes_and_no_pick_stops_the_cut(tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    for index, shot in enumerate(shots2.SHOTS, start=1):
+        ledger.append(shots2.job_id(index), "done", path=str(tmp_path / "x.mp4"), spent=10)
+    ledger.append("tryon2-02b", "done", path=str(tmp_path / "b.mp4"), spent=10)
+
+    with pytest.raises(RuntimeError, match="wardrobe"):
+        pipeline.clip_paths(tmp_path)
+
+    pipeline.select(tmp_path, "wardrobe", "tryon2-02b", "cleaner hand")
+    assert dict(pipeline.clip_paths(tmp_path))["wardrobe"] == Path(tmp_path / "b.mp4")
+
+
+def test_picking_a_take_the_next_shot_did_not_continue_from_is_reported(tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    for index, shot in enumerate(shots2.SHOTS, start=1):
+        ledger.append(shots2.job_id(index), "done", path=str(tmp_path / "x.mp4"), spent=10)
+    ledger.append("tryon2-05b", "done", path=str(tmp_path / "b.mp4"), spent=10)
+
+    # closing started from pose's last frame, so swapping pose's take orphans it.
+    chosen = pipeline.select(tmp_path, "pose", "tryon2-05b", "take a fused two fingers")
+    assert chosen["needs_regen"] == ["closing"]
+    assert pipeline.inconsistent_chain(tmp_path) == ["closing"]
+
+    pipeline.select(tmp_path, "pose", "tryon2-05", "take b drifted off the mirror")
+    assert pipeline.inconsistent_chain(tmp_path) == []
+
+
 def test_build2_refuses_to_stitch_a_chain_with_a_missing_shot(tmp_path):
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     ledger.append(shots2.job_id(1), "done", path=str(tmp_path / "tryon2-01.mp4"))

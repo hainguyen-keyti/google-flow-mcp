@@ -52,12 +52,19 @@ def test_expected_credits_counts_the_omni_edit_and_the_extra_takes():
     assert shots2.expected_credits() == 6 * 10 + 2 * 10 + 20
 
 
-def test_the_before_outfit_is_clearly_not_the_product_so_the_reveal_reads():
+def test_the_garment_is_named_once_and_then_inherited_not_described_again():
+    # The owner rejected v1 because the outfit changed between clips. Words cannot hold a garment: the
+    # Omni edit puts it on and the start frame carries it forward, so only the shot with no frame to
+    # inherit from names it.
     before = shots2.by_key("hook").scene.outfit.lower()
     assert "t-shirt" in before or "tee" in before
     assert "pink" not in before
-    for key in ("reveal", "pose", "closing"):
-        assert "pink" in shots2.by_key(key).scene.outfit.lower(), key
+    assert "pink" not in shots2.by_key("reveal").scene.outfit.lower()
+    assert "pink" in shots2.by_key("fabric").scene.outfit.lower()
+    for key in ("pose", "closing"):
+        outfit = shots2.by_key(key).scene.outfit.lower()
+        assert "pink" not in outfit, key
+        assert "same outfit" in outfit and "starting frame" in outfit, key
 
 
 def test_hands_risk_marks_exactly_the_shots_that_touch_things():

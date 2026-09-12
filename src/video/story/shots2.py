@@ -31,6 +31,9 @@ FADE = 0.5
 
 _BEFORE = "a plain oversized white cotton t-shirt and soft shorts, her own everyday clothes"
 _PRODUCT = product.DESCRIPTION
+_INHERITED = (
+    "the same outfit she is already wearing in the starting frame, unchanged in colour, cut, print and detail"
+)
 
 
 @dataclass(frozen=True)
@@ -98,8 +101,8 @@ SHOTS: tuple[Shot, ...] = (
         edit_to_product=True,
         scene=bible.Scene(
             camera="full-length mirror shot, phone held low and still, vertical framing",
-            pose="standing in front of the mirror wearing the set, arms hanging naturally at her sides",
-            outfit=_PRODUCT,
+            pose="standing in front of the mirror, arms hanging naturally at her sides",
+            outfit=_BEFORE,
             expression="pleased, a soft smile",
         ),
     ),
@@ -112,7 +115,7 @@ SHOTS: tuple[Shot, ...] = (
         scene=bible.Scene(
             camera="the same mirror shot continues, camera stays where it is, vertical framing",
             pose="turning slowly from front to three-quarter, one hand settling on her hip, the other still",
-            outfit=_PRODUCT,
+            outfit=_INHERITED,
             expression="calm, looking at her own reflection",
         ),
     ),
@@ -124,7 +127,7 @@ SHOTS: tuple[Shot, ...] = (
         scene=bible.Scene(
             camera="the same mirror shot, camera holds, vertical framing",
             pose="turning back to face the camera and standing still, both hands relaxed at her sides",
-            outfit=_PRODUCT,
+            outfit=_INHERITED,
             expression="warm and inviting, looking straight into the camera",
         ),
     ),
