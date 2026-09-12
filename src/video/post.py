@@ -6,6 +6,7 @@ costs credits.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import shlex
@@ -17,6 +18,9 @@ SHEET_CELL = 240
 STRIP_CELL, STRIP_COLS = 180, 8
 FADE = 0.5
 LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11"
+# A clip whose loudness range beats the target cannot be moved by gain alone: measured 2026-09-13,
+# the wardrobe shot had 15.7 dB of range and 2.6 dB of headroom, and loudnorm stopped at -19.7 LUFS.
+COMPRESSOR = "acompressor=threshold=-30dB:ratio=6:attack=10:release=200:makeup=2"
 LUFS_RE = re.compile(r"^\s*I:\s*(-?\d+(?:\.\d+)?)\s*LUFS", re.MULTILINE)
 FONTS = (
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
@@ -155,21 +159,77 @@ def lufs(path: Path) -> float | None:
     return parse_lufs(done.stderr)
 
 
+def parse_loudnorm_json(text: str) -> dict[str, str] | None:
+    """The numbers loudnorm prints after measuring a clip."""
+    marker = text.rfind('"input_i"')
+    if marker < 0:
+        return None
+    start, end = text.rfind("{", 0, marker), text.find("}", marker)
+    if start < 0 or end < 0:
+        return None
+    try:
+        return json.loads(text[start : end + 1])
+    except ValueError:
+        return None
+
+
+def loudnorm_filter(measured: dict[str, str] | None) -> str:
+    """Second pass, told what the first pass measured, so it can move the whole clip linearly.
+
+    One pass alone is a streaming normaliser: measured 2026-09-13, it lifted a -52.4 LUFS clip only to
+    -17.6 and left the cut 3.4 dB apart between shots.
+    """
+    if not measured:
+        return LOUDNORM
+    keys = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+    try:
+        values = {key: float(measured[key]) for key in keys}
+    except (KeyError, ValueError):
+        return LOUDNORM
+    if not all(math.isfinite(value) for value in values.values()):
+        return LOUDNORM
+    return (
+        f"{LOUDNORM}:measured_I={measured['input_i']}:measured_TP={measured['input_tp']}"
+        f":measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}"
+        f":offset={measured['target_offset']}:linear=true"
+    )
+
+
+def _trim_args(clip: Path, start: float | None, end: float | None) -> list[str]:
+    args = ["-ss", f"{start:.3f}"] if start else []
+    args += ["-i", str(clip)]
+    return args + (["-t", f"{end - (start or 0.0):.3f}"] if end is not None else [])
+
+
+def measure_loudness(clip: Path, start: float | None = None, end: float | None = None) -> dict | None:
+    done = subprocess.run(
+        [
+            "ffmpeg",
+            "-nostats",
+            *_trim_args(Path(clip), start, end),
+            "-af",
+            f"{COMPRESSOR},{LOUDNORM}:print_format=json",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return parse_loudnorm_json(done.stderr)
+
+
 def normalise(clip: Path, out: Path, start: float | None = None, end: float | None = None) -> Path:
     """One clip at broadcast loudness, optionally trimmed.
 
-    The clips come back from Veo 2.8 dB apart, which reads as the volume jumping at every cut; the trim
-    is how a broken hand gets cut out without paying for the shot again.
+    The clips come back from Veo as far as 36 dB apart, which reads as the volume jumping at every cut;
+    the trim is how a broken hand gets cut out without paying for the shot again.
     """
     clip, out = Path(clip), Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    args = ["ffmpeg", "-v", "error", "-y"]
-    if start:
-        args += ["-ss", f"{start:.3f}"]
-    args += ["-i", str(clip)]
-    if end is not None:
-        args += ["-t", f"{end - (start or 0.0):.3f}"]
-    args += ["-af", LOUDNORM]
+    args = ["ffmpeg", "-v", "error", "-y", *_trim_args(clip, start, end)]
+    args += ["-af", f"{COMPRESSOR},{loudnorm_filter(measure_loudness(clip, start, end))}"]
     # Trimming has to re-encode: an input seek with -c:v copy would start at the nearest keyframe.
     args += ["-c:v", "libx264", "-preset", "medium", "-crf", "20"] if start or end else ["-c:v", "copy"]
     args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out)]

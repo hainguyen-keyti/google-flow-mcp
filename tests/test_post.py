@@ -28,7 +28,13 @@ def probe(path: Path) -> dict:
     return json.loads(out.stdout or "{}")
 
 
-def make_clip(path: Path, seconds: int = 2, size: str = "720x1280", volume: float = 0.5) -> Path:
+def make_clip(
+    path: Path,
+    seconds: int = 2,
+    size: str = "720x1280",
+    volume: float = 0.5,
+    audio: str = "sine=frequency=440",
+) -> Path:
     subprocess.run(
         [
             "ffmpeg",
@@ -42,7 +48,7 @@ def make_clip(path: Path, seconds: int = 2, size: str = "720x1280", volume: floa
             "-f",
             "lavfi",
             "-i",
-            f"sine=frequency=440:duration={seconds}:sample_rate=48000",
+            f"{audio}:duration={seconds}:sample_rate=48000",
             "-af",
             f"volume={volume}",
             "-shortest",
@@ -130,6 +136,47 @@ def test_strip_grid_keeps_short_clips_from_becoming_mostly_empty():
     assert post.strip_grid(4) == (4, 1)
     assert post.strip_grid(16) == (8, 2)
     assert post.strip_grid(17) == (8, 3)
+
+
+def test_the_measured_pass_feeds_its_numbers_into_the_second_one():
+    text = (
+        "[Parsed_loudnorm_0 @ 0x14] \n"
+        '{\n\t"input_i" : "-52.36",\n\t"input_tp" : "-38.13",\n\t"input_lra" : "0.00",\n'
+        '\t"input_thresh" : "-62.40",\n\t"output_i" : "-16.00",\n\t"target_offset" : "0.21"\n}\n'
+    )
+    measured = post.parse_loudnorm_json(text)
+    assert measured["input_i"] == "-52.36"
+    spec = post.loudnorm_filter(measured)
+    assert "measured_I=-52.36" in spec and "measured_thresh=-62.40" in spec
+    assert "linear=true" in spec
+    # No measurement, or an unusable one, falls back to the single pass rather than building junk.
+    assert post.loudnorm_filter(None) == post.LOUDNORM
+    assert post.loudnorm_filter({"input_i": "-inf", "input_tp": "-inf"}) == post.LOUDNORM
+    assert post.parse_loudnorm_json("nothing here") is None
+
+
+@pytest.mark.slow
+def test_a_clip_whose_loudness_range_beats_the_target_still_lands_on_level(tmp_path):
+    # Real audio from the wardrobe shot: loudness range 15.7 dB with only 2.6 dB of headroom, so no
+    # amount of gain can place it and loudnorm's own fallback stopped at -19.7 LUFS (measured 2026-09-13).
+    fixture = Path(__file__).parent / "fixtures" / "audio" / "wide_range.m4a"
+    assert post.lufs(fixture) < -20, post.lufs(fixture)
+    level = post.lufs(post.normalise(fixture, tmp_path / "wide.m4a"))
+    assert -17.5 <= level <= -14.5, level
+
+
+@pytest.mark.slow
+def test_normalise_reaches_the_target_even_on_a_nearly_silent_clip(tmp_path):
+    # Measured 2026-09-13 on the real chain: the product close-up came back at -52.4 LUFS and one
+    # loudnorm pass only lifted it to -17.6, leaving the cut 3.4 dB apart between shots.
+    # Pink noise, not a pure tone: a mathematically constant sine has no loudness range at all and
+    # loudnorm cannot place it, which is a property of the test signal, not of a real clip.
+    quiet = make_clip(
+        tmp_path / "quiet.mp4", seconds=3, volume=1.0, audio="anoisesrc=color=pink:amplitude=0.004"
+    )
+    assert post.lufs(quiet) < -40, post.lufs(quiet)
+    level = post.lufs(post.normalise(quiet, tmp_path / "n.mp4"))
+    assert -17.5 <= level <= -14.5, level
 
 
 @pytest.mark.slow
