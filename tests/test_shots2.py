@@ -56,19 +56,19 @@ def test_expected_credits_counts_an_edit_for_every_take_that_shows_the_set():
     assert shots2.expected_credits() == 160
 
 
-def test_the_garment_is_named_once_and_then_inherited_not_described_again():
-    # The owner rejected v1 because the outfit changed between clips. Words cannot hold a garment: the
-    # Omni edit puts it on and the start frame carries it forward, so only the shot with no frame to
-    # inherit from names it.
-    before = shots2.by_key("hook").scene.outfit.lower()
-    assert "t-shirt" in before or "tee" in before
-    assert "pink" not in before
-    assert "pink" not in shots2.by_key("reveal").scene.outfit.lower()
-    assert "pink" in shots2.by_key("fabric").scene.outfit.lower()
-    for key in ("pose", "closing"):
-        outfit = shots2.by_key(key).scene.outfit.lower()
-        assert "pink" not in outfit, key
-        assert "same outfit" in outfit and "starting frame" in outfit, key
+def test_every_shot_with_a_person_in_it_is_generated_in_her_own_clothes():
+    # One rule, no exceptions: the base take always describes the everyday outfit and the Omni edit is
+    # what puts the set on. Measured 2026-09-13, three shots in a row: the two takes that said "wearing
+    # the set" or "the same outfit as the starting frame" were refused with no record and no charge,
+    # while the same shot with the everyday outfit generated first time.
+    worn = shots2.by_key("fabric").scene.outfit.lower()
+    assert "pink" in worn, "only the shot with nobody in it names the garment"
+    for shot in shots2.SHOTS:
+        if shot.key == "fabric":
+            continue
+        outfit = shot.scene.outfit.lower()
+        assert "pink" not in outfit, shot.key
+        assert "t-shirt" in outfit and "everyday" in outfit, shot.key
 
 
 def test_hands_risk_marks_exactly_the_shots_that_touch_things():

@@ -9,10 +9,11 @@ Why it is shaped like this, all measured:
   only the clothing.
 - Frames mode pins the first frame from a project image, so `wardrobe` starts from the last frame of the
   hook and inherits the room, the outfit, the face and the position.
-- A pinned frame of her already IN the set is refused: Flow takes the submit, creates no job and charges
-  nothing (measured 2026-09-13 on `pose`). So `pose` and `closing` pin the last frame of the shot before
-  them as it was BEFORE its edit, in her own clothes, and each pays its own Omni edit to put the set on.
-  The clip editor was not a way around it: it opens the pre-edit version and its extend panel never came up.
+- Every take with a person in it is generated in her own everyday clothes and dressed afterwards by an Omni
+  edit. Asking Veo for the set in words is refused: Flow takes the submit, creates no job, charges nothing
+  and says nothing (measured 2026-09-13 on `reveal` and three times on `pose`). The same shot worded with
+  the everyday outfit generated first time. So the start frame is cut from the clip BEFORE its edit, and
+  each dressed take pays its own edit.
 - Two real cuts remain, both cuts a real edit would make anyway: into the product close-up and into the
   reveal.
 - Veo mangles hands that manipulate fabric (Plan 2: tryon-03 lost a hand, tryon-05 fused fingers), so
@@ -34,9 +35,6 @@ FADE = 0.5
 
 _BEFORE = "a plain oversized white cotton t-shirt and soft shorts, her own everyday clothes"
 _PRODUCT = product.DESCRIPTION
-_INHERITED = (
-    "the same outfit she is already wearing in the starting frame, unchanged in colour, cut, print and detail"
-)
 
 
 @dataclass(frozen=True)
@@ -119,7 +117,7 @@ SHOTS: tuple[Shot, ...] = (
         scene=bible.Scene(
             camera="the same mirror shot continues, camera stays where it is, vertical framing",
             pose="turning slowly from front to three-quarter, one hand settling on her hip, the other still",
-            outfit=_INHERITED,
+            outfit=_BEFORE,
             expression="calm, looking at her own reflection",
         ),
     ),
@@ -132,7 +130,7 @@ SHOTS: tuple[Shot, ...] = (
         scene=bible.Scene(
             camera="the same mirror shot, camera holds, vertical framing",
             pose="turning back to face the camera and standing still, both hands relaxed at her sides",
-            outfit=_INHERITED,
+            outfit=_BEFORE,
             expression="warm and inviting, looking straight into the camera",
         ),
     ),
