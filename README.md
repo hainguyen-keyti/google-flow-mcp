@@ -63,6 +63,27 @@ Mỗi job ghi vào `out/ledger.jsonl`: dòng `submitted` được ghi TRƯỚC k
 `failed` kèm credit trước và sau. Job id (`--job`) đã có dòng `submitted` thì bị từ chối, để retry không
 bao giờ submit đôi.
 
+## Video mẫu: nhân vật có sẵn, kịch bản thử đồ để bán đồ
+
+Nhân vật lấy từ `assets/character/` (ảnh tham chiếu của chủ repo + bible json/md). Mặt được khoá bằng
+**Character entity của Flow tạo từ chính ảnh đó** (trang New character có nút Upload, $0), rồi gắn vào từng
+prompt qua picker Ingredients, nên cả chuỗi dùng chung một gương mặt.
+
+```
+uv run video story plan                      # 5 shot + prompt đã khoá nhân vật và căn phòng, $0
+uv run video story run <project> --out out/story      # sinh clip, 10 credit mỗi shot, có ledger
+uv run video story reconcile <project>                # đóng sổ shot kẹt bằng listing + số dư, $0
+uv run video story build --out out/story              # ghép 9:16, chèn chữ chào hàng, contact sheet, $0
+uv run python scripts/acceptance/story_tryon.py --out out/story
+```
+
+Ba chốt an toàn tiền, đều do trả giá mà có: composer nhớ trạng thái lần trước nên mỗi shot ghi lại đủ
+mode + tỉ lệ + x1 và **đọc dòng giá, lệch là không bấm**; mỗi shot bấm đúng một lần rồi ở lại trang tới khi
+request bay đi; job id cố định `tryon-01..05`, job đã xong thì bỏ qua, job kẹt `submitted` thì DỪNG cả run
+cho tới khi `reconcile` chứng minh được bằng số dư là chưa tiêu gì.
+
+Chữ chào hàng đập bằng ffmpeg chứ không nhờ Veo: sửa chữ là $0, sinh lại clip là 10 credit.
+
 ## MCP
 
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`).
