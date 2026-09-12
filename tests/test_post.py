@@ -28,7 +28,7 @@ def probe(path: Path) -> dict:
     return json.loads(out.stdout or "{}")
 
 
-def make_clip(path: Path, seconds: int = 2, size: str = "720x1280") -> Path:
+def make_clip(path: Path, seconds: int = 2, size: str = "720x1280", volume: float = 0.5) -> Path:
     subprocess.run(
         [
             "ffmpeg",
@@ -42,7 +42,9 @@ def make_clip(path: Path, seconds: int = 2, size: str = "720x1280") -> Path:
             "-f",
             "lavfi",
             "-i",
-            f"sine=frequency=440:duration={seconds}",
+            f"sine=frequency=440:duration={seconds}:sample_rate=48000",
+            "-af",
+            f"volume={volume}",
             "-shortest",
             "-pix_fmt",
             "yuv420p",
@@ -83,6 +85,81 @@ def test_concat_with_captions_produces_one_vertical_video(tmp_path):
     assert abs(float(info["format"]["duration"]) - 4.0) < 0.6, info["format"]["duration"]
     video = next(s for s in info["streams"] if s["codec_type"] == "video")
     assert (video["width"], video["height"]) == (720, 1280)
+
+
+def test_xfade_timeline_matches_the_measured_formula():
+    # Measured 2026-09-13: two 8.01s clips with a 0.5s fade came out 15.5417s, formula says 15.52.
+    assert post.xfade_total([8.01, 8.01], 0.5) == pytest.approx(15.52, abs=0.001)
+    assert post.xfade_total([8.0] * 6, 0.5) == pytest.approx(45.5, abs=0.001)
+    assert post.xfade_total([8.0], 0.5) == pytest.approx(8.0, abs=0.001)
+    assert post.xfade_starts([8.0, 8.0, 8.0], 0.5) == pytest.approx([0.0, 7.5, 15.0])
+
+
+def test_build_xfade_filter_offsets_every_transition_and_crossfades_the_audio():
+    spec = post.build_xfade_filter([8.0, 8.0, 8.0], [], fade=0.5)
+    assert spec.count("xfade=") == 2
+    assert "offset=7.500" in spec and "offset=15.000" in spec
+    assert spec.count("acrossfade=d=0.5") == 2
+    # A hard concat is what made the old cut jump; it must be gone.
+    assert "concat=" not in spec
+
+
+def test_a_single_clip_needs_no_transition_at_all():
+    spec = post.build_xfade_filter([8.0], [], fade=0.5)
+    assert "xfade" not in spec and "acrossfade" not in spec
+    assert "[0:v]" in spec and "[a]" in spec
+
+
+def test_caption_windows_follow_the_faded_timeline_not_the_raw_clock():
+    windows = post.caption_windows([8.0, 8.0], ["một", "hai"], fade=0.5, lead=0.4)
+    assert windows[0][0] == pytest.approx(0.4)
+    assert windows[0][1] == pytest.approx(7.1)  # ends before the fade begins at 7.5
+    assert windows[1][0] == pytest.approx(7.9)  # clip 2 starts at 7.5 on the faded timeline
+    assert [text for _, _, text in windows] == ["một", "hai"]
+    assert post.caption_windows([8.0], [""], fade=0.5) == []
+
+
+def test_parse_lufs_reads_the_integrated_loudness_from_ebur128():
+    summary = "[Parsed_ebur128_0 @ 0x7f] Summary:\n\n  Integrated loudness:\n    I:         -16.8 LUFS\n"
+    assert post.parse_lufs(summary) == pytest.approx(-16.8)
+    assert post.parse_lufs("  I:  -14.5 LUFS") == pytest.approx(-14.5)
+    assert post.parse_lufs("no loudness here") is None
+
+
+def test_strip_grid_keeps_short_clips_from_becoming_mostly_empty():
+    assert post.strip_grid(4) == (4, 1)
+    assert post.strip_grid(16) == (8, 2)
+    assert post.strip_grid(17) == (8, 3)
+
+
+@pytest.mark.slow
+def test_normalise_pulls_a_loud_and_a_quiet_clip_into_the_same_window(tmp_path):
+    loud = make_clip(tmp_path / "loud.mp4", seconds=3, volume=0.9)
+    quiet = make_clip(tmp_path / "quiet.mp4", seconds=3, volume=0.05)
+    levels = [post.lufs(post.normalise(clip, tmp_path / f"n_{clip.stem}.mp4")) for clip in (loud, quiet)]
+    assert all(-17.5 <= level <= -14.5 for level in levels), levels
+    assert max(levels) - min(levels) <= 1.5, levels
+
+
+@pytest.mark.slow
+def test_the_xfade_cut_is_shorter_than_the_sum_by_exactly_the_fades(tmp_path):
+    clips = [make_clip(tmp_path / f"c{i}.mp4", seconds=3) for i in range(3)]
+    out = post.crossfade_with_captions(clips, ["một", "hai", "ba"], tmp_path / "final.mp4", fade=0.5)
+    info = probe(out)
+    expected = post.xfade_total([post.duration(c) for c in clips], 0.5)
+    assert abs(float(info["format"]["duration"]) - expected) < 0.15, info["format"]["duration"]
+    video = next(s for s in info["streams"] if s["codec_type"] == "video")
+    assert (video["width"], video["height"]) == (720, 1280)
+    assert any(s["codec_type"] == "audio" for s in info["streams"]), info
+
+
+@pytest.mark.slow
+def test_strip_has_two_frames_for_every_second_of_clip(tmp_path):
+    clip = make_clip(tmp_path / "c.mp4", seconds=2)
+    image = post.strip(clip, tmp_path / "strip.jpg", fps=2)
+    info = probe(image)
+    cell = next(s for s in info["streams"] if s["codec_type"] == "video")
+    assert cell["width"] == post.STRIP_CELL * 4, info  # 2s at 2fps = 4 frames in one row
 
 
 @pytest.mark.slow

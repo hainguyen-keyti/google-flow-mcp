@@ -512,6 +512,20 @@ def story_build(out_dir: str) -> None:
     click.echo(json.dumps({"final": str(final), "contact_sheet": str(sheet), "clips": len(clips)}, indent=2))
 
 
+@story.command("cut2")
+@click.option("--out", "out_dir", default="out/story2", show_default=True, type=click.Path(file_okay=False))
+@click.option("--fade", default=None, type=float, help="Crossfade seconds between shots.")
+def story_cut2(out_dir: str, fade: float | None) -> None:
+    """Even the audio, dissolve the joins, caption and sheet the v2 chain ($0, ffmpeg only)."""
+    from pathlib import Path
+
+    from video import post
+    from video.story import pipeline
+
+    result = pipeline.build2(out_dir=Path(out_dir), fade=post.FADE if fade is None else fade)
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 @story.command("reconcile")
 @click.argument("project_id")
 @click.option("--out", "out_dir", default="out/story", show_default=True, type=click.Path(file_okay=False))

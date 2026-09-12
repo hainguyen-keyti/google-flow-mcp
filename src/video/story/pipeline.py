@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from video.flow import uploads as uploads_mod
 from video.story import composer, persona, product, shots, shots2
 
 PRICE_PER_SHOT = 10
+FINAL_NAME = "tryon2_final.mp4"
 EDIT_PROMPT = (
     "Change only her clothing. She is now wearing " + product.DESCRIPTION + ". Keep her face, her hair, "
     "her tattoos, her necklace, the room, the lighting and the camera framing exactly as they are."
@@ -170,6 +172,80 @@ async def _refetch_720(session, project_id: str, media_id: str, stem: Path) -> P
 
     record = download_mod.latest_version(await reader.records(session, project_id), media_id)
     return await composer.fetch_720(session, record, stem)
+
+
+def load_trims(out_dir: Path) -> dict[str, tuple[float, float]]:
+    """Optional `trims.json`: the seconds of each shot worth keeping, keyed by shot key."""
+    path = Path(out_dir) / "trims.json"
+    if not path.is_file():
+        return {}
+    raw = json.loads(path.read_text())
+    return {key: (float(window[0]), float(window[1])) for key, window in raw.items()}
+
+
+def clip_paths(out_dir: Path) -> list[tuple[str, Path]]:
+    """The generated clip of every shot, in story order; a gap is an error, not a shorter video."""
+    ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
+    found, missing = [], []
+    for row in shots2.plan():
+        done = [r for r in ledger.rows(row["job_id"]) if r.get("status") == "done" and r.get("path")]
+        if not done:
+            missing.append(f"{row['key']} ({row['job_id']})")
+            continue
+        found.append((row["key"], Path(done[-1]["path"])))
+    if missing:
+        raise RuntimeError(f"no clip for {', '.join(missing)}; run 'video story run2' first")
+    return found
+
+
+def build2(*, out_dir: Path, fade: float = post.FADE) -> dict[str, Any]:
+    """Cut the v2 chain: even the audio, dissolve the joins, burn the captions, sheet every clip.
+
+    Loudness and transitions are fixed here because both are free: the clips themselves cost credits.
+    """
+    out_dir = Path(out_dir)
+    trims = load_trims(out_dir)
+    review = out_dir / "review"
+    sources = clip_paths(out_dir)
+    rows: list[dict[str, Any]] = []
+    normalised: list[Path] = []
+    for key, source in sources:
+        window = trims.get(key)
+        target = post.normalise(
+            source,
+            out_dir / "norm" / f"{key}.mp4",
+            start=window[0] if window else None,
+            end=window[1] if window else None,
+        )
+        normalised.append(target)
+        rows.append(
+            {
+                "key": key,
+                "source": str(source),
+                "path": str(target),
+                "seconds": round(post.duration(target), 3),
+                "lufs": post.lufs(target),
+                "trim": list(window) if window else None,
+            }
+        )
+    captions = [shots2.by_key(key).caption for key, _ in sources]
+    final = post.crossfade_with_captions(normalised, captions, out_dir / FINAL_NAME, fade)
+    strips = [
+        str(post.strip(clip, review / f"strip_{row['key']}.jpg"))
+        for clip, row in zip(normalised, rows, strict=True)
+    ]
+    sheet = post.contact_sheet(normalised, review / "contact_sheet.jpg")
+    result = {
+        "final": str(final),
+        "seconds": round(post.duration(final), 3),
+        "expected_seconds": round(post.xfade_total([r["seconds"] for r in rows], fade), 3),
+        "fade": fade,
+        "clips": rows,
+        "strips": strips,
+        "contact_sheet": str(sheet),
+    }
+    (out_dir / "cut.json").write_text(json.dumps(result, indent=2, ensure_ascii=False))
+    return result
 
 
 async def run2(
