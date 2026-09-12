@@ -77,10 +77,28 @@ def credits(profile: str, as_json: bool) -> None:
 @click.argument("project_id")
 @click.option("--profile", default="default", show_default=True)
 @click.option("--json", "as_json", is_flag=True)
-def media(project_id: str, profile: str, as_json: bool) -> None:
+@click.option(
+    "--all",
+    "every_record",
+    is_flag=True,
+    help="Every generation record, including clips inside scenes and portrait candidates the grid hides.",
+)
+def media(project_id: str, profile: str, as_json: bool, every_record: bool) -> None:
     """List a project's media with kind, model, size and download URL ($0)."""
     from video.flow import reader
 
+    if every_record:
+        rows = _read(profile, lambda s: reader.records(s, project_id))
+        if as_json:
+            click.echo(json.dumps(rows, indent=2))
+            return
+        for r in rows:
+            flag = "listed" if r["listed"] else "unlisted"
+            click.echo(
+                f"{r['id']}  {r['kind'] or '?':5s} {flag:8s} {r['model'] or '-':40s} {r['size_bytes'] or '-'}"
+            )
+        click.echo(f"records={len(rows)}")
+        return
     info = _read(profile, lambda s: reader.project(s, project_id))
     if as_json:
         click.echo(json.dumps(info, indent=2))

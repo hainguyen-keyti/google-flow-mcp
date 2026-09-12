@@ -113,7 +113,7 @@ def free_matrix(project: str, out_dir: Path) -> None:
     row(
         "characters",
         "PASS" if code == 0 and isinstance(characters, list) else "FAIL",
-        f"{characters and len(characters)} characters",
+        f"{len(characters) if isinstance(characters, list) else characters} characters",
     )
 
     target = next((m for m in media if m.get("kind") == "video" and m.get("url")), None)
@@ -199,11 +199,12 @@ def character_round_trip(project: str) -> None:
     code2, out2, _ = run("flow", "characters", project, "--json")
     listed = last_json(out2) if code2 == 0 else []
     seen = any(c.get("entity_id") == entity and c.get("name") == "Acceptance Probe" for c in listed)
-    code3, _, _ = run("flow", "character", "delete", project, entity, "--yes")
+    code3, _, err3 = run("flow", "character", "delete", project, entity, "--yes")
+    why = "" if code3 == 0 else " " + err3.strip().splitlines()[-1][-200:] if err3.strip() else " (no stderr)"
     row(
         "character crud",
         "PASS" if seen and code3 == 0 else "FAIL",
-        f"entity {entity} listed={seen} deleted={code3 == 0}",
+        f"entity {entity} listed={seen} deleted={code3 == 0}{why}",
     )
 
 
@@ -212,11 +213,11 @@ def spend_matrix(project: str, out_dir: Path, ref_image: Path | None) -> None:
         scope = ("--project", project) if group == "gen" else ()
         code, out, err = run(group, *args, *scope, "--out", str(out_dir))
         result = last_json(out) if code == 0 else {}
-        paths = [o.get("path") for o in result.get("outputs", [])]
+        paths = [o.get("path") for o in result.get("outputs", []) if o.get("path")]
         probe = ffprobe(Path(paths[0])) if paths and Path(paths[0]).exists() else {}
         duration = float(probe.get("format", {}).get("duration", 0) or 0)
         spent = result.get("credits_before", 0) - result.get("credits_after", 0) if result else None
-        if duration > 0 and len(paths) >= expect_outputs:
+        if duration > 0 and len(paths) >= expect_outputs and result.get("status", "done") == "done":
             status = "PASS"
         elif duration > 0:
             status = "PARTIAL"
