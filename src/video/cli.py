@@ -409,6 +409,27 @@ def agent_send(project_id: str, message: str, wait: float, profile: str) -> None
 
 
 @main.group()
+def story() -> None:
+    """The try-on selling video: shot list built on the owner's character bible."""
+
+
+@story.command("plan")
+@click.option("--json", "as_json", is_flag=True, help="Emit the whole plan as JSON.")
+def story_plan(as_json: bool) -> None:
+    """Print the shot list with its locked prompts ($0, never opens Flow)."""
+    from video.story import shots
+
+    rows = shots.plan()
+    if as_json:
+        click.echo(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    for row in rows:
+        click.echo(f"{row['job_id']}  {row['key']:9s} {row['beat']}")
+        click.echo(f"    outfit: {row['outfit']}")
+    click.echo(f"shots={len(rows)} aspect={shots.ASPECT} model={shots.MODEL} duration={shots.DURATION}s")
+
+
+@main.group()
 def mcp() -> None:
     """Model Context Protocol server exposing every command above."""
 
