@@ -117,6 +117,26 @@ def test_the_edited_reveal_is_what_goes_into_the_cut_not_the_clip_before_the_edi
     assert dict(pipeline.clip_paths(tmp_path))["reveal"] == worn
 
 
+def test_an_extended_shot_is_found_by_the_file_named_after_its_job(tmp_path):
+    # The editor writes its own ledger row: outputs, no top-level path. The clip that counts is the 720p
+    # one the pipeline re-downloaded next to it.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    for index, shot in enumerate(shots2.SHOTS, start=1):
+        for job in pipeline.take_ids(shots2.job_id(index), shot.hands_risk):
+            clip = tmp_path / f"{job}.mp4"
+            clip.write_bytes(b"mp4")
+            if shot.mode == "extend":
+                ledger.append(job, "done", outputs=[{"media_id": "x", "path": "/tmp/editor-copy.mp4"}])
+            else:
+                ledger.append(job, "done", path=str(clip), spent=10)
+    pipeline.select(tmp_path, "wardrobe", "tryon2-02", "cleaner hand")
+    pipeline.select(tmp_path, "pose", "tryon2-05", "cleaner hand")
+
+    paths = dict(pipeline.clip_paths(tmp_path))
+    assert paths["pose"] == tmp_path / "tryon2-05.mp4"
+    assert paths["closing"] == tmp_path / "tryon2-06.mp4"
+
+
 def test_build2_refuses_to_stitch_a_chain_with_a_missing_shot(tmp_path):
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     ledger.append(shots2.job_id(1), "done", path=str(tmp_path / "tryon2-01.mp4"))

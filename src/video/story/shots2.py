@@ -7,9 +7,12 @@ Why it is shaped like this, all measured:
   So each shot takes the route that fits its job: `character` for shots where the face matters, `product`
   for the close-up with nobody in it, and one paid Omni edit on `reveal` which keeps the face and changes
   only the clothing.
-- Frames mode pins the first frame from a project image, so `wardrobe`, `pose` and `closing` start from
-  the last frame of the shot before them and inherit the room, the outfit, the face and the position.
-  That is also why only `reveal` is edited: the shots after it inherit the garment for free.
+- Frames mode pins the first frame from a project image, so `wardrobe` starts from the last frame of the
+  hook and inherits the room, the outfit, the face and the position.
+- After the reveal that route is closed: Flow takes the submit, creates no job and charges nothing when the
+  pinned frame shows her in the set (measured 2026-09-13 on `pose`). So `pose` and `closing` continue the
+  reveal CLIP itself through the editor, the same surface that accepted the Omni edit. That is also why
+  only `reveal` is edited: the shots after it inherit the garment for free, and they run 7s not 8s.
 - Two real cuts remain, both cuts a real edit would make anyway: into the product close-up and into the
   reveal.
 - Veo mangles hands that manipulate fabric (Plan 2: tryon-03 lost a hand, tryon-05 fused fingers), so
@@ -108,6 +111,8 @@ SHOTS: tuple[Shot, ...] = (
     ),
     Shot(
         key="pose",
+        mode="extend",
+        duration=7,
         beat="show the fit: one slow turn so the cut and the drape read on camera",
         caption="Xoay một vòng cho dễ hình dung",
         hands_risk=True,
@@ -121,6 +126,8 @@ SHOTS: tuple[Shot, ...] = (
     ),
     Shot(
         key="closing",
+        mode="extend",
+        duration=7,
         beat="close the sale: she looks back at the viewer and invites the order",
         caption="Inbox chốt đơn nha",
         start_from="pose",

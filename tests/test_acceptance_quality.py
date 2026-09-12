@@ -90,17 +90,20 @@ def test_the_final_duration_is_judged_against_the_crossfade_formula():
     assert quality.duration_check([], 0.0, 0.5)[0] == "FAIL"
 
 
-def test_every_shot_must_carry_its_declared_length_and_shape():
+def test_every_shot_is_checked_against_its_own_declared_length():
     quality = load()
-    good = [{"key": "hook", "seconds": 8.01, "size": (720, 1280)}]
-    assert quality.shots_check(good, declared=8)[0] == "PASS"
-    assert (
-        quality.shots_check([{"key": "hook", "seconds": 6.5, "size": (720, 1280)}], declared=8)[0] == "FAIL"
-    )
-    assert (
-        quality.shots_check([{"key": "hook", "seconds": 8.01, "size": (360, 640)}], declared=8)[0] == "FAIL"
-    )
-    assert quality.shots_check([], declared=8)[0] == "FAIL"
+    declared = {"hook": 8, "fabric": 6}
+    good = [
+        {"key": "hook", "seconds": 8.01, "size": (720, 1280)},
+        {"key": "fabric", "seconds": 6.02, "size": (720, 1280)},
+    ]
+    assert quality.shots_check(good, declared)[0] == "PASS"
+    # The same 8s clip is right for hook and wrong for fabric: one shared number would miss that.
+    swapped = [{"key": "fabric", "seconds": 8.01, "size": (720, 1280)}]
+    status, detail = quality.shots_check(swapped, declared)
+    assert status == "FAIL" and "fabric" in detail
+    assert quality.shots_check([{"key": "hook", "seconds": 8.01, "size": (360, 640)}], declared)[0] == "FAIL"
+    assert quality.shots_check([], declared)[0] == "FAIL"
 
 
 def test_the_script_reports_a_failure_when_nothing_has_been_produced(tmp_path, capsys):

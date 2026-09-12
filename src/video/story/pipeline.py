@@ -165,6 +165,43 @@ async def _generate_with_product(
     }
 
 
+async def _extend_shot(
+    session, project_id: str, media_id: str, prompt: str, *, job_id: str, out_dir: Path, wait: float
+) -> dict[str, Any]:
+    """Continue the reveal clip itself, through the editor.
+
+    Flow refuses to generate from a pinned frame of her in the set: it takes the submit, creates no job
+    and charges nothing (measured 2026-09-13 on tryon2-05). The editor is the surface that did accept the
+    Omni edit, and continuing the clip holds the room and the garment better than any wording could.
+    """
+    extended = await clips.extend(
+        session, project_id, media_id, prompt, out_dir=out_dir, job_id=job_id, wait=wait
+    )
+    produced = [o for o in extended.get("outputs", []) if o.get("path")]
+    if not produced:
+        raise RuntimeError(f"{job_id}: extend produced no clip; spent {extended.get('spent')}")
+    fresh = await _refetch_720(session, project_id, produced[0]["media_id"], out_dir / job_id)
+    return {
+        "job_id": job_id,
+        "kind": "extend",
+        "media_id": produced[0]["media_id"],
+        "path": str(fresh),
+        "spent": extended.get("spent"),
+    }
+
+
+def _done_media_id(ledger: gen.Ledger, job_id: str) -> str | None:
+    for row in reversed(ledger.rows(job_id)):
+        if row.get("status") != "done":
+            continue
+        if row.get("media_id"):
+            return row["media_id"]
+        outputs = row.get("outputs") or []
+        if outputs and outputs[0].get("media_id"):
+            return outputs[0]["media_id"]
+    return None
+
+
 async def _refetch_720(session, project_id: str, media_id: str, stem: Path) -> Path:
     """Re-download at 720p: the clip-edit path accepts the 360p rendition when 720p is still 404."""
     from video.flow import download as download_mod
@@ -190,6 +227,22 @@ def _shot_row(key: str) -> dict[str, Any]:
 def _done_path(ledger: gen.Ledger, job_id: str) -> Path | None:
     done = [r for r in ledger.rows(job_id) if r.get("status") == "done" and r.get("path")]
     return Path(done[-1]["path"]) if done else None
+
+
+def clip_file(out_dir: Path, ledger: gen.Ledger, job_id: str, edited: bool = False) -> Path | None:
+    """The file that IS this shot, in the order that survives every route.
+
+    The edited reveal wins over the clip it was made from; an extend is written by the editor under its
+    own name and its ledger row carries no path at all, so the file named after the job comes next.
+    """
+    if not any(r.get("status") == "done" for r in ledger.rows(job_id)):
+        return None
+    if edited:
+        worn = worn_path(out_dir, job_id)
+        if worn is not None:
+            return worn
+    named = Path(out_dir) / f"{job_id}.mp4"
+    return named if named.is_file() else _done_path(ledger, job_id)
 
 
 def worn_path(out_dir: Path, job_id: str) -> Path | None:
@@ -262,11 +315,10 @@ def clip_paths(out_dir: Path) -> list[tuple[str, Path]]:
     ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
     found, missing = [], []
     for row in shots2.plan():
-        takes = {job: _done_path(ledger, job) for job in take_ids(row["job_id"], row["hands_risk"])}
-        if row["edit_to_product"]:
-            edited = worn_path(out_dir, row["job_id"])
-            if edited is not None:
-                takes[row["job_id"]] = edited
+        takes = {
+            job: clip_file(out_dir, ledger, job, edited=row["edit_to_product"])
+            for job in take_ids(row["job_id"], row["hands_risk"])
+        }
         done = {job: path for job, path in takes.items() if path is not None}
         pick = picked(ledger, row)
         if pick and pick in done:
@@ -358,6 +410,7 @@ async def run2(
 
     results: list[dict[str, Any]] = []
     paths: dict[str, str] = {}
+    media: dict[str, str] = {}
     for row in rows:
         key = row["key"]
         for index, job in enumerate(take_ids(row["job_id"], row["hands_risk"])):
@@ -369,6 +422,7 @@ async def run2(
                     path = str(edited) if edited is not None else path
                 if index == 0:
                     paths[key] = path
+                    media[key] = _done_media_id(ledger, job)
                 results.append({"job_id": job, "key": key, "status": "already done", "path": path})
                 continue
 
@@ -387,6 +441,13 @@ async def run2(
             elif row["mode"] == "product":
                 result = await _generate_with_product(
                     session, project_id, prompt=row["prompt"], job_id=job, out_dir=out_dir, wait=wait
+                )
+            elif row["mode"] == "extend":
+                source = media.get(row["start_from"])
+                if not source:
+                    raise RuntimeError(f"{job}: {row['start_from']} has no clip to continue from")
+                result = await _extend_shot(
+                    session, project_id, source, row["prompt"], job_id=job, out_dir=out_dir, wait=wait
                 )
             else:
                 previous = paths.get(row["start_from"])
@@ -423,5 +484,6 @@ async def run2(
             # The next shot continues from the first take: nobody has judged the spare yet.
             if index == 0:
                 paths[key] = result.get("path")
+                media[key] = result.get("media_id")
             results.append({**result, "key": key, "status": "done"})
     return {"character": who, "shots": results}

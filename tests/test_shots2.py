@@ -21,10 +21,10 @@ def test_each_shot_uses_the_route_measured_for_its_job():
         "wardrobe": "frames",
         "fabric": "product",
         "reveal": "character",
-        "pose": "frames",
-        "closing": "frames",
+        "pose": "extend",
+        "closing": "extend",
     }
-    assert all(s.start_from is None for s in shots2.SHOTS if s.mode != "frames")
+    assert all(s.start_from is None for s in shots2.SHOTS if s.mode in ("character", "product"))
 
 
 def test_only_the_reveal_is_edited_into_the_product():
@@ -32,12 +32,15 @@ def test_only_the_reveal_is_edited_into_the_product():
     assert edited == ["reveal"], "one paid Omni edit; the later shots inherit the outfit through frames"
 
 
-def test_every_other_shot_continues_the_one_before_it():
+def test_every_continued_shot_follows_the_one_before_it():
     keys = [s.key for s in shots2.SHOTS]
     for index, shot in enumerate(shots2.SHOTS):
-        if shot.mode == "frames":
+        if shot.start_from:
             assert shot.start_from == keys[index - 1], f"{shot.key} must continue {keys[index - 1]}"
-    assert [s.key for s in shots2.SHOTS if s.mode == "frames"] == ["wardrobe", "pose", "closing"]
+    # Flow refuses to generate from a pinned frame of her in the set (measured 2026-09-13: submit taken,
+    # no record, no charge), so the shots after the reveal continue the clip itself instead.
+    assert [s.key for s in shots2.SHOTS if s.mode == "extend"] == ["pose", "closing"]
+    assert [s.key for s in shots2.SHOTS if s.mode == "frames"] == ["wardrobe"]
 
 
 def test_the_product_photo_is_used_only_where_no_face_is_needed():
@@ -80,14 +83,17 @@ def test_the_fabric_shot_keeps_hands_out_of_frame():
 
 
 def test_every_shot_declares_its_duration_for_acceptance_to_read():
-    assert all(s.duration == 8 for s in shots2.SHOTS)
-    assert shots2.total_seconds() == 6 * 8
+    # Measured: a fresh generation is 8.01s, an extend is 7.01s.
+    assert {s.key: s.duration for s in shots2.SHOTS if s.mode == "extend"} == {"pose": 7, "closing": 7}
+    assert all(s.duration == 8 for s in shots2.SHOTS if s.mode != "extend")
+    assert shots2.total_seconds() == 4 * 8 + 2 * 7
 
 
 def test_captions_run_back_to_back_over_the_whole_cut():
     windows = shots2.captions()
     assert len(windows) == 6
     assert windows[0][0] == 0.0 and windows[-1][1] == float(shots2.total_seconds())
+    assert windows[-1][1] - windows[-1][0] == 7.0
     for index, (start, end, text) in enumerate(windows):
         assert text.strip()
         if index:

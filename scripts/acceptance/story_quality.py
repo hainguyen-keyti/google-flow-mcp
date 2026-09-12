@@ -161,17 +161,18 @@ def duration_check(clip_seconds: list[float], final_seconds: float, fade: float)
     return ("PASS" if ok else "FAIL"), detail
 
 
-def shots_check(clips: list[dict], declared: int) -> tuple[str, str]:
+def shots_check(clips: list[dict], declared: dict[str, int]) -> tuple[str, str]:
+    """Each shot against its OWN declared length: an extend runs 7s where a fresh shot runs 8s."""
     if not clips:
         return "FAIL", "no clips found"
-    wrong_length = [c["key"] for c in clips if abs(c["seconds"] - declared) > 0.2]
+    wrong_length = [c["key"] for c in clips if abs(c["seconds"] - declared.get(c["key"], 0)) > 0.2]
     wrong_size = [c["key"] for c in clips if tuple(c["size"]) != SIZE]
     detail = (
         f"{len(clips)} clips, {[round(c['seconds'], 2) for c in clips]}s, "
         f"sizes {sorted({tuple(c['size']) for c in clips})}"
     )
     if wrong_length:
-        detail += f"; wrong length: {wrong_length} (want {declared}s +-0.2)"
+        detail += f"; wrong length: {wrong_length} (want {[declared.get(k) for k in wrong_length]}s +-0.2)"
     if wrong_size:
         detail += f"; wrong size: {wrong_size} (want {SIZE[0]}x{SIZE[1]})"
     return ("PASS" if not wrong_length and not wrong_size else "FAIL"), detail
@@ -203,10 +204,7 @@ def main(argv: list[str] | None = None) -> int:
 
     declared = {shot.key: shot.duration for shot in shots2.SHOTS}
     trimmed = [c["key"] for c in clips if c.get("trim")]
-    row(
-        "shots",
-        *shots_check([c for c in clips if c["key"] not in trimmed], declared.get("hook", 8)),
-    )
+    row("shots", *shots_check([c for c in clips if c["key"] not in trimmed], declared))
     if trimmed:
         row("trims", "PASS", f"trimmed on purpose, length not checked: {trimmed}")
 
