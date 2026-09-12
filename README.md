@@ -35,9 +35,17 @@ uv run video flow upload <project> <file>
 uv run video flow uploads <project>
 uv run video flow project create --title T | rename <id> T | delete <id> --yes
 uv run video flow character create <project> "<face prompt>" --name N --personality P | delete <project> <entity> --yes
-uv run video flow scene create <project> --title T | delete <project> <scene_id> --yes
+uv run video flow scene list <project> [--all] | create <project> --title T | delete <project> <scene_id> --yes
 uv run video flow agent mode <project> on|off
-uv run video flow agent send <project> "<message>"   # agent có thể tự sinh nội dung, tốn credit
+uv run video flow clip download <project> <media_id> --quality gif|720p|1080p|4k --out out/   # 1080p, 4K = upscale
+```
+
+Lệnh trên clip editor và agent, tốn credit, cùng ledger `out/ledger.jsonl`:
+
+```
+uv run video flow clip extend <project> <media_id> "<prompt>" --out out    # Extend (Veo 3.1 Lite)
+uv run video flow clip edit <project> <media_id> "<prompt>" --out out      # video-to-video, Omni 1.1 Flash
+uv run video flow agent send <project> "<message>"   # agent có thể tự sinh nội dung
 ```
 
 Sinh nội dung, tốn credit (video) hoặc quota (ảnh), luôn cần `--project`:
@@ -57,8 +65,9 @@ bao giờ submit đôi.
 ## MCP
 
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`).
-18 tool: `flow_*`, `project_*`, `character_*` (miễn phí) và `gen_*` (tốn credit, cùng ledger). Không có
-chế độ no-spend: chủ repo chốt agent được gọi mọi thứ.
+26 tool: `flow_*`, `project_*`, `character_*`, `scene_*`, `agent_mode`, `clip_download` (miễn phí) và
+`gen_*`, `clip_extend`, `clip_edit`, `agent_send` (tốn credit, cùng ledger). Không có chế độ no-spend:
+chủ repo chốt agent được gọi mọi thứ.
 
 ## Acceptance
 
@@ -77,4 +86,7 @@ uv run pytest -q
 - URL trong listing là poster; tải tài sản gốc bằng hậu tố lh3 (`=s0` ảnh, `=m22` rồi `=m18` video).
 - Agent mode bật là Flow lưu theo project và ẩn chip settings của composer; tắt lại bằng
   `flow agent mode <project> off`.
+- Xoá scene là "Move to trash" trên tile của grid (rpc `BpMsoe`): scene vẫn nằm trong listing với cờ
+  trashed và hiện ở view Trash; `scene list` mặc định ẩn scene đã trash, `--all` để thấy. Nút "Move to
+  trash" bên trong editor scene không làm gì (đo 2 lần).
 - Giá đo được trên gói PRO: Veo 3.1 Lite 720p 8s = 10 credit, ảnh Nano Banana 2 = 0 credit.

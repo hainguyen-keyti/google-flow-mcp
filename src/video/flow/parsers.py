@@ -113,7 +113,8 @@ def upload_record(payload: Any) -> dict[str, Any]:
 
 
 def scenes_from_listing(payload: Any) -> list[dict[str, Any]]:
-    """Scenes ride in Zzl0ze[4] as [scene_id, title, _, [created], [updated], status, _, []]."""
+    """Scenes ride in Zzl0ze[4] as [scene_id, title, _, [created], [updated], status, _, flags]; a trashed
+    scene stays listed with flags == [true] (measured 2026-09-12 after the tile's 'Move to trash')."""
     entries = _at(payload, 4)
     if entries is None:
         return []
@@ -124,12 +125,14 @@ def scenes_from_listing(payload: Any) -> list[dict[str, Any]]:
         scene_id = _at(entry, 0)
         if not _uuid(scene_id):
             continue
+        flags = _at(entry, 7)
         out.append(
             {
                 "scene_id": scene_id,
                 "title": _str(_at(entry, 1)),
                 "created": _epoch(_at(entry, 3)),
                 "updated": _epoch(_at(entry, 4)),
+                "trashed": isinstance(flags, list) and bool(flags) and flags[0] is True,
             }
         )
     return out

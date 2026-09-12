@@ -256,11 +256,16 @@ def scene() -> None:
 
 @scene.command("list")
 @click.argument("project_id")
+@click.option("--all", "include_trashed", is_flag=True, help="Include scenes already moved to the trash.")
 @click.option("--profile", default="default", show_default=True)
-def scene_list(project_id: str, profile: str) -> None:
+def scene_list(project_id: str, include_trashed: bool, profile: str) -> None:
     from video.flow import scenes
 
-    click.echo(json.dumps(_read(profile, lambda s: scenes.list_scenes(s, project_id))))
+    click.echo(
+        json.dumps(
+            _read(profile, lambda s: scenes.list_scenes(s, project_id, include_trashed=include_trashed))
+        )
+    )
 
 
 @scene.command("create")
@@ -284,6 +289,79 @@ def scene_delete(project_id: str, scene_id: str, yes: bool, profile: str) -> Non
     if not yes:
         raise click.UsageError("refusing to trash a scene without --yes")
     click.echo(json.dumps(_read(profile, lambda s: scenes.delete(s, project_id, scene_id))))
+
+
+@flow.group()
+def clip() -> None:
+    """Per-clip actions in the clip editor: renditions (upscale), extend, Omni edit."""
+
+
+@clip.command("download")
+@click.argument("project_id")
+@click.argument("media_id")
+@click.option(
+    "--quality", default="1080p", show_default=True, type=click.Choice(["gif", "720p", "1080p", "4k"])
+)
+@click.option("--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False))
+@click.option("--profile", default="default", show_default=True)
+def clip_download(project_id: str, media_id: str, quality: str, out_dir: str, profile: str) -> None:
+    """Download a rendition from 'Download media' (1080p and 4K are upscaled by Flow)."""
+    from pathlib import Path
+
+    from video.flow import clips
+
+    path = _read(profile, lambda s: clips.download_rendition(s, project_id, media_id, quality, Path(out_dir)))
+    click.echo(str(path))
+
+
+@clip.command("extend")
+@click.argument("project_id")
+@click.argument("media_id")
+@click.argument("prompt")
+@click.option("--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False))
+@click.option("--job", "job_id", default=None)
+@click.option("--wait", default=240.0, show_default=True, type=float)
+@click.option("--profile", default="default", show_default=True)
+def clip_extend(
+    project_id: str, media_id: str, prompt: str, out_dir: str, job_id: str | None, wait: float, profile: str
+) -> None:
+    """Extend a clip (Veo 3.1 Lite); spends credits, ledgered."""
+    from pathlib import Path
+
+    from video.flow import clips
+
+    result = _read(
+        profile,
+        lambda s: clips.extend(
+            s, project_id, media_id, prompt, out_dir=Path(out_dir), job_id=job_id, wait=wait
+        ),
+    )
+    click.echo(json.dumps(result))
+
+
+@clip.command("edit")
+@click.argument("project_id")
+@click.argument("media_id")
+@click.argument("prompt")
+@click.option("--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False))
+@click.option("--job", "job_id", default=None)
+@click.option("--wait", default=240.0, show_default=True, type=float)
+@click.option("--profile", default="default", show_default=True)
+def clip_edit(
+    project_id: str, media_id: str, prompt: str, out_dir: str, job_id: str | None, wait: float, profile: str
+) -> None:
+    """Video-to-video edit with Omni 1.1 Flash; spends credits, ledgered."""
+    from pathlib import Path
+
+    from video.flow import clips
+
+    result = _read(
+        profile,
+        lambda s: clips.edit(
+            s, project_id, media_id, prompt, out_dir=Path(out_dir), job_id=job_id, wait=wait
+        ),
+    )
+    click.echo(json.dumps(result))
 
 
 @flow.group()

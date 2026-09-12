@@ -1,6 +1,7 @@
 """Scenes (Scenebuilder) on the migrated host (measured 2026-09-12): 'Add media' > 'New scene' creates a
-scene (rpc rqZuUc) and opens /project/<id>/scene/<scene_id>. Scenes are listed in Zzl0ze[4]. The editor's
-'Move to trash' button did nothing in two runs; deletion goes through the grid tile's More options menu."""
+scene (rpc rqZuUc) and opens /project/<id>/scene/<scene_id>. Scenes are listed in Zzl0ze[4]; the grid tile's
+'More options' > 'Move to trash' (rpc BpMsoe) keeps the entry listed with the trashed flag set and shows it
+under the project's Trash view. The scene editor's own 'Move to trash' button did nothing in two runs."""
 
 from __future__ import annotations
 
@@ -15,10 +16,6 @@ from video.session import PROJECT_READY, FlowSession
 
 _SCENE_RE = re.compile(r"/scene/([A-Za-z0-9-]+)")
 BUILDER = "flow-scene-builder"
-_TILES_JS = (
-    "() => [...document.querySelectorAll('flow-tile-container')]"
-    ".map(t => (t.innerText || '').trim().replace(/\\s+/g, ' '))"
-)
 
 
 def scene_id_from_url(url: str) -> str:
@@ -35,8 +32,11 @@ async def _listing(session: FlowSession, project_id: str) -> Any:
     return one(frames, "Zzl0ze")
 
 
-async def list_scenes(session: FlowSession, project_id: str) -> list[dict[str, Any]]:
-    return parsers.scenes_from_listing(await _listing(session, project_id))
+async def list_scenes(
+    session: FlowSession, project_id: str, *, include_trashed: bool = False
+) -> list[dict[str, Any]]:
+    scenes = parsers.scenes_from_listing(await _listing(session, project_id))
+    return scenes if include_trashed else [s for s in scenes if not s["trashed"]]
 
 
 async def create(session: FlowSession, project_id: str, title: str | None = None) -> dict[str, Any]:
@@ -74,11 +74,14 @@ async def create(session: FlowSession, project_id: str, title: str | None = None
 
 
 async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[str, Any]:
+    """Move a scene to the project's trash; verified by the trashed flag in the listing."""
     page = session.page
-    scenes = await list_scenes(session, project_id)
+    scenes = await list_scenes(session, project_id, include_trashed=True)
     scene = next((s for s in scenes if s["scene_id"] == scene_id), None)
     if scene is None:
         raise LookupError(f"scene {scene_id} is not in the project listing")
+    if scene["trashed"]:
+        raise LookupError(f"scene {scene_id} is already in the trash")
     title = scene["title"] or ""
     tile = (
         page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
@@ -109,7 +112,13 @@ async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[s
         frames = {**frames, **confirm_frames}
     except PlaywrightTimeoutError:
         await page.wait_for_timeout(2_000)
-    remaining = await list_scenes(session, project_id)
-    if any(s["scene_id"] == scene_id for s in remaining):
-        raise RuntimeError(f"delete: scene {scene_id} is still listed; rpcids {sorted(frames)}")
-    return {"scene_id": scene_id, "rpcids": sorted(frames), "remaining": len(remaining)}
+    after = await list_scenes(session, project_id, include_trashed=True)
+    state = next((s for s in after if s["scene_id"] == scene_id), None)
+    if state is not None and not state["trashed"]:
+        raise RuntimeError(f"delete: scene {scene_id} is still active; rpcids {sorted(frames)}")
+    return {
+        "scene_id": scene_id,
+        "trashed": state is not None,
+        "rpcids": sorted(frames),
+        "remaining": sum(1 for s in after if not s["trashed"]),
+    }

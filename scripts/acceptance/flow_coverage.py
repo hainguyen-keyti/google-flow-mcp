@@ -115,8 +115,24 @@ def free_matrix(project: str, out_dir: Path) -> None:
         probe = ffprobe(path) if path and path.exists() else {}
         duration = float(probe.get("format", {}).get("duration", 0) or 0)
         row("download", "PASS" if duration > 0 else "FAIL", f"{path} duration={duration:.2f}s")
+
+        code, out, err = run(
+            "flow", "clip", "download", project, target["id"], "--quality", "1080p", "--out", str(dl_dir)
+        )
+        path = Path(out.strip().splitlines()[-1]) if code == 0 and out.strip() else None
+        probe = ffprobe(path) if path and path.exists() else {}
+        height = max((int(s.get("height") or 0) for s in probe.get("streams", [])), default=0)
+        code2, out2, _ = run("flow", "credits")
+        after = out2.strip().splitlines()[-1] if out2.strip() else ""
+        spent = int(balance) - int(after) if balance.isdigit() and after.isdigit() else None
+        row(
+            "upscale 1080p",
+            "PASS" if height >= 1080 else "FAIL",
+            f"{path} height={height} credits_spent={spent}" if path else err.strip()[-160:],
+        )
     else:
         row("download", "FAIL", "no video with a url in the listing")
+        row("upscale 1080p", "FAIL", "no video with a url in the listing")
 
     code, out, _ = run("flow", "project", "create", "--title", "acceptance probe")
     created = last_json(out) if code == 0 else {}
@@ -183,8 +199,9 @@ def character_round_trip(project: str) -> None:
 
 
 def spend_matrix(project: str, out_dir: Path, ref_image: Path | None) -> None:
-    def video_row(name: str, *args: str, expect_outputs: int = 1) -> None:
-        code, out, err = run("gen", *args, "--project", project, "--out", str(out_dir))
+    def video_row(name: str, *args: str, expect_outputs: int = 1, group: str = "gen") -> dict:
+        scope = ("--project", project) if group == "gen" else ()
+        code, out, err = run(group, *args, *scope, "--out", str(out_dir))
         result = last_json(out) if code == 0 else {}
         paths = [o.get("path") for o in result.get("outputs", [])]
         probe = ffprobe(Path(paths[0])) if paths and Path(paths[0]).exists() else {}
@@ -202,6 +219,7 @@ def spend_matrix(project: str, out_dir: Path, ref_image: Path | None) -> None:
             else err.strip()[-160:]
         )
         row(name, status, detail)
+        return result
 
     def image_row(name: str, *args: str) -> None:
         code, out, _ = run("gen", *args, "--project", project, "--out", str(out_dir))
@@ -217,7 +235,7 @@ def spend_matrix(project: str, out_dir: Path, ref_image: Path | None) -> None:
     image_row(
         "t2i", "t2i", "a ceramic teacup on a wooden table, soft light", "--model", "nano2", "--aspect", "16:9"
     )
-    video_row(
+    t2v = video_row(
         "t2v",
         "t2v",
         "a small wooden sailboat model on a desk, slow push in",
@@ -225,6 +243,47 @@ def spend_matrix(project: str, out_dir: Path, ref_image: Path | None) -> None:
         "veo-lite",
         "--aspect",
         "16:9",
+    )
+    source = (t2v.get("outputs") or [{}])[0].get("media_id")
+    if source:
+        video_row(
+            "extend",
+            "clip",
+            "extend",
+            project,
+            source,
+            "the sailboat keeps rocking gently, camera holds still",
+            group="flow",
+        )
+        video_row(
+            "omni edit",
+            "clip",
+            "edit",
+            project,
+            source,
+            "make it night time with warm lamp light",
+            group="flow",
+        )
+    else:
+        row("extend", "FAIL", "no t2v media id to extend")
+        row("omni edit", "FAIL", "no t2v media id to edit")
+
+    code, out, err = run(
+        "flow",
+        "agent",
+        "send",
+        project,
+        "Reply in one short sentence: what can you do here? Do not generate anything.",
+    )
+    sent = last_json(out) if code == 0 else {}
+    run("flow", "agent", "mode", project, "off")
+    row(
+        "agent send",
+        "PASS" if code == 0 and sent.get("reply_excerpt") else "FAIL",
+        f"spent={sent.get('credits_before', 0) - sent.get('credits_after', 0)} rpcids={sent.get('rpcids')} "
+        f"reply={str(sent.get('reply_excerpt', ''))[:120]!r}"
+        if sent
+        else err.strip()[-160:],
     )
     if ref_image and ref_image.exists():
         image_row(

@@ -25,6 +25,14 @@ EXPECTED_TOOLS = {
     "gen_r2v",
     "gen_t2i",
     "gen_i2i",
+    "scene_list",
+    "scene_create",
+    "scene_delete",
+    "agent_mode",
+    "agent_send",
+    "clip_download",
+    "clip_extend",
+    "clip_edit",
 }
 
 
@@ -84,6 +92,23 @@ def test_gen_tool_refuses_a_missing_project(monkeypatch):
 
     async def fn(session):
         return await session.call_tool("gen_t2v", {"prompt": "a boat", "project": ""})
+
+    result = with_client(fn)
+    assert result.is_error
+    assert called == []
+
+
+def test_clip_download_rejects_an_unknown_quality_before_opening_a_browser(monkeypatch):
+    called = []
+
+    async def fake_clip_download(*args):
+        called.append(args)
+        return "out/x.mp4"
+
+    monkeypatch.setattr(mcp_server.backend, "clip_download", fake_clip_download)
+
+    async def fn(session):
+        return await session.call_tool("clip_download", {"project_id": "P", "media_id": "M", "quality": "8k"})
 
     result = with_client(fn)
     assert result.is_error

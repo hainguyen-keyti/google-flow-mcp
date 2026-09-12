@@ -13,11 +13,14 @@ from typing import Any
 from mcp.server import MCPServer
 
 from video import gen as gen_mod
+from video.flow import agent as agent_mod
 from video.flow import characters as characters_mod
+from video.flow import clips as clips_mod
 from video.flow import download as download_mod
 from video.flow import lane as lane_mod
 from video.flow import projects as projects_mod
 from video.flow import reader
+from video.flow import scenes as scenes_mod
 from video.flow import uploads as uploads_mod
 from video.session import FlowSession
 
@@ -81,6 +84,63 @@ class Backend:
 
     async def character_delete(self, project_id: str, entity_id: str) -> dict[str, Any]:
         return await self._with(lambda s: characters_mod.delete(s, project_id, entity_id))
+
+    async def scene_list(self, project_id: str, include_trashed: bool = False) -> list[dict[str, Any]]:
+        return await self._with(
+            lambda s: scenes_mod.list_scenes(s, project_id, include_trashed=include_trashed)
+        )
+
+    async def scene_create(self, project_id: str, title: str | None = None) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.create(s, project_id, title))
+
+    async def scene_delete(self, project_id: str, scene_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.delete(s, project_id, scene_id))
+
+    async def agent_mode(self, project_id: str, enabled: bool) -> dict[str, Any]:
+        return await self._with(lambda s: agent_mod.set_mode(s, project_id, enabled))
+
+    async def agent_send(self, project_id: str, message: str, wait: float = 60.0) -> dict[str, Any]:
+        return await self._with(lambda s: agent_mod.send(s, project_id, message, wait=wait))
+
+    async def clip_download(
+        self, project_id: str, media_id: str, quality: str = "1080p", out_dir: str | None = None
+    ) -> str:
+        target = Path(out_dir) if out_dir else self.out_dir
+        return str(
+            await self._with(lambda s: clips_mod.download_rendition(s, project_id, media_id, quality, target))
+        )
+
+    async def clip_extend(
+        self,
+        project_id: str,
+        media_id: str,
+        prompt: str,
+        job_id: str | None = None,
+        out_dir: str | None = None,
+        wait: float = 240.0,
+    ) -> dict[str, Any]:
+        target = Path(out_dir) if out_dir else self.out_dir
+        return await self._with(
+            lambda s: clips_mod.extend(
+                s, project_id, media_id, prompt, out_dir=target, job_id=job_id, wait=wait
+            )
+        )
+
+    async def clip_edit(
+        self,
+        project_id: str,
+        media_id: str,
+        prompt: str,
+        job_id: str | None = None,
+        out_dir: str | None = None,
+        wait: float = 240.0,
+    ) -> dict[str, Any]:
+        target = Path(out_dir) if out_dir else self.out_dir
+        return await self._with(
+            lambda s: clips_mod.edit(
+                s, project_id, media_id, prompt, out_dir=target, job_id=job_id, wait=wait
+            )
+        )
 
     async def generate(
         self,
@@ -225,6 +285,82 @@ async def character_delete(project_id: str, entity_id: str) -> str:
     _require(project_id, "project_id")
     _require(entity_id, "entity_id")
     return _json(await backend.character_delete(project_id, entity_id))
+
+
+@server.tool(
+    name="scene_list", description="List a project's scenes (Scenebuilder); trashed ones on request. Free."
+)
+async def scene_list(project_id: str, include_trashed: bool = False) -> str:
+    _require(project_id, "project_id")
+    return _json(await backend.scene_list(project_id, include_trashed))
+
+
+@server.tool(name="scene_create", description="Create a scene (Scenebuilder), optionally titled. Free.")
+async def scene_create(project_id: str, title: str | None = None) -> str:
+    _require(project_id, "project_id")
+    return _json(await backend.scene_create(project_id, title))
+
+
+@server.tool(name="scene_delete", description="Move a scene to the project's trash. Free.")
+async def scene_delete(project_id: str, scene_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    return _json(await backend.scene_delete(project_id, scene_id))
+
+
+@server.tool(
+    name="agent_mode",
+    description="Turn Flow's agent mode on or off for a project; leaving it on hides the composer settings. Free.",
+)
+async def agent_mode(project_id: str, enabled: bool) -> str:
+    _require(project_id, "project_id")
+    return _json(await backend.agent_mode(project_id, enabled))
+
+
+@server.tool(
+    name="agent_send", description="Send a message to Flow's agent in a project (may spend credits)."
+)
+async def agent_send(project_id: str, message: str, wait: float = 60.0) -> str:
+    _require(project_id, "project_id")
+    _require(message, "message")
+    return _json(await backend.agent_send(project_id, message, wait))
+
+
+@server.tool(
+    name="clip_download",
+    description="Download a clip rendition from the editor: gif (270p), 720p, 1080p or 4k (upscaled by Flow).",
+)
+async def clip_download(
+    project_id: str, media_id: str, quality: str = "1080p", out_dir: str | None = None
+) -> str:
+    _require(project_id, "project_id")
+    _require(media_id, "media_id")
+    if quality.lower() not in clips_mod.RENDITIONS:
+        raise ValueError(f"quality must be one of {sorted(clips_mod.RENDITIONS)}")
+    return _json({"path": await backend.clip_download(project_id, media_id, quality, out_dir)})
+
+
+@server.tool(name="clip_extend", description="Extend a clip with Veo 3.1 Lite (spends credits, ledgered).")
+async def clip_extend(
+    project_id: str, media_id: str, prompt: str, job_id: str | None = None, out_dir: str | None = None
+) -> str:
+    _require(project_id, "project_id")
+    _require(media_id, "media_id")
+    _require(prompt, "prompt")
+    return _json(await backend.clip_extend(project_id, media_id, prompt, job_id, out_dir))
+
+
+@server.tool(
+    name="clip_edit",
+    description="Video-to-video edit of a clip with Omni 1.1 Flash (spends credits, ledgered).",
+)
+async def clip_edit(
+    project_id: str, media_id: str, prompt: str, job_id: str | None = None, out_dir: str | None = None
+) -> str:
+    _require(project_id, "project_id")
+    _require(media_id, "media_id")
+    _require(prompt, "prompt")
+    return _json(await backend.clip_edit(project_id, media_id, prompt, job_id, out_dir))
 
 
 async def _gen(kind: str, **kwargs: Any) -> str:
