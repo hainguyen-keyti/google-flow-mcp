@@ -2,11 +2,16 @@
 
 Why it is shaped like this, all measured:
 
-- Frames mode pins the first frame from a project image but has NO ingredients button (T1), so the
-  character entity can only be attached on a block opener. Every other shot starts from the last frame of
-  the shot before it, which carries the room, the outfit, the face and the position across the join.
-- The garment changes once, so there is exactly ONE real cut (fabric -> reveal). That cut is the reveal,
-  which is what a try-on video wants anyway.
+- The face and the garment cannot be locked in the same generation. A character chip keeps the face but
+  lets Veo invent the clothes; r2v with the product photo keeps the clothes but returns a different woman.
+  So each shot takes the route that fits its job: `character` for shots where the face matters, `product`
+  for the close-up with nobody in it, and one paid Omni edit on `reveal` which keeps the face and changes
+  only the clothing.
+- Frames mode pins the first frame from a project image, so `wardrobe`, `pose` and `closing` start from
+  the last frame of the shot before them and inherit the room, the outfit, the face and the position.
+  That is also why only `reveal` is edited: the shots after it inherit the garment for free.
+- Two real cuts remain, both cuts a real edit would make anyway: into the product close-up and into the
+  reveal.
 - Veo mangles hands that manipulate fabric (Plan 2: tryon-03 lost a hand, tryon-05 fused fingers), so
   poses keep hands still or out of frame, and the two shots that must touch something are marked
   `hands_risk` and get a second take to choose from.
@@ -17,15 +22,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from video.story import bible
+from video.story import bible, product
 
 ASPECT = "9:16"
 MODEL = "veo-lite"
 PRICE = 10
 FADE = 0.5
 
-_CAMISOLE = "ivory lace-trimmed camisole and matching soft shorts, lingerie-catalogue styling"
-_DRESS = "the cream lace slip dress from the reference image, worn"
+_BEFORE = "a plain oversized white cotton t-shirt and soft shorts, her own everyday clothes"
+_PRODUCT = product.DESCRIPTION
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,7 @@ class Shot:
     mode: str = "frames"
     start_from: str | None = None
     product: bool = False
+    edit_to_product: bool = False
 
 
 SHOTS: tuple[Shot, ...] = (
@@ -46,13 +52,13 @@ SHOTS: tuple[Shot, ...] = (
         key="hook",
         beat="stop the scroll: she greets the viewer from her own room",
         caption="Hôm nay thử đồ mới nha",
-        mode="ingredients",
+        mode="character",
         start_from=None,
         scene=bible.Scene(
             camera="medium environmental portrait, 35mm equivalent, vertical framing, camera locked off",
             pose="sitting on the edge of the bed, both hands resting still on her lap, turning her head to"
             " the camera",
-            outfit=_CAMISOLE,
+            outfit=_BEFORE,
             expression="calm and friendly, a small smile with the cheek dimple",
         ),
     ),
@@ -65,33 +71,35 @@ SHOTS: tuple[Shot, ...] = (
         scene=bible.Scene(
             camera="the same room, camera pans slowly left to the open wardrobe, 35mm equivalent, vertical",
             pose="standing at the wardrobe, one hand resting flat on the rail, the other arm hanging still",
-            outfit=_CAMISOLE,
+            outfit=_BEFORE,
             expression="relaxed, looking at the clothes",
         ),
     ),
     Shot(
         key="fabric",
         beat="prove the quality: the lace read close up so the buyer can see the fabric",
-        caption="Ren mềm, đứng phom",
-        start_from="wardrobe",
+        caption="Ren mềm, vải mát",
+        mode="product",
+        start_from=None,
+        product=True,
         scene=bible.Scene(
-            camera="slow close-up push along the hanging cream lace dress, 50mm equivalent, vertical",
-            pose="no hands in frame, only the dress hanging still on the rail as the camera drifts across it",
-            outfit="the cream lace slip dress hanging on its hanger, seen in close detail",
+            camera="slow close-up push along the garment on its hanger, 50mm equivalent, vertical framing",
+            pose="no hands in frame, only the set hanging still on the rail as the camera drifts across it",
+            outfit=f"{_PRODUCT}, hanging on a wooden hanger, seen in close detail",
             expression="not visible, she is out of frame",
         ),
     ),
     Shot(
         key="reveal",
-        beat="the reveal: the same dress now worn, the one deliberate cut of the video",
+        beat="the reveal: the same set now worn, the moment the video is selling",
         caption="Lên dáng đẹp lắm nè",
-        mode="ingredients",
+        mode="character",
         start_from=None,
-        product=True,
+        edit_to_product=True,
         scene=bible.Scene(
             camera="full-length mirror shot, phone held low and still, vertical framing",
-            pose="standing in front of the mirror wearing the dress, arms hanging naturally at her sides",
-            outfit=_DRESS,
+            pose="standing in front of the mirror wearing the set, arms hanging naturally at her sides",
+            outfit=_PRODUCT,
             expression="pleased, a soft smile",
         ),
     ),
@@ -104,7 +112,7 @@ SHOTS: tuple[Shot, ...] = (
         scene=bible.Scene(
             camera="the same mirror shot continues, camera stays where it is, vertical framing",
             pose="turning slowly from front to three-quarter, one hand settling on her hip, the other still",
-            outfit=_DRESS,
+            outfit=_PRODUCT,
             expression="calm, looking at her own reflection",
         ),
     ),
@@ -116,13 +124,14 @@ SHOTS: tuple[Shot, ...] = (
         scene=bible.Scene(
             camera="the same mirror shot, camera holds, vertical framing",
             pose="turning back to face the camera and standing still, both hands relaxed at her sides",
-            outfit=_DRESS,
+            outfit=_PRODUCT,
             expression="warm and inviting, looking straight into the camera",
         ),
     ),
 )
 
 EXTRA_TAKES = sum(1 for shot in SHOTS if shot.hands_risk)
+EDIT_PRICE = 20
 
 
 def by_key(key: str) -> Shot:
@@ -141,7 +150,8 @@ def total_seconds() -> int:
 
 
 def expected_credits() -> int:
-    return (len(SHOTS) + EXTRA_TAKES) * PRICE
+    edits = sum(1 for shot in SHOTS if shot.edit_to_product)
+    return (len(SHOTS) + EXTRA_TAKES) * PRICE + edits * EDIT_PRICE
 
 
 def captions() -> list[tuple[float, float, str]]:
@@ -163,6 +173,7 @@ def plan(data: dict[str, Any] | None = None) -> list[dict[str, Any]]:
             "mode": shot.mode,
             "start_from": shot.start_from,
             "product": shot.product,
+            "edit_to_product": shot.edit_to_product,
             "hands_risk": shot.hands_risk,
             "duration": shot.duration,
             "prompt": bible.compose(shot.scene, data),

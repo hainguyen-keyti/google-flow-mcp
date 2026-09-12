@@ -208,18 +208,21 @@ async def attach_character(session: FlowSession, name: str) -> bool:
     return True
 
 
-async def generate(
+async def _submit(
     session: FlowSession,
     project_id: str,
     *,
     prompt: str,
-    character: str,
+    setup,
+    kind: str,
     job_id: str,
     expected_credits: int,
     out_dir: Path,
     aspect: str = "9:16",
+    mode: str = "Ingredients",
     wait: float = 300.0,
 ) -> dict[str, Any]:
+    """The one money path: every mode goes through the same price guard, single click and ledger."""
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
     if any(r.get("status") == "done" for r in ledger.rows(job_id)):
         raise gen.AlreadySubmitted(f"job {job_id} is already done; delete its output to redo it")
@@ -230,22 +233,21 @@ async def generate(
     await agent.set_mode(session, project_id, False)
     await session.goto(session.project_url(project_id), ready=PROJECT_READY)
     await session.page.wait_for_timeout(2_500)
-    settings = await configure(session, aspect=aspect, label="pre")
-    await attach_character(session, character)
+    settings = await configure(session, mode=mode, aspect=aspect, label="pre")
+    await setup(session)
     box = session.page.locator("flow-prompt-box [contenteditable='true']").first
     await box.click(timeout=8_000)
     await session.page.keyboard.insert_text(prompt)
     await session.page.wait_for_timeout(1_500)
 
-    confirm = await configure(session, aspect=aspect, label="confirm")
+    confirm = await configure(session, mode=mode, aspect=aspect, label="confirm")
     ensure_price(confirm["price"], expected_credits)
     start = session.page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
     ledger.append(
         job_id,
         "submitted",
-        kind="story",
+        kind=kind,
         project=project_id,
-        character=character,
         prompt=prompt[:200],
         quoted_credits=confirm["price"],
         credits_before=credits_before,
@@ -289,6 +291,7 @@ async def generate(
         )
     return {
         "job_id": job_id,
+        "kind": kind,
         "media_id": output["id"],
         "path": path,
         "quoted_credits": confirm["price"],
@@ -296,3 +299,60 @@ async def generate(
         "credits_after": credits_after,
         "spent": credits_before - credits_after,
     }
+
+
+START_SLOT = (
+    "flow-prompt-box button[aria-label='Start'], flow-base-prompt-box button[aria-label='Start'],"
+    " flow-prompt-box button[aria-label*='Image ingredient'],"
+    " flow-base-prompt-box button[aria-label*='Image ingredient']"
+)
+
+
+async def pin_start_frame(session: FlowSession, name: str) -> bool:
+    """Pin a project image into the Frames Start slot, found by name through the picker's search box.
+
+    Measured 2026-09-13: the slot opens a "Select a frame image" picker listing project images with no
+    text on the tiles, so the filename is typed into the search field and the first result is taken.
+    """
+    page = session.page
+    slot = page.locator(START_SLOT).first
+    await slot.wait_for(state="visible", timeout=20_000)
+    await slot.click(timeout=8_000)
+    await page.wait_for_timeout(3_000)
+    search = page.locator(".cdk-overlay-pane input, [role=dialog] input").first
+    if await search.count():
+        await search.click(timeout=8_000)
+        await page.keyboard.insert_text(name)
+        await page.wait_for_timeout(3_000)
+    tile = page.locator(".cdk-overlay-pane img, [role=dialog] img").first
+    try:
+        await tile.wait_for(state="visible", timeout=20_000)
+    except PlaywrightTimeoutError as exc:
+        raise LookupError(f"no frame image matched {name!r} in the picker") from exc
+    await tile.click(timeout=8_000)
+    await page.wait_for_timeout(3_000)
+    pinned = await page.evaluate(
+        "() => [...document.querySelectorAll('flow-prompt-box button, flow-base-prompt-box button')]"
+        ".some(e => /image ingredient/i.test(e.getAttribute('aria-label') || ''))"
+    )
+    if not pinned:
+        raise RuntimeError(f"picked {name!r} but the Start slot stayed empty")
+    return True
+
+
+async def generate_with_character(
+    session: FlowSession, project_id: str, *, character: str, **kwargs: Any
+) -> dict[str, Any]:
+    async def setup(s: FlowSession) -> None:
+        await attach_character(s, character)
+
+    return await _submit(session, project_id, setup=setup, kind="character", mode="Ingredients", **kwargs)
+
+
+async def generate_from_frame(
+    session: FlowSession, project_id: str, *, start_name: str, **kwargs: Any
+) -> dict[str, Any]:
+    async def setup(s: FlowSession) -> None:
+        await pin_start_frame(s, start_name)
+
+    return await _submit(session, project_id, setup=setup, kind="frames", mode="Frames", **kwargs)

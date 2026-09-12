@@ -5,10 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from video import gen
-from video.story import composer, persona, shots
+from video import gen, post
+from video.flow import clips
+from video.flow import uploads as uploads_mod
+from video.story import composer, persona, product, shots, shots2
 
 PRICE_PER_SHOT = 10
+EDIT_PROMPT = (
+    "Change only her clothing. She is now wearing " + product.DESCRIPTION + ". Keep her face, her hair, "
+    "her tattoos, her necklace, the room, the lighting and the camera framing exactly as they are."
+)
 
 
 def job_state(ledger: gen.Ledger, job_id: str) -> str:
@@ -129,4 +135,110 @@ async def run(
             wait=wait,
         )
         results.append({**result, "key": row["key"], "status": "done"})
+    return {"character": who, "shots": results}
+
+
+async def _generate_with_product(
+    session, project_id: str, *, prompt: str, job_id: str, out_dir: Path, wait: float
+):
+    """The product close-up goes through gflow r2v: the product photo is the only reference, and no face
+    is needed, so the garment wins (measured 2026-09-13)."""
+    job = gen.Job(
+        job_id=job_id,
+        kind="r2v",
+        prompt=prompt,
+        project=project_id,
+        model=shots2.MODEL,
+        aspect=shots2.ASPECT,
+        refs=[product.check_image()],
+    )
+    result = await gen.run_job(job, out_dir, read_credits=lambda: gen.read_credits_live("default"))
+    outputs = result.get("outputs") or []
+    return {
+        "job_id": job_id,
+        "kind": "product",
+        "media_id": outputs[0]["media_id"] if outputs else None,
+        "path": outputs[0]["path"] if outputs else None,
+        "spent": result["credits_before"] - result["credits_after"],
+    }
+
+
+async def _refetch_720(session, project_id: str, media_id: str, stem: Path) -> Path:
+    """Re-download at 720p: the clip-edit path accepts the 360p rendition when 720p is still 404."""
+    from video.flow import download as download_mod
+    from video.flow import reader
+
+    record = download_mod.latest_version(await reader.records(session, project_id), media_id)
+    return await composer.fetch_720(session, record, stem)
+
+
+async def run2(
+    session,
+    project_id: str,
+    *,
+    out_dir: Path,
+    only: list[str] | None = None,
+    wait: float = 300.0,
+) -> dict[str, Any]:
+    """Generate the v2 chain: each shot takes the route measured for it, and the shots after the reveal
+    inherit the garment through their start frame instead of paying for another edit."""
+    rows = [r for r in shots2.plan() if not only or r["key"] in only]
+    ledger = gen.Ledger(out_dir / "ledger.jsonl")
+    todo = check_resumable(ledger, [r["job_id"] for r in rows])
+    who = await persona.ensure(session, project_id)
+    await product.ensure(session, project_id)
+
+    results: list[dict[str, Any]] = []
+    paths: dict[str, str] = {}
+    for row in rows:
+        job, key = row["job_id"], row["key"]
+        if job not in todo:
+            done = [r for r in ledger.rows(job) if r.get("status") == "done"]
+            paths[key] = done[-1].get("path") if done else None
+            results.append({"job_id": job, "key": key, "status": "already done", "path": paths[key]})
+            continue
+
+        common = {
+            "prompt": row["prompt"],
+            "job_id": job,
+            "expected_credits": shots2.PRICE,
+            "out_dir": out_dir,
+            "aspect": shots2.ASPECT,
+            "wait": wait,
+        }
+        if row["mode"] == "character":
+            result = await composer.generate_with_character(
+                session, project_id, character=who["name"], **common
+            )
+        elif row["mode"] == "product":
+            result = await _generate_with_product(
+                session, project_id, prompt=row["prompt"], job_id=job, out_dir=out_dir, wait=wait
+            )
+        else:
+            previous = paths.get(row["start_from"])
+            if not previous:
+                raise RuntimeError(f"{job}: {row['start_from']} has no clip to continue from")
+            still = post.last_frame(Path(previous), out_dir / f"{job}_start.png")
+            await uploads_mod.upload(session, project_id, still)
+            result = await composer.generate_from_frame(session, project_id, start_name=still.name, **common)
+
+        if row["edit_to_product"]:
+            edited = await clips.edit(
+                session,
+                project_id,
+                result["media_id"],
+                EDIT_PROMPT,
+                out_dir=out_dir,
+                job_id=f"{job}-edit",
+                wait=wait,
+            )
+            produced = [o for o in edited.get("outputs", []) if o.get("path")]
+            if produced:
+                fresh = await _refetch_720(
+                    session, project_id, produced[0]["media_id"], out_dir / f"{job}_worn"
+                )
+                result = {**result, "path": str(fresh), "edited": True, "edit_spent": edited.get("spent")}
+
+        paths[key] = result.get("path")
+        results.append({**result, "key": key, "status": "done"})
     return {"character": who, "shots": results}

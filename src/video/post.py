@@ -110,6 +110,36 @@ def duration(path: Path) -> float:
         return 0.0
 
 
+def last_frame(clip: Path, out: Path) -> Path:
+    """The final frame of a clip, as the still that the next shot starts from.
+
+    It has to be the END frame: starting the next shot from frame 0 would replay the same motion
+    instead of continuing it.
+    """
+    clip = Path(clip)
+    if not clip.is_file():
+        raise FileNotFoundError(clip)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-sseof",
+            "-0.15",
+            "-i",
+            str(clip),
+            "-frames:v",
+            "1",
+            "-update",
+            "1",
+            str(out),
+        ]
+    )
+    return out
+
+
 def contact_sheet(clips: list[Path], out: Path, at_second: float = 2.0) -> Path:
     """One frame per clip, side by side, so a human can check the face across the whole cut."""
     if not clips:

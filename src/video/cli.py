@@ -472,6 +472,25 @@ def story_run(project_id: str, out_dir: str, only: str | None, wait: float, pric
     click.echo(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+@story.command("run2")
+@click.argument("project_id")
+@click.option("--out", "out_dir", default="out/story2", show_default=True, type=click.Path(file_okay=False))
+@click.option("--only", default=None, help="Comma-separated shot keys, e.g. 'hook,reveal'.")
+@click.option("--wait", default=300.0, show_default=True, type=float)
+@click.option("--profile", default="default", show_default=True)
+def story_run2(project_id: str, out_dir: str, only: str | None, wait: float, profile: str) -> None:
+    """Generate the v2 chain: character, product and frame-continued shots (SPENDS CREDITS, ledgered)."""
+    from pathlib import Path
+
+    from video.story import pipeline
+
+    keys = [k.strip() for k in only.split(",")] if only else None
+    result = _read(
+        profile, lambda s: pipeline.run2(s, project_id, out_dir=Path(out_dir), only=keys, wait=wait)
+    )
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+
+
 @story.command("build")
 @click.option("--out", "out_dir", default="out/story", show_default=True, type=click.Path(file_okay=False))
 def story_build(out_dir: str) -> None:
