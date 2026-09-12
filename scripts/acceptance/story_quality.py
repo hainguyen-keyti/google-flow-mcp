@@ -100,12 +100,13 @@ def takes_check(rows: list[dict]) -> tuple[str, str]:
 
 
 def chain_jobs() -> list[str]:
+    """Every job the chain is supposed to pay for: each take, plus an edit for each dressed take."""
     jobs = []
     for shot in shots2.plan():
         ids = pipeline.take_ids(shot["job_id"], shot["hands_risk"])
         jobs += ids
         if shot["edit_to_product"]:
-            jobs.append(f"{shot['job_id']}-edit")
+            jobs += [f"{job}-edit" for job in ids]
     return jobs
 
 

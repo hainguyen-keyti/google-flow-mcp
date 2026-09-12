@@ -49,9 +49,11 @@ def test_the_product_photo_is_used_only_where_no_face_is_needed():
     assert shots2.by_key("hook").product is False
 
 
-def test_expected_credits_counts_every_omni_edit_and_the_extra_takes():
-    # 6 shots at 10, plus 2 extra takes for the hands-risky shots, plus 20 for each of the 3 edits.
-    assert shots2.expected_credits() == 6 * 10 + 2 * 10 + 3 * 20
+def test_expected_credits_counts_an_edit_for_every_take_that_shows_the_set():
+    # 8 takes at 10. Every take of a dressed shot is edited, so the human chooses between the clips that
+    # actually go in the cut: reveal 1, pose 2 (it is shot twice for its hands), closing 1.
+    assert shots2.expected_credits() == 8 * 10 + 4 * 20
+    assert shots2.expected_credits() == 160
 
 
 def test_the_garment_is_named_once_and_then_inherited_not_described_again():

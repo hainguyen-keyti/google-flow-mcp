@@ -157,9 +157,15 @@ def total_seconds() -> int:
     return sum(shot.duration for shot in SHOTS)
 
 
+def takes(shot: Shot) -> int:
+    return 2 if shot.hands_risk else 1
+
+
 def expected_credits() -> int:
-    edits = sum(1 for shot in SHOTS if shot.edit_to_product)
-    return (len(SHOTS) + EXTRA_TAKES) * PRICE + edits * EDIT_PRICE
+    """Every take is generated, and every take of a shot that shows the set is also dressed by an edit."""
+    generated = sum(takes(shot) for shot in SHOTS)
+    edits = sum(takes(shot) for shot in SHOTS if shot.edit_to_product)
+    return generated * PRICE + edits * EDIT_PRICE
 
 
 def captions() -> list[tuple[float, float, str]]:
