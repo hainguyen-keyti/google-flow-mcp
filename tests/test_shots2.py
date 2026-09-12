@@ -21,8 +21,8 @@ def test_each_shot_uses_the_route_measured_for_its_job():
         "wardrobe": "frames",
         "fabric": "product",
         "reveal": "character",
-        "pose": "frames",
-        "closing": "frames",
+        "pose": "edit",
+        "closing": "edit",
     }
     assert all(s.start_from is None for s in shots2.SHOTS if s.mode in ("character", "product"))
 
@@ -39,7 +39,9 @@ def test_every_continued_shot_follows_the_one_before_it():
     for index, shot in enumerate(shots2.SHOTS):
         if shot.start_from:
             assert shot.start_from == keys[index - 1], f"{shot.key} must continue {keys[index - 1]}"
-    assert [s.key for s in shots2.SHOTS if s.mode == "frames"] == ["wardrobe", "pose", "closing"]
+    # Frames is refused from the mirror still, whatever the wording: 4 submits, no record, no charge.
+    assert [s.key for s in shots2.SHOTS if s.mode == "frames"] == ["wardrobe"]
+    assert [s.key for s in shots2.SHOTS if s.mode == "edit"] == ["pose", "closing"]
 
 
 def test_the_product_photo_is_used_only_where_no_face_is_needed():
@@ -49,14 +51,14 @@ def test_the_product_photo_is_used_only_where_no_face_is_needed():
     assert shots2.by_key("hook").product is False
 
 
-def test_expected_credits_counts_an_edit_for_every_take_that_shows_the_set():
-    # 8 takes at 10. Every take of a dressed shot is edited, so the human chooses between the clips that
-    # actually go in the cut: reveal 1, pose 2 (it is shot twice for its hands), closing 1.
-    assert shots2.expected_credits() == 8 * 10 + 4 * 20
-    assert shots2.expected_credits() == 160
+def test_expected_credits_prices_each_take_by_the_route_it_takes():
+    # Generated takes cost 10: hook, wardrobe x2, fabric, reveal. The reveal also pays 20 to be dressed.
+    # Pose (x2 takes) and closing ARE Omni edits, 20 each, and pay nothing on top.
+    assert shots2.expected_credits() == 5 * 10 + 20 + 3 * 20
+    assert shots2.expected_credits() == 130
 
 
-def test_every_shot_with_a_person_in_it_is_generated_in_her_own_clothes():
+def test_only_a_generated_take_is_wearing_her_own_clothes():
     # One rule, no exceptions: the base take always describes the everyday outfit and the Omni edit is
     # what puts the set on. Measured 2026-09-13, three shots in a row: the two takes that said "wearing
     # the set" or "the same outfit as the starting frame" were refused with no record and no charge,
@@ -64,7 +66,7 @@ def test_every_shot_with_a_person_in_it_is_generated_in_her_own_clothes():
     worn = shots2.by_key("fabric").scene.outfit.lower()
     assert "pink" in worn, "only the shot with nobody in it names the garment"
     for shot in shots2.SHOTS:
-        if shot.key == "fabric":
+        if shot.key == "fabric" or shot.mode == "edit":
             continue
         outfit = shot.scene.outfit.lower()
         assert "pink" not in outfit, shot.key

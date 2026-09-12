@@ -63,13 +63,17 @@ def test_the_ledger_row_counts_a_reused_clip_at_the_price_it_really_cost():
     rows = [{"job_id": "old-probe", "status": "done", "spent": 10}]
     for job in ("tryon2-01", "tryon2-02", "tryon2-02b", "tryon2-04", "tryon2-05", "tryon2-05b", "tryon2-06"):
         rows.append({"job_id": job, "status": "done", "spent": 10})
-    for job in ("tryon2-04-edit", "tryon2-05-edit", "tryon2-05b-edit", "tryon2-06-edit"):
-        rows.append({"job_id": job, "status": "done", "spent": 20})
+    rows.append({"job_id": "tryon2-04-edit", "status": "done", "spent": 20})
+    # pose and closing are edits themselves, so their own rows carry the 20.
+    for job in ("tryon2-05", "tryon2-05b", "tryon2-06"):
+        for row in rows:
+            if row["job_id"] == job:
+                row["spent"] = 20
     rows.append({"job_id": "tryon2-03", "status": "done", "spent": 0, "reused_from": "old-probe"})
 
     status, detail = quality.ledger_check(rows)
     assert status == "PASS", detail
-    assert "160" in detail
+    assert "130" in detail
 
     status, _ = quality.ledger_check([*rows, {"job_id": "tryon2-06", "status": "failed", "spent": 10}])
     assert status == "FAIL", "a failure that moved money is never acceptable"

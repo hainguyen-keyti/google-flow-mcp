@@ -105,7 +105,8 @@ def chain_jobs() -> list[str]:
     for shot in shots2.plan():
         ids = pipeline.take_ids(shot["job_id"], shot["hands_risk"])
         jobs += ids
-        if shot["edit_to_product"]:
+        # An edit-mode shot IS the edit: it has no separate edit job to pay for.
+        if shot["edit_to_product"] and shot["mode"] != "edit":
             jobs += [f"{job}-edit" for job in ids]
     return jobs
 

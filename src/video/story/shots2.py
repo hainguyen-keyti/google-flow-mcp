@@ -9,11 +9,13 @@ Why it is shaped like this, all measured:
   only the clothing.
 - Frames mode pins the first frame from a project image, so `wardrobe` starts from the last frame of the
   hook and inherits the room, the outfit, the face and the position.
-- Every take with a person in it is generated in her own everyday clothes and dressed afterwards by an Omni
-  edit. Asking Veo for the set in words is refused: Flow takes the submit, creates no job, charges nothing
-  and says nothing (measured 2026-09-13 on `reveal` and three times on `pose`). The same shot worded with
-  the everyday outfit generated first time. So the start frame is cut from the clip BEFORE its edit, and
-  each dressed take pays its own edit.
+- Every GENERATED take with a person in it wears her own everyday clothes; the set is put on by an Omni
+  edit afterwards. Asking Veo for the set in words is refused: Flow takes the submit, creates no job,
+  charges nothing and says nothing.
+- `pose` and `closing` are not generated at all, they ARE Omni edits of the mirror clip. Frames from the
+  mirror still was refused four times across three different wordings, so the still itself is what Flow
+  will not take; the editor has never refused anything. Each of those shots costs 20 and needs no second
+  step, because one edit carries both the motion and the garment.
 - Two real cuts remain, both cuts a real edit would make anyway: into the product close-up and into the
   reveal.
 - Veo mangles hands that manipulate fabric (Plan 2: tryon-03 lost a hand, tryon-05 fused fingers), so
@@ -109,6 +111,7 @@ SHOTS: tuple[Shot, ...] = (
     ),
     Shot(
         key="pose",
+        mode="edit",
         edit_to_product=True,
         beat="show the fit: one slow turn so the cut and the drape read on camera",
         caption="Xoay một vòng cho dễ hình dung",
@@ -123,6 +126,7 @@ SHOTS: tuple[Shot, ...] = (
     ),
     Shot(
         key="closing",
+        mode="edit",
         edit_to_product=True,
         beat="close the sale: she looks back at the viewer and invites the order",
         caption="Inbox chốt đơn nha",
@@ -159,11 +163,15 @@ def takes(shot: Shot) -> int:
     return 2 if shot.hands_risk else 1
 
 
+def price_of(shot: Shot) -> int:
+    """What one take of this shot costs: an edit-mode shot IS an Omni edit, nothing is generated first."""
+    if shot.mode == "edit":
+        return EDIT_PRICE
+    return PRICE + (EDIT_PRICE if shot.edit_to_product else 0)
+
+
 def expected_credits() -> int:
-    """Every take is generated, and every take of a shot that shows the set is also dressed by an edit."""
-    generated = sum(takes(shot) for shot in SHOTS)
-    edits = sum(takes(shot) for shot in SHOTS if shot.edit_to_product)
-    return generated * PRICE + edits * EDIT_PRICE
+    return sum(takes(shot) * price_of(shot) for shot in SHOTS)
 
 
 def captions() -> list[tuple[float, float, str]]:
@@ -188,6 +196,7 @@ def plan(data: dict[str, Any] | None = None) -> list[dict[str, Any]]:
             "edit_to_product": shot.edit_to_product,
             "hands_risk": shot.hands_risk,
             "duration": shot.duration,
+            "motion": shot.scene.pose,
             "prompt": bible.compose(shot.scene, data),
         }
         for index, shot in enumerate(SHOTS, start=1)

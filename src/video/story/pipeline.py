@@ -13,10 +13,27 @@ from video.story import composer, persona, product, shots, shots2
 
 PRICE_PER_SHOT = 10
 FINAL_NAME = "tryon2_final.mp4"
-EDIT_PROMPT = (
-    "Change only her clothing. She is now wearing " + product.DESCRIPTION + ". Keep her face, her hair, "
-    "her tattoos, her necklace, the room, the lighting and the camera framing exactly as they are."
-)
+
+
+def dress_prompt(motion: str = "") -> str:
+    """The one place the garment is described to Flow, optionally carrying a shot's movement with it.
+
+    The editor is the only surface that will put the set on her: every generation that asks for it in a
+    prompt is refused with no record and no charge (measured 2026-09-13, four shots).
+    """
+    parts = ["She is now wearing " + product.DESCRIPTION + "."]
+    if motion.strip():
+        parts.append(motion.strip().rstrip(".") + ".")
+    else:
+        parts.insert(0, "Change only her clothing.")
+    parts.append(
+        "Keep her face, her hair, her tattoos, her necklace, the room, the mirror, the lighting and the "
+        "camera framing exactly as they are."
+    )
+    return " ".join(parts)
+
+
+EDIT_PROMPT = dress_prompt()
 
 
 def job_state(ledger: gen.Ledger, job_id: str) -> str:
@@ -162,6 +179,54 @@ async def _generate_with_product(
         "media_id": outputs[0]["media_id"] if outputs else None,
         "path": outputs[0]["path"] if outputs else None,
         "spent": result["credits_before"] - result["credits_after"],
+    }
+
+
+def free_editor_job(ledger: gen.Ledger, job_id: str) -> str:
+    """An id the clip editor will accept.
+
+    It refuses any id that ever reached "submitted", even an attempt that provably cost nothing, and it
+    lives outside this plan's blast radius, so a retry takes a new id and the caller settles the shot
+    under its own id.
+    """
+    if not ledger.has_submitted(job_id):
+        return job_id
+    attempt = 2
+    while ledger.has_submitted(f"{job_id}-try{attempt}"):
+        attempt += 1
+    return f"{job_id}-try{attempt}"
+
+
+async def _edit_shot(
+    session, project_id: str, media_id: str, prompt: str, *, job_id: str, out_dir: Path, wait: float
+) -> dict[str, Any]:
+    """A shot made entirely by editing the clip before it: one pass carries the movement and the garment."""
+    ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
+    attempt = free_editor_job(ledger, job_id)
+    edited = await clips.edit(
+        session, project_id, media_id, prompt, out_dir=out_dir, job_id=attempt, wait=wait
+    )
+    produced = [o for o in edited.get("outputs", []) if o.get("path")]
+    if not produced:
+        raise RuntimeError(f"{job_id}: the edit produced no clip; spent {edited.get('spent')}")
+    fresh = await _refetch_720(session, project_id, produced[0]["media_id"], out_dir / job_id)
+    if attempt != job_id:
+        # The money moved under the attempt id; the shot points at it rather than counting it twice.
+        ledger.append(
+            job_id,
+            "done",
+            kind="edit",
+            media_id=produced[0]["media_id"],
+            path=str(fresh),
+            spent=0,
+            reused_from=attempt,
+        )
+    return {
+        "job_id": job_id,
+        "kind": "edit",
+        "media_id": produced[0]["media_id"],
+        "path": str(fresh),
+        "spent": edited.get("spent"),
     }
 
 
@@ -425,6 +490,19 @@ async def run2(
                 result = await composer.generate_with_character(
                     session, project_id, character=who["name"], **common
                 )
+            elif row["mode"] == "edit":
+                source = media.get(row["start_from"])
+                if not source:
+                    raise RuntimeError(f"{job}: {row['start_from']} has no clip to edit from")
+                result = await _edit_shot(
+                    session,
+                    project_id,
+                    source,
+                    dress_prompt(row["motion"]),
+                    job_id=job,
+                    out_dir=out_dir,
+                    wait=wait,
+                )
             elif row["mode"] == "product":
                 result = await _generate_with_product(
                     session, project_id, prompt=row["prompt"], job_id=job, out_dir=out_dir, wait=wait
@@ -440,7 +518,7 @@ async def run2(
                     session, project_id, start_name=still.name, **common
                 )
 
-            if row["edit_to_product"]:
+            if row["edit_to_product"] and row["mode"] != "edit":
                 edited = await clips.edit(
                     session,
                     project_id,

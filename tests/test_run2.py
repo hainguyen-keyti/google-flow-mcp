@@ -64,17 +64,16 @@ def test_run2_sends_every_shot_down_the_route_measured_for_it(monkeypatch, tmp_p
         "product",
         "character",
         "edit",
-        "frames",
         "edit",
-        "frames",
         "edit",
-        "frames",
         "edit",
     ]
     jobs = [job for _, job in calls]
     # Hands break on the shots that touch fabric, so each of those is shot twice and judged by eye.
     assert "tryon2-02b" in jobs and "tryon2-05b" in jobs
     assert jobs[:4] == ["tryon2-01", "tryon2-02", "tryon2-02b", "tryon2-03"]
+    # The last three shots are edits of the mirror clip, not generations at all.
+    assert jobs[-3:] == ["tryon2-05", "tryon2-05b", "tryon2-06"]
     assert len(result["shots"]) == len(shots2.SHOTS) + shots2.EXTRA_TAKES
 
 
@@ -124,22 +123,9 @@ def test_run2_continues_the_chain_from_the_first_take_not_the_spare(monkeypatch,
 
     asyncio.run(pipeline.run2(None, "P", out_dir=tmp_path, wait=1.0))
 
-    # Both takes of a shot start from the same frame, and the next shot follows the first take.
-    assert starts == [
-        "tryon2-02<-tryon2-02_start.png",
-        "tryon2-02b<-tryon2-02b_start.png",
-        "tryon2-05<-tryon2-05_start.png",
-        "tryon2-05b<-tryon2-05b_start.png",
-        "tryon2-06<-tryon2-06_start.png",
-    ]
-    # A frame is cut from the clip BEFORE its edit: a still of her in the set is refused by Flow.
-    assert framed == [
-        str(tmp_path / "tryon2-01.mp4"),
-        str(tmp_path / "tryon2-01.mp4"),
-        str(tmp_path / "tryon2-04.mp4"),
-        str(tmp_path / "tryon2-04.mp4"),
-        str(tmp_path / "tryon2-05.mp4"),
-    ]
+    # Only the wardrobe pins a still now, and both its takes start from the same frame of the hook.
+    assert starts == ["tryon2-02<-tryon2-02_start.png", "tryon2-02b<-tryon2-02b_start.png"]
+    assert framed == [str(tmp_path / "tryon2-01.mp4"), str(tmp_path / "tryon2-01.mp4")]
 
 
 def test_run2_skips_shots_already_done(monkeypatch, tmp_path):
