@@ -163,6 +163,49 @@ async def fetch_720(session: FlowSession, record: dict[str, Any], stem: Path, at
     return await clips._fetch_with_retry(session.page.request, record, stem)
 
 
+_STATE_JS = """() => ({
+  chips: [...document.querySelectorAll('flow-prompt-box [class*=chip], flow-base-prompt-box [class*=chip]')]
+    .map(e => (e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 30)).filter(Boolean).length,
+  thumbs: document.querySelectorAll('flow-prompt-box img, flow-base-prompt-box img').length,
+  text: [...document.querySelectorAll('flow-prompt-box [contenteditable=true]')]
+    .map(e => (e.innerText || '').trim()).join('').length,
+})"""
+
+
+async def clear_prompt(session: FlowSession) -> dict[str, Any]:
+    """Empty the composer before building a shot.
+
+    The composer keeps whatever the last run left in it: a pinned Start frame, an ingredient chip, old
+    prompt text. Submitting on top of that leftover state produced a request that generated nothing and
+    cost nothing (measured 2026-09-13 on tryon2-01).
+    """
+    page = session.page
+    for _ in range(3):
+        state = await page.evaluate(_STATE_JS)
+        if not state["chips"] and not state["thumbs"] and not state["text"]:
+            return state
+        button = page.locator(
+            "flow-prompt-box button[aria-label*='Clear'], flow-base-prompt-box button[aria-label*='Clear']"
+        ).first
+        if await button.count():
+            await button.click(timeout=8_000)
+            await page.wait_for_timeout(1_500)
+            continue
+        box = page.locator("flow-prompt-box [contenteditable='true']").first
+        if await box.count():
+            await box.click(timeout=8_000)
+            await page.keyboard.press("Meta+A")
+            await page.keyboard.press("Backspace")
+            await page.wait_for_timeout(1_000)
+        chip_x = page.locator(
+            "flow-prompt-box [class*=chip] button, flow-base-prompt-box [class*=chip] button"
+        ).first
+        if await chip_x.count():
+            await chip_x.click(timeout=8_000)
+            await page.wait_for_timeout(1_000)
+    return await page.evaluate(_STATE_JS)
+
+
 async def _notice(page: Any) -> str:
     """Whatever Flow told the user (toast, snackbar, inline refusal). Transient, so read it early."""
     try:
@@ -233,6 +276,7 @@ async def _submit(
     await agent.set_mode(session, project_id, False)
     await session.goto(session.project_url(project_id), ready=PROJECT_READY)
     await session.page.wait_for_timeout(2_500)
+    left_over = await clear_prompt(session)
     settings = await configure(session, mode=mode, aspect=aspect, label="pre")
     await setup(session)
     box = session.page.locator("flow-prompt-box [contenteditable='true']").first
@@ -251,6 +295,7 @@ async def _submit(
         prompt=prompt[:200],
         quoted_credits=confirm["price"],
         credits_before=credits_before,
+        left_over=left_over,
     )
     frames = await clips._await_submit(session, lambda: start.click(timeout=8_000))
     notice = await _notice(session.page)
