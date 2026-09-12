@@ -17,6 +17,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from video import gen
 from video.flow import agent, clips, reader
 from video.session import PROJECT_READY, FlowSession
@@ -93,25 +95,38 @@ async def configure(
     return {"applied": applied, "price": price, "settings_text": text[:300]}
 
 
+def _in_picker(page: Any, text: str) -> Any:
+    return (
+        page.locator(".cdk-overlay-pane, [role=dialog], [role=menu]")
+        .locator("button, [role=tab], [role=option], [role=menuitem]")
+        .filter(has_text=re.compile(re.escape(text), re.IGNORECASE))
+        .first
+    )
+
+
 async def attach_character(session: FlowSession, name: str) -> bool:
+    """Open the ingredients picker, switch to Characters and add the entity to the prompt.
+
+    The picker renders lazily (measured: several seconds), so each step waits for its own element
+    instead of sleeping a fixed amount.
+    """
     page = session.page
     add = page.locator(INGREDIENTS).first
     await add.wait_for(state="visible", timeout=20_000)
     await add.click(timeout=8_000)
-    await page.wait_for_timeout(2_000)
-    if not await _click_option(page, "Characters"):
-        raise RuntimeError("ingredients picker has no Characters tab")
-    await page.wait_for_timeout(1_500)
-    tile = (
-        page.locator(".cdk-overlay-pane, [role=dialog]")
-        .locator("button, [role=option]")
-        .filter(has_text=re.compile(re.escape(name), re.IGNORECASE))
-        .first
-    )
-    if await tile.count() == 0:
-        raise LookupError(f"character {name!r} is not in the ingredients picker")
+    tab = _in_picker(page, "Characters")
+    try:
+        await tab.wait_for(state="visible", timeout=20_000)
+    except PlaywrightTimeoutError as exc:
+        raise RuntimeError("ingredients picker never showed a Characters tab") from exc
+    await tab.click(timeout=8_000)
+    tile = _in_picker(page, name)
+    try:
+        await tile.wait_for(state="visible", timeout=20_000)
+    except PlaywrightTimeoutError as exc:
+        raise LookupError(f"character {name!r} is not in the ingredients picker") from exc
     await tile.click(timeout=8_000)
-    await page.wait_for_timeout(2_000)
+    await page.wait_for_timeout(2_500)
     await page.keyboard.press("Escape")
     await page.wait_for_timeout(1_000)
     return True
