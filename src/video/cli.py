@@ -540,7 +540,10 @@ def story_cut2(out_dir: str, fade: float | None) -> None:
     from video import post
     from video.story import pipeline
 
-    result = pipeline.build2(out_dir=Path(out_dir), fade=post.FADE if fade is None else fade)
+    try:
+        result = pipeline.build2(out_dir=Path(out_dir), fade=post.FADE if fade is None else fade)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(json.dumps(result, indent=2, ensure_ascii=False))
 
 
