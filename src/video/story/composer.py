@@ -118,13 +118,41 @@ async def configure(
 ) -> dict[str, Any]:
     """Write every composer setting and report the price the UI now quotes."""
     page = session.page
-    await _open_settings(page, label)
-    applied = {name: await _click_option(page, name) for name in (mode, aspect, count)}
-    text = await page.evaluate(_OVERLAY_TEXT_JS)
-    price = price_from(text)
-    await page.keyboard.press("Escape")
-    await page.wait_for_timeout(1_000)
-    return {"applied": applied, "price": price, "settings_text": text[:300]}
+    applied: dict[str, bool] = {}
+    for attempt in range(2):
+        await _open_settings(page, label)
+        applied = {name: await _click_option(page, name) for name in (mode, aspect, count)}
+        text = await page.evaluate(_OVERLAY_TEXT_JS)
+        price = price_from(text)
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(1_500)
+        if await _mode_applied(page, mode):
+            return {"applied": applied, "price": price, "settings_text": text[:300]}
+        if attempt == 0:
+            continue
+        buttons = await page.evaluate(_COMPOSER_BUTTONS_JS)
+        raise RuntimeError(
+            f"composer did not switch to {mode!r} at step {label!r}; applied={applied}, "
+            f"composer buttons={buttons}"
+        )
+    raise RuntimeError(f"composer unreachable at step {label!r}")
+
+
+_COMPOSER_BUTTONS_JS = """() => [...document.querySelectorAll('flow-prompt-box button, flow-base-prompt-box button')]
+  .map(e => (e.getAttribute('aria-label') || e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 34))
+  .filter(Boolean)"""
+
+
+async def _mode_applied(page: Any, mode: str) -> bool:
+    """Prove the mode really changed: Frames shows the Start slot, Ingredients shows the add button.
+
+    Setting a mode and trusting it left the driver waiting 20s for a Start slot that never came
+    (measured 2026-09-13 on tryon2-02).
+    """
+    marker = {"Frames": START_SLOT, "Ingredients": INGREDIENTS}.get(mode)
+    if marker is None:
+        return True
+    return await page.locator(marker).first.count() > 0
 
 
 _NOTICE_JS = """() => [...document.querySelectorAll(
