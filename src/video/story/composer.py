@@ -133,6 +133,20 @@ _NOTICE_JS = """() => [...document.querySelectorAll(
   .filter(t => t.length > 3).slice(0, 4).join(' | ')"""
 
 
+async def snapshot(session: FlowSession, project_id: str, attempts: int = 4) -> tuple[list[Any], set[str]]:
+    """Project listing, retried: a page load sometimes does not fire Zzl0ze at all, and crashing on that
+    in the poll loop abandons a shot whose submit is already in flight."""
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return await clips._snapshot(session, project_id)
+        except LookupError as exc:
+            last = exc
+            if attempt < attempts - 1:
+                await asyncio.sleep(10)
+    raise last
+
+
 async def _notice(page: Any) -> str:
     """Whatever Flow told the user (toast, snackbar, inline refusal). Transient, so read it early."""
     try:
@@ -193,7 +207,7 @@ async def generate(
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
     if any(r.get("status") == "done" for r in ledger.rows(job_id)):
         raise gen.AlreadySubmitted(f"job {job_id} is already done; delete its output to redo it")
-    rows, _ = await clips._snapshot(session, project_id)
+    rows, _ = await snapshot(session, project_id)
     before = {r["workflow_id"] for r in rows}
     credits_before = (await reader.credits(session))["balance"]
 
@@ -226,7 +240,7 @@ async def generate(
     output, fresh = None, []
     deadline = asyncio.get_running_loop().time() + wait
     while True:
-        rows, _ = await clips._snapshot(session, project_id)
+        rows, _ = await snapshot(session, project_id)
         fresh = clips.new_records(before, rows)
         output = pick_output(fresh, prompt)
         if output is not None and clips.is_done(output):

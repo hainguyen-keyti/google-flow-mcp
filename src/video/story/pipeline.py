@@ -40,6 +40,65 @@ def check_resumable(ledger: gen.Ledger, job_ids: list[str]) -> list[str]:
     return todo
 
 
+def pending_jobs(ledger: gen.Ledger) -> list[dict[str, Any]]:
+    """Submitted rows with no outcome: the shots whose money state is unknown."""
+    rows = ledger.rows()
+    settled = {r["job_id"] for r in rows if r.get("status") in ("done", "failed")}
+    return [r for r in rows if r.get("status") == "submitted" and r["job_id"] not in settled]
+
+
+def reconcile_decision(row: dict[str, Any], credits_now: int, record: dict[str, Any] | None) -> str:
+    """What really happened to a shot stuck on 'submitted', judged by ground truth only."""
+    if record is not None:
+        return "done"
+    if credits_now == row.get("credits_before"):
+        return "failed"
+    return "unknown"
+
+
+async def reconcile(session, project_id: str, *, out_dir: Path) -> list[dict[str, Any]]:
+    """Close out shots stuck on 'submitted' using the listing and the credit balance, never a guess."""
+    from video.flow import download as download_mod
+    from video.flow import reader
+    from video.story import composer
+
+    ledger = gen.Ledger(out_dir / "ledger.jsonl")
+    stuck = pending_jobs(ledger)
+    if not stuck:
+        return []
+    rows, _ = await composer.snapshot(session, project_id)
+    credits_now = (await reader.credits(session))["balance"]
+    plan_by_job = {r["job_id"]: r for r in shots.plan()}
+    out = []
+    for row in stuck:
+        planned = plan_by_job.get(row["job_id"], {})
+        record = composer.pick_output(
+            [r for r in rows if (planned.get("prompt", "")[:40].lower() in (r.get("prompt") or "").lower())],
+            planned.get("prompt", ""),
+        )
+        verdict = reconcile_decision(row, credits_now, record)
+        path = None
+        if verdict == "done" and record is not None:
+            path = str(
+                await download_mod.fetch_asset(
+                    session.page.request, record["kind"], record["url"], out_dir / row["job_id"]
+                )
+            )
+        if verdict != "unknown":
+            ledger.append(
+                row["job_id"],
+                verdict,
+                media_id=record["id"] if record else None,
+                path=path,
+                credits_before=row.get("credits_before"),
+                credits_after=credits_now,
+                spent=(row.get("credits_before") or credits_now) - credits_now,
+                reconciled="checked the listing and the credit balance",
+            )
+        out.append({"job_id": row["job_id"], "verdict": verdict, "path": path, "credits_now": credits_now})
+    return out
+
+
 async def run(
     session,
     project_id: str,

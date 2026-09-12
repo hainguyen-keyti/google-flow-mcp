@@ -450,6 +450,20 @@ def story_run(project_id: str, out_dir: str, only: str | None, wait: float, pric
     click.echo(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+@story.command("reconcile")
+@click.argument("project_id")
+@click.option("--out", "out_dir", default="out/story", show_default=True, type=click.Path(file_okay=False))
+@click.option("--profile", default="default", show_default=True)
+def story_reconcile(project_id: str, out_dir: str, profile: str) -> None:
+    """Close out shots stuck on 'submitted' by checking the listing and the balance ($0)."""
+    from pathlib import Path
+
+    from video.story import pipeline
+
+    rows = _read(profile, lambda s: pipeline.reconcile(s, project_id, out_dir=Path(out_dir)))
+    click.echo(json.dumps(rows, indent=2, ensure_ascii=False))
+
+
 @main.group()
 def mcp() -> None:
     """Model Context Protocol server exposing every command above."""
