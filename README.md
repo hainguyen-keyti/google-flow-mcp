@@ -84,6 +84,33 @@ cho tới khi `reconcile` chứng minh được bằng số dư là chưa tiêu 
 
 Chữ chào hàng đập bằng ffmpeg chứ không nhờ Veo: sửa chữ là $0, sinh lại clip là 10 credit.
 
+### Vòng 2: khoá phòng, khoá đồ, tay không hỏng
+
+Chủ repo bác bản đầu: máy quay giật, mất tay lúc chuyển động, và **món đồ đổi giữa các clip**. Nguyên nhân
+gốc là chữ không khoá được đồ vật, chỉ gương mặt mới có entity. Đường đã đo:
+
+- `hook` và `reveal` đi bằng **character chip** (đúng mặt); `fabric` đi bằng **r2v với ảnh món đồ** (không
+  có người trong khung nên vải thắng); `wardrobe`, `pose`, `closing` đi bằng **Frames**, ghim khung cuối
+  của cảnh trước làm khung đầu, nên thừa hưởng nguyên phòng, tư thế và bộ đồ.
+- Một lần **Omni edit trả tiền** trên `reveal` mặc đồ vào người (giữ mặt, đổi quần áo, 20 credit). Các cảnh
+  sau không trả thêm: chúng nhận bộ đồ qua khung đầu. Prompt của chúng **không tả lại món đồ**, chỉ nói
+  "same outfit as the starting frame": tả lại bằng chữ chính là chỗ đồ bị trôi.
+- Cảnh nào tay chạm vải thì sinh **2 take**, người soi strip rồi chọn, lý do loại ghi thẳng vào ledger.
+
+```
+uv run video story plan2                                  # 6 cảnh + route của từng cảnh, $0
+uv run video story run2 <project> --out out/story2         # sinh chuỗi, 8 take + 1 edit = 100 credit
+uv run video story pick --key pose --take tryon2-05b --reason "take a dính ngón"   # $0
+uv run video story cut2 --out out/story2                   # loudnorm, xfade 0,5 s, chữ, strip + sheet, $0
+uv run python scripts/acceptance/story_quality.py --out out/story2
+```
+
+Acceptance vòng 2 đo cả **khuyết điểm chủ repo nêu**, không chỉ ống nước: LUFS từng clip và **độ lệch max
+-min** (tiếng nhảy ở mỗi mối nối), thời lượng bản cuối đúng công thức xfade (`tổng - (n-1) x fade`), mọi
+cảnh hai take phải có dòng chọn kèm lý do, và không cảnh nào được nối tiếp từ take bị loại. Hàng cuối là
+**cổng người**: thiếu `out/story2/review.json` với `{"verdict": "pass"}` là FAIL, vì máy không chấm được
+mặt, tay và món đồ.
+
 ## MCP
 
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`).
