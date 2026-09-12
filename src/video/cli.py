@@ -254,6 +254,15 @@ def scene() -> None:
     """Create and trash scenes (Scenebuilder) ($0)."""
 
 
+@scene.command("list")
+@click.argument("project_id")
+@click.option("--profile", default="default", show_default=True)
+def scene_list(project_id: str, profile: str) -> None:
+    from video.flow import scenes
+
+    click.echo(json.dumps(_read(profile, lambda s: scenes.list_scenes(s, project_id))))
+
+
 @scene.command("create")
 @click.argument("project_id")
 @click.option("--title", default=None)

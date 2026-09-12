@@ -112,6 +112,29 @@ def upload_record(payload: Any) -> dict[str, Any]:
     }
 
 
+def scenes_from_listing(payload: Any) -> list[dict[str, Any]]:
+    """Scenes ride in Zzl0ze[4] as [scene_id, title, _, [created], [updated], status, _, []]."""
+    entries = _at(payload, 4)
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise TypeError("Zzl0ze[4]: expected a list of scene entries")
+    out = []
+    for entry in entries:
+        scene_id = _at(entry, 0)
+        if not _uuid(scene_id):
+            continue
+        out.append(
+            {
+                "scene_id": scene_id,
+                "title": _str(_at(entry, 1)),
+                "created": _epoch(_at(entry, 3)),
+                "updated": _epoch(_at(entry, 4)),
+            }
+        )
+    return out
+
+
 def voices_from_listing(payload: Any) -> list[dict[str, Any]]:
     """Preset voices ride in Zzl0ze[3] as [id, 3, name, ...] entries next to the project's assets."""
     assets = _at(payload, 3)

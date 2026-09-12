@@ -1,20 +1,24 @@
 """Scenes (Scenebuilder) on the migrated host (measured 2026-09-12): 'Add media' > 'New scene' creates a
-scene (rpc rqZuUc) and opens /project/<id>/scene/<scene_id>; the editor has an editable title, a timeline,
-'Done editing scene' and 'Move to trash'."""
+scene (rpc rqZuUc) and opens /project/<id>/scene/<scene_id>. Scenes are listed in Zzl0ze[4]. The editor's
+'Move to trash' button did nothing in two runs; deletion goes through the grid tile's More options menu."""
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from video.flow import parsers
 from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
 _SCENE_RE = re.compile(r"/scene/([A-Za-z0-9-]+)")
 BUILDER = "flow-scene-builder"
+_TILES_JS = (
+    "() => [...document.querySelectorAll('flow-tile-container')]"
+    ".map(t => (t.innerText || '').trim().replace(/\\s+/g, ' '))"
+)
 
 
 def scene_id_from_url(url: str) -> str:
@@ -22,6 +26,17 @@ def scene_id_from_url(url: str) -> str:
     if not match:
         raise ValueError(f"not a scene url: {url}")
     return match.group(1)
+
+
+async def _listing(session: FlowSession, project_id: str) -> Any:
+    frames = await capture(
+        session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=8.0
+    )
+    return one(frames, "Zzl0ze")
+
+
+async def list_scenes(session: FlowSession, project_id: str) -> list[dict[str, Any]]:
+    return parsers.scenes_from_listing(await _listing(session, project_id))
 
 
 async def create(session: FlowSession, project_id: str, title: str | None = None) -> dict[str, Any]:
@@ -60,10 +75,30 @@ async def create(session: FlowSession, project_id: str, title: str | None = None
 
 async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[str, Any]:
     page = session.page
-    await session.goto(f"{session.project_url(project_id)}/scene/{scene_id}", ready=BUILDER)
-    await page.wait_for_timeout(2_000)
-    trash = page.get_by_role("button", name=re.compile("Move to trash", re.IGNORECASE)).first
-    frames = await capture(session, lambda: trash.click(timeout=8_000), settle=3.0)
+    scenes = await list_scenes(session, project_id)
+    scene = next((s for s in scenes if s["scene_id"] == scene_id), None)
+    if scene is None:
+        raise LookupError(f"scene {scene_id} is not in the project listing")
+    title = scene["title"] or ""
+    tile = (
+        page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
+        .filter(has_text=re.compile(re.escape(title)))
+        .first
+    )
+    if await tile.count() == 0:
+        raise LookupError(f"scene tile titled {title!r} not found on the grid")
+    await tile.hover(timeout=8_000)
+    await page.wait_for_timeout(600)
+    await tile.get_by_role("button", name=re.compile("More options", re.IGNORECASE)).first.click(
+        timeout=8_000
+    )
+    await page.wait_for_timeout(800)
+    item = (
+        page.locator("[role=menuitem], .cdk-overlay-pane button")
+        .filter(has_text=re.compile("Move to trash", re.IGNORECASE))
+        .first
+    )
+    frames = await capture(session, lambda: item.click(timeout=8_000), settle=3.0)
     dialog = page.locator("[role=dialog], mat-dialog-container").first
     try:
         await dialog.wait_for(state="visible", timeout=6_000)
@@ -74,12 +109,7 @@ async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[s
         frames = {**frames, **confirm_frames}
     except PlaywrightTimeoutError:
         await page.wait_for_timeout(2_000)
-    listing = await capture(
-        session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=8.0
-    )
-    still_present = scene_id in json.dumps(one(listing, "Zzl0ze"))
-    if still_present:
-        raise RuntimeError(
-            f"delete: scene {scene_id} is still in the project listing; rpcids {sorted(frames)}"
-        )
-    return {"scene_id": scene_id, "rpcids": sorted(frames), "still_present": False}
+    remaining = await list_scenes(session, project_id)
+    if any(s["scene_id"] == scene_id for s in remaining):
+        raise RuntimeError(f"delete: scene {scene_id} is still listed; rpcids {sorted(frames)}")
+    return {"scene_id": scene_id, "rpcids": sorted(frames), "remaining": len(remaining)}

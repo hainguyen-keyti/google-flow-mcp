@@ -183,15 +183,24 @@ def character_round_trip(project: str) -> None:
 
 
 def spend_matrix(project: str, out_dir: Path, ref_image: Path | None) -> None:
-    def video_row(name: str, *args: str) -> None:
+    def video_row(name: str, *args: str, expect_outputs: int = 1) -> None:
         code, out, err = run("gen", *args, "--project", project, "--out", str(out_dir))
         result = last_json(out) if code == 0 else {}
         paths = [o.get("path") for o in result.get("outputs", [])]
         probe = ffprobe(Path(paths[0])) if paths and Path(paths[0]).exists() else {}
         duration = float(probe.get("format", {}).get("duration", 0) or 0)
         spent = result.get("credits_before", 0) - result.get("credits_after", 0) if result else None
-        status = "PASS" if duration > 0 else ("PARTIAL" if "frame picker" in err else "FAIL")
-        detail = f"duration={duration:.2f}s spent={spent} {paths[:1]}" if result else err.strip()[-160:]
+        if duration > 0 and len(paths) >= expect_outputs:
+            status = "PASS"
+        elif duration > 0:
+            status = "PARTIAL"
+        else:
+            status = "PARTIAL" if "frame picker" in err else "FAIL"
+        detail = (
+            f"duration={duration:.2f}s spent={spent} outputs={len(paths)}/{expect_outputs} {paths[:1]}"
+            if result
+            else err.strip()[-160:]
+        )
         row(name, status, detail)
 
     def image_row(name: str, *args: str) -> None:
@@ -271,6 +280,7 @@ def spend_matrix(project: str, out_dir: Path, ref_image: Path | None) -> None:
         "16:9",
         "--count",
         "2",
+        expect_outputs=2,
     )
 
 
