@@ -78,6 +78,101 @@ def test_fetch_with_retry_gives_up_on_other_errors(monkeypatch, tmp_path: Path):
         asyncio.run(clips._fetch_with_retry(None, {"kind": "video", "url": "u"}, tmp_path / "a"))
 
 
+class _Clickable:
+    first = property(lambda self: self)
+
+    async def click(self, timeout=None):
+        return None
+
+
+class _Keyboard:
+    async def type(self, text):
+        return None
+
+
+class _Page:
+    request = object()
+    keyboard = _Keyboard()
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    def locator(self, selector):
+        return _Clickable()
+
+    def get_by_role(self, role, name=None):
+        return _Clickable()
+
+
+class _Session:
+    page = _Page()
+
+
+def test_editor_job_keeps_polling_past_the_scene_copy_until_its_own_record_is_done(monkeypatch, tmp_path):
+    # Measured 2026-09-13 00:11: the scene's copy of the source is listed (status 3) seconds after Extend,
+    # the extension itself only a minute later; stopping at the first done record lost the extension.
+    prompt = "keep going"
+    copy = {
+        "id": "src",
+        "workflow_id": "w-copy",
+        "created": 1,
+        "status": 3,
+        "url": "https://x/c",
+        "prompt": "orig",
+    }
+    ours = {
+        "id": "new",
+        "workflow_id": "w-new",
+        "created": 2,
+        "status": 3,
+        "url": "https://x/n",
+        "prompt": prompt,
+    }
+    snapshots = iter([([], set()), ([copy], set()), ([copy, ours], {"scene-1"})])
+    fetched = []
+
+    async def fake_snapshot(session, project_id):
+        return next(snapshots)
+
+    async def fake_credits(session):
+        return {"balance": 100}
+
+    async def fake_open(session, project_id, media_id):
+        return None
+
+    async def fake_menu_item(session, button, item):
+        return _Clickable()
+
+    async def fake_capture(session, action, *, settle):
+        await action()
+        return {"uwAyfb": [[]]}
+
+    async def fake_fetch(request, row, stem, attempts=6):
+        fetched.append(row["workflow_id"])
+        return stem.with_suffix(".mp4")
+
+    async def no_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", fake_menu_item)
+    monkeypatch.setattr(clips, "capture", fake_capture)
+    monkeypatch.setattr(clips, "_fetch_with_retry", fake_fetch)
+    monkeypatch.setattr(clips.reader, "credits", fake_credits)
+    monkeypatch.setattr(clips.asyncio, "sleep", no_sleep)
+    result = asyncio.run(
+        clips._generate_from_editor(
+            _Session(), "p", "src", prompt, kind="extend", out_dir=tmp_path, job_id="job-9", wait=60.0
+        )
+    )
+    assert result["status"] == "done" and result["scene_id"] == "scene-1"
+    assert fetched == ["w-new"]
+    assert [o["role"] for o in result["outputs"]] == ["copy", "generated"]
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("job-9")
+    assert [r["status"] for r in rows] == ["submitted", "done"]
+
+
 def test_rendition_labels_match_the_download_media_menu():
     assert clips.RENDITIONS == {"gif": "270p", "720p": "720p", "1080p": "1080p", "4k": "4K"}
 

@@ -19,7 +19,20 @@ from pathlib import Path
 
 ROWS: list[tuple[str, str, str]] = []
 ONLY: set[str] = set()
+LOG_DIR: Path | None = None
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
+
+
+def _keep_log(args: tuple[str, ...], stdout: str, stderr: str) -> None:
+    """Every command's full output lands in <out>/logs so a FAIL row can be explained afterwards."""
+    if LOG_DIR is None:
+        return
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stem = re.sub(r"[^A-Za-z0-9]+", "_", " ".join(args[:4]))[:60]
+    path = LOG_DIR / f"{int(time.time())}_{stem}.log"
+    path.write_text(
+        f"$ video {' '.join(args)}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}", encoding="utf-8"
+    )
 
 
 def wanted(*names: str) -> bool:
@@ -37,7 +50,9 @@ def run(*args: str, timeout: int = 900) -> tuple[int, str, str]:
             check=False,
         )
     except subprocess.TimeoutExpired:
+        _keep_log(args, "", f"timeout after {timeout}s")
         return 124, "", f"timeout after {timeout}s: video {' '.join(args)}"
+    _keep_log(args, proc.stdout, proc.stderr)
     if SECRET.search(proc.stdout + proc.stderr):
         row("I2 secret leak", "FAIL", f"session material in output of {' '.join(args)}")
     return proc.returncode, proc.stdout, proc.stderr
@@ -416,6 +431,8 @@ def main() -> int:
         print("ffprobe missing", file=sys.stderr)
         return 1
     out_dir = Path(args.out)
+    global LOG_DIR
+    LOG_DIR = out_dir / "logs"
     free_matrix(args.project, out_dir)
     if args.character and wanted("character crud"):
         character_round_trip(args.project)

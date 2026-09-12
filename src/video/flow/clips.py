@@ -138,7 +138,9 @@ async def _generate_from_editor(
     while True:
         rows, scenes_after = await _snapshot(session, project_id)
         fresh = new_records(before, rows)
-        if fresh and all(is_done(r) for r in fresh):
+        # The scene copy of the source shows up first and is already "done": wait for our own record.
+        ours = [r for r in fresh if role_of(r, prompt) == "generated"]
+        if ours and all(is_done(r) for r in ours):
             break
         if asyncio.get_running_loop().time() >= deadline:
             break
