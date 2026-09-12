@@ -127,5 +127,20 @@ def tools(project_id: str, profile: str, as_json: bool) -> None:
     click.echo(f"tools={len(rows)}")
 
 
+@flow.command()
+@click.argument("project_id")
+@click.argument("media_id")
+@click.option("--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False))
+@click.option("--profile", default="default", show_default=True)
+def download(project_id: str, media_id: str, out_dir: str, profile: str) -> None:
+    """Download one media item into OUT as <media_id>.<ext>; never overwrites ($0)."""
+    from pathlib import Path
+
+    from video.flow import download as download_mod
+
+    path = _read(profile, lambda s: download_mod.download(s, project_id, media_id, Path(out_dir)))
+    click.echo(str(path))
+
+
 if __name__ == "__main__":
     main()
