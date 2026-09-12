@@ -512,6 +512,24 @@ def story_build(out_dir: str) -> None:
     click.echo(json.dumps({"final": str(final), "contact_sheet": str(sheet), "clips": len(clips)}, indent=2))
 
 
+@story.command("pick")
+@click.option("--out", "out_dir", default="out/story2", show_default=True, type=click.Path(file_okay=False))
+@click.option("--key", required=True, help="Shot key, e.g. 'wardrobe'.")
+@click.option("--take", required=True, help="Job id of the take that goes into the cut, e.g. 'tryon2-02b'.")
+@click.option("--reason", required=True, help="Why the other take was dropped.")
+def story_pick(out_dir: str, key: str, take: str, reason: str) -> None:
+    """Record which take of a shot goes into the cut and why the other lost ($0, no machine can judge)."""
+    from pathlib import Path
+
+    from video.story import pipeline
+
+    try:
+        result = pipeline.select(Path(out_dir), key, take, reason)
+    except (KeyError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 @story.command("cut2")
 @click.option("--out", "out_dir", default="out/story2", show_default=True, type=click.Path(file_okay=False))
 @click.option("--fade", default=None, type=float, help="Crossfade seconds between shots.")

@@ -106,6 +106,25 @@ def test_build2_refuses_to_stitch_a_chain_with_a_missing_shot(tmp_path):
         pipeline.build2(out_dir=tmp_path)
 
 
+def test_the_pick_command_writes_the_choice_and_refuses_a_silent_one(tmp_path):
+    from click.testing import CliRunner
+
+    from video import cli
+
+    gen.Ledger(tmp_path / "ledger.jsonl").append("tryon2-02b", "done", path=str(tmp_path / "b.mp4"))
+    runner = CliRunner()
+    args = ["story", "pick", "--out", str(tmp_path), "--key", "wardrobe", "--take", "tryon2-02b"]
+
+    bad = runner.invoke(cli.main, [*args, "--reason", "  "])
+    assert bad.exit_code != 0 and "reason" in bad.output
+
+    good = runner.invoke(cli.main, [*args, "--reason", "take a lost a finger on the rail"])
+    assert good.exit_code == 0, good.output
+    assert json.loads(good.output)["take"] == "tryon2-02b"
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("tryon2-02")
+    assert rows[-1]["status"] == "selected" and rows[-1]["reason"].startswith("take a lost")
+
+
 def test_load_trims_reads_a_missing_file_as_no_trims(tmp_path):
     assert pipeline.load_trims(tmp_path) == {}
     (tmp_path / "trims.json").write_text(json.dumps({"pose": [1, 2.5]}))
