@@ -19,6 +19,33 @@ def test_ensure_price_blocks_a_submit_that_would_cost_more_than_planned():
         composer.ensure_price(None, 10)
 
 
+def test_frames_mode_is_recognised_from_the_buttons_the_composer_really_renders():
+    # Measured 2026-09-13 on tryon2-02: the composer WAS in Frames mode and the driver still refused,
+    # because the marker asked for an exact aria-label. Judge by the slot buttons instead.
+    empty = ["Start", "Swap first and last frames", "End", "Agent", "Settings trigger", "Start generation"]
+    assert composer.mode_visible(empty, "Frames")
+    assert composer.mode_visible(["  Start\n", "End", "Start generation"], "Frames")
+    filled = ["Image ingredient, tryon2-02_start.png", "Swap first and last frames", "End", "Agent"]
+    assert composer.mode_visible(filled, "Frames")
+
+
+def test_a_composer_with_no_slots_is_not_in_frames_mode():
+    # "Start generation" is the submit button: counting it as the Start slot would hide a real failure.
+    assert not composer.mode_visible(["Agent", "Settings trigger", "Start generation"], "Frames")
+    assert not composer.mode_visible([], "Frames")
+
+
+def test_ingredients_mode_is_recognised_and_an_unchecked_mode_passes():
+    assert composer.mode_visible(["Add ingredient", "Agent", "Start generation"], "Ingredients")
+    assert not composer.mode_visible(["Start", "End", "Start generation"], "Ingredients")
+    assert composer.mode_visible(["Agent"], "Video")
+
+
+def test_start_slot_is_only_filled_once_it_carries_an_image():
+    assert not composer.start_slot_filled(["Start", "Swap first and last frames", "End"])
+    assert composer.start_slot_filled(["Image ingredient, tryon2-02_start.png", "End"])
+
+
 def test_pick_output_prefers_the_record_carrying_our_prompt():
     prompt = "SHOT: full-body mirror selfie. turning slowly. Wearing cream lace slip dress."
     fresh = [

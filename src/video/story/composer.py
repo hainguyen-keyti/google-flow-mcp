@@ -143,16 +143,38 @@ _COMPOSER_BUTTONS_JS = """() => [...document.querySelectorAll('flow-prompt-box b
   .filter(Boolean)"""
 
 
-async def _mode_applied(page: Any, mode: str) -> bool:
-    """Prove the mode really changed: Frames shows the Start slot, Ingredients shows the add button.
+def _names(labels: list[str]) -> set[str]:
+    return {re.sub(r"\s+", " ", (label or "")).strip().lower() for label in labels}
 
-    Setting a mode and trusting it left the driver waiting 20s for a Start slot that never came
-    (measured 2026-09-13 on tryon2-02).
+
+def start_slot_filled(labels: list[str]) -> bool:
+    """The Frames Start slot carries an image: its button renames itself to "Image ingredient, <file>"."""
+    return any("image ingredient" in name for name in _names(labels))
+
+
+def mode_visible(labels: list[str], mode: str) -> bool:
+    """Read the composer mode off the buttons it renders, not off the chip that was clicked.
+
+    Frames renders the Start and End frame slots plus the swap button; once a frame is pinned the Start
+    slot renames itself. Ingredients renders the add-ingredient button. "Start generation" is the submit
+    button and never counts: measured 2026-09-13, matching on an exact aria-label declared a working
+    Frames composer broken, and matching loosely on "start" would hide a composer with no slots at all.
     """
-    marker = {"Frames": START_SLOT, "Ingredients": INGREDIENTS}.get(mode)
-    if marker is None:
-        return True
-    return await page.locator(marker).first.count() > 0
+    names = _names(labels)
+    if mode == "Frames":
+        return (
+            bool(names & {"start", "end"})
+            or any("swap first and last" in n for n in names)
+            or start_slot_filled(labels)
+        )
+    if mode == "Ingredients":
+        return any("ingredient" in name for name in names)
+    return True
+
+
+async def _mode_applied(page: Any, mode: str) -> bool:
+    """Prove the mode really changed before the setup step waits 20s for a slot that will never come."""
+    return mode_visible(await page.evaluate(_COMPOSER_BUTTONS_JS), mode)
 
 
 _NOTICE_JS = """() => [...document.querySelectorAll(
@@ -394,11 +416,20 @@ async def _submit(
     }
 
 
-START_SLOT = (
-    "flow-prompt-box button[aria-label='Start'], flow-base-prompt-box button[aria-label='Start'],"
-    " flow-prompt-box button[aria-label*='Image ingredient'],"
-    " flow-base-prompt-box button[aria-label*='Image ingredient']"
-)
+START_SLOT_NAME = re.compile(r"^(start|image ingredient.*)$", re.IGNORECASE)
+
+
+def start_slot(page: Any) -> Any:
+    """The Frames Start slot, found by accessible name so a label carried in text still matches.
+
+    The name is anchored: "Start generation" is the submit button, and clicking it here would pay for a
+    shot with no start frame.
+    """
+    return (
+        page.locator("flow-prompt-box, flow-base-prompt-box")
+        .get_by_role("button", name=START_SLOT_NAME)
+        .first
+    )
 
 
 async def pin_start_frame(session: FlowSession, name: str) -> bool:
@@ -408,7 +439,7 @@ async def pin_start_frame(session: FlowSession, name: str) -> bool:
     text on the tiles, so the filename is typed into the search field and the first result is taken.
     """
     page = session.page
-    slot = page.locator(START_SLOT).first
+    slot = start_slot(page)
     await slot.wait_for(state="visible", timeout=20_000)
     await slot.click(timeout=8_000)
     await page.wait_for_timeout(3_000)
@@ -424,10 +455,7 @@ async def pin_start_frame(session: FlowSession, name: str) -> bool:
         raise LookupError(f"no frame image matched {name!r} in the picker") from exc
     await tile.click(timeout=8_000)
     await page.wait_for_timeout(3_000)
-    pinned = await page.evaluate(
-        "() => [...document.querySelectorAll('flow-prompt-box button, flow-base-prompt-box button')]"
-        ".some(e => /image ingredient/i.test(e.getAttribute('aria-label') || ''))"
-    )
+    pinned = start_slot_filled(await page.evaluate(_COMPOSER_BUTTONS_JS))
     if not pinned:
         raise RuntimeError(f"picked {name!r} but the Start slot stayed empty")
     return True
