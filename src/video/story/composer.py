@@ -74,6 +74,29 @@ async def _click_option(page: Any, label: str) -> bool:
     return True
 
 
+_PRICE_VISIBLE_JS = (
+    "() => [...document.querySelectorAll('.cdk-overlay-pane, [role=menu], [role=dialog]')]"
+    ".some(e => e.offsetParent !== null && /generating will use/i.test(e.innerText || ''))"
+)
+
+
+async def _open_settings(page: Any) -> str:
+    """Open the settings panel and wait for its live price line, whatever overlay was open before."""
+    await page.keyboard.press("Escape")
+    await page.wait_for_timeout(600)
+    trigger = page.locator(SETTINGS).first
+    await trigger.wait_for(state="visible", timeout=20_000)
+    await trigger.click(timeout=8_000)
+    try:
+        await page.wait_for_function(_PRICE_VISIBLE_JS, timeout=15_000)
+    except PlaywrightTimeoutError as exc:
+        visible = await page.evaluate(_OVERLAY_TEXT_JS)
+        raise RuntimeError(
+            f"composer settings never showed a price line; overlays said {visible[:200]!r}"
+        ) from exc
+    return await page.evaluate(_OVERLAY_TEXT_JS)
+
+
 async def configure(
     session: FlowSession,
     *,
@@ -83,10 +106,7 @@ async def configure(
 ) -> dict[str, Any]:
     """Write every composer setting and report the price the UI now quotes."""
     page = session.page
-    trigger = page.locator(SETTINGS).first
-    await trigger.wait_for(state="visible", timeout=20_000)
-    await trigger.click(timeout=8_000)
-    await page.wait_for_timeout(1_500)
+    await _open_settings(page)
     applied = {name: await _click_option(page, name) for name in (mode, aspect, count)}
     text = await page.evaluate(_OVERLAY_TEXT_JS)
     price = price_from(text)
