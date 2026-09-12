@@ -4,10 +4,13 @@ scene (rpc rqZuUc) and opens /project/<id>/scene/<scene_id>; the editor has an e
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
-from video.flow.reader import capture
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
 _SCENE_RE = re.compile(r"/scene/([A-Za-z0-9-]+)")
@@ -61,12 +64,22 @@ async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[s
     await page.wait_for_timeout(2_000)
     trash = page.get_by_role("button", name=re.compile("Move to trash", re.IGNORECASE)).first
     frames = await capture(session, lambda: trash.click(timeout=8_000), settle=3.0)
-    confirm = (
-        page.locator("[role=dialog], mat-dialog-container")
-        .get_by_role("button", name=re.compile("trash|delete|remove|confirm", re.IGNORECASE))
-        .first
-    )
-    if await confirm.count():
+    dialog = page.locator("[role=dialog], mat-dialog-container").first
+    try:
+        await dialog.wait_for(state="visible", timeout=6_000)
+        confirm = dialog.get_by_role(
+            "button", name=re.compile("trash|delete|remove|confirm", re.IGNORECASE)
+        ).first
         confirm_frames = await capture(session, lambda: confirm.click(timeout=8_000), settle=5.0)
         frames = {**frames, **confirm_frames}
-    return {"scene_id": scene_id, "rpcids": sorted(frames), "url_after": page.url}
+    except PlaywrightTimeoutError:
+        await page.wait_for_timeout(2_000)
+    listing = await capture(
+        session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=8.0
+    )
+    still_present = scene_id in json.dumps(one(listing, "Zzl0ze"))
+    if still_present:
+        raise RuntimeError(
+            f"delete: scene {scene_id} is still in the project listing; rpcids {sorted(frames)}"
+        )
+    return {"scene_id": scene_id, "rpcids": sorted(frames), "still_present": False}

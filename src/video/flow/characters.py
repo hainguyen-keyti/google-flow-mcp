@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from gflow_cli.api.transports.batchexecute import image_records
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video.flow import parsers
 from video.flow.reader import capture, one
@@ -134,16 +135,18 @@ async def delete(session: FlowSession, project_id: str, entity_id: str) -> dict[
     await _open_editor(session, project_id, entity_id)
     trash = page.get_by_role("button", name=re.compile("^Delete$", re.IGNORECASE)).first
     await trash.click(timeout=8_000)
-    await page.wait_for_timeout(1_200)
-    confirm = (
-        page.locator("[role=dialog], mat-dialog-container")
-        .get_by_role("button", name=re.compile("delete|remove|confirm", re.IGNORECASE))
-        .first
-    )
-    if await confirm.count() == 0:
-        raise RuntimeError("delete: no confirm dialog button found")
-    frames = await capture(session, lambda: confirm.click(timeout=8_000), settle=6.0)
-    return {"entity_id": entity_id, "rpcids": sorted(frames), "url_after": page.url}
+    dialog = page.locator("[role=dialog], mat-dialog-container").first
+    frames: dict[str, list[Any]] = {}
+    try:
+        await dialog.wait_for(state="visible", timeout=8_000)
+        confirm = dialog.get_by_role("button", name=re.compile("delete|remove|confirm", re.IGNORECASE)).first
+        frames = await capture(session, lambda: confirm.click(timeout=8_000), settle=5.0)
+    except PlaywrightTimeoutError:
+        await page.wait_for_timeout(3_000)
+    remaining = await list_characters(session, project_id)
+    if any(c["entity_id"] == entity_id for c in remaining):
+        raise RuntimeError(f"delete: character {entity_id} is still listed; rpcids {sorted(frames)}")
+    return {"entity_id": entity_id, "rpcids": sorted(frames), "remaining": len(remaining)}
 
 
 async def list_characters(session: FlowSession, project_id: str) -> list[dict[str, Any]]:
