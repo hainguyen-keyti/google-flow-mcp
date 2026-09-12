@@ -1,0 +1,246 @@
+{
+  "system_name": "Fictional Character + Bedroom Visual Continuity System",
+  "version": "1.0",
+  "purpose": "A reusable visual bible for another AI agent to recreate the same fictional adult woman and her bedroom across many camera angles, outfits, and scenes.",
+  "consistency_priority": [
+    "Face identity and facial landmarks",
+    "Hair length, density and texture",
+    "Tattoo placement and motifs",
+    "Beauty marks / skin texture / dimples",
+    "Jewelry and recurring accessories",
+    "Body proportions and silhouette",
+    "Bedroom architecture and furniture layout",
+    "Wardrobe organization and palette",
+    "Lighting mood",
+    "Camera realism and photographic style"
+  ],
+  "character": {
+    "status": "fictional adult woman",
+    "visual_archetype": "Vietnamese/East Asian-looking young adult woman, realistic rather than model-perfect",
+    "face": {
+      "overall": "soft oval face with a slightly tapered lower face",
+      "identity_landmarks": [
+        "defined but delicate facial structure",
+        "large dark almond-shaped eyes",
+        "natural lower-eye fullness",
+        "small straight-to-soft nose",
+        "softly defined lips",
+        "subtle asymmetry; do not make the face mathematically perfect",
+        "visible cheek dimple when smiling or making a slight smile"
+      ],
+      "skin": {
+        "tone": "light warm-neutral",
+        "texture": "real human skin with visible pores and very fine texture",
+        "finish": "natural, slightly dewy, not airbrushed",
+        "retain": [
+          "tiny imperfections",
+          "subtle redness/variation",
+          "natural under-eye texture"
+        ]
+      },
+      "beauty_marks": {
+        "rule": "retain the established small facial/body beauty marks visible in the reference; never invent a new prominent mole unless explicitly requested"
+      }
+    },
+    "hair": {
+      "color": "very dark brown to near-black",
+      "length": "long, extending well below the shoulders toward mid-back/waist",
+      "density": "thick, full volume",
+      "texture": "mostly straight with soft natural bends/waves and flyaways",
+      "part": "soft center-to-slight-side part",
+      "front": "long face-framing strands / loose curtain-like pieces",
+      "rule": "hair length, density and general silhouette are locked across views"
+    },
+    "body": {
+      "silhouette": "slender adult feminine silhouette with natural proportions",
+      "rule": "avoid exaggerated hourglass, plastic-surgery proportions, or anatomically inconsistent limbs",
+      "skin": "retain realistic texture and small tonal variations"
+    },
+    "tattoos": {
+      "chest": {
+        "placement": "center-upper chest, directly below the necklace",
+        "motif": "butterfly-like central motif with fine-line ornamental/organic detailing",
+        "scale": "clearly visible and larger than a tiny minimalist tattoo",
+        "rule": "keep centered and below necklace; do not move it to the neck"
+      },
+      "upper_arm": {
+        "placement": "visible tattoo work on upper arm/shoulder region",
+        "style": "fine-line botanical/organic illustrative elements",
+        "rule": "preserve approximate placement and density"
+      },
+      "back": {
+        "placement": "large tattoo composition visible across upper/mid back in rear views",
+        "style": "ornamental/botanical fine-line composition",
+        "rule": "rear-view continuity is important; do not replace it with a different unrelated tattoo"
+      },
+      "continuity_note": "The reference collage contains stylized/generated tattoo details that are not perfectly identical from frame to frame. Treat the motif family and placement zones as locked; create a future master tattoo reference sheet to lock exact linework."
+    },
+    "jewelry": {
+      "necklace": "thin delicate silver-toned chain with a small pendant",
+      "rule": "pendant sits above the chest tattoo",
+      "other": "minimal understated jewelry; avoid adding large statement pieces unless requested"
+    },
+    "wardrobe_style": {
+      "core_aesthetic": "romantic feminine bedroom wardrobe with lace, soft textures and vintage-inspired details",
+      "palette": [
+        "ivory",
+        "cream",
+        "white",
+        "dusty pink",
+        "black",
+        "soft gray",
+        "muted mauve"
+      ],
+      "categories": [
+        "lace-trimmed tops",
+        "camisoles",
+        "feminine dresses",
+        "short skirts",
+        "soft knit layers",
+        "casual tops",
+        "socks / knee-high socks",
+        "dark and light contrasting outfits"
+      ],
+      "materials": [
+        "lace",
+        "cotton",
+        "soft knit",
+        "lightweight woven fabric"
+      ],
+      "rule": "clothing should look wearable and physically plausible, with real folds, seams and fabric texture"
+    }
+  },
+  "room": {
+    "type": "cozy personal bedroom / bedroom-studio",
+    "mood": "warm, intimate, lived-in, creative, slightly nostalgic",
+    "architecture": {
+      "walls": "light neutral walls",
+      "floor": "warm medium wood or wood-look floor",
+      "window": "large window with visible city lights at night in some views",
+      "door": "dark wood/brown bedroom door",
+      "air_conditioner": "wall-mounted AC unit above/near the main room area"
+    },
+    "layout": {
+      "bed": "large bed positioned as a dominant anchor on one side of the room",
+      "desk": "dark desk/workstation near the wall/window area",
+      "chair": "dark office/task chair at the desk",
+      "wardrobe": "open wardrobe / closet with multiple hanging rails and shelving",
+      "mirror": "full-length mirror used for outfit selfies",
+      "storage": "drawers and open shelves for clothing, shoes and bags"
+    },
+    "decor": {
+      "photo_wall": "dense collage of small personal photographs/postcards covering a significant wall area",
+      "shelves": "small decorative objects, bags, keepsakes and personal items",
+      "lighting": "small warm lamps / vanity-like practical lights",
+      "bed": "soft patterned bedding in a pale blue/white family",
+      "soft_objects": "small plush/soft decorative objects may appear on or near the bed",
+      "desk_items": [
+        "laptop/monitor",
+        "lamp",
+        "small personal objects",
+        "stationery/decor"
+      ]
+    },
+    "wardrobe": {
+      "visual": "open, densely filled closet",
+      "hanging_colors": [
+        "white",
+        "cream",
+        "pink",
+        "black",
+        "gray",
+        "muted mauve"
+      ],
+      "organization": "clothes grouped on rails, folded items in drawers, shoes and bags on shelves",
+      "rule": "wardrobe should feel abundant but curated, not like a retail store"
+    },
+    "recurring_props": [
+      "full-length mirror",
+      "photo collage wall",
+      "dark desk",
+      "dark desk chair",
+      "laptop/monitor",
+      "warm table/vanity lamps",
+      "open wardrobe",
+      "shoes and handbags",
+      "pale patterned bedding",
+      "small decorative/plush items"
+    ]
+  },
+  "photography": {
+    "style": "high-end smartphone photography / realistic casual lifestyle photography",
+    "realism": "photorealistic, natural skin and fabric texture",
+    "lens_language": [
+      "24-28mm equivalent for wide room views",
+      "35-50mm equivalent for environmental portraits",
+      "phone selfie perspective for mirror/selfie shots"
+    ],
+    "preferred_views": [
+      "full-body mirror selfie",
+      "wide shot from bedroom doorway",
+      "wide shot from corner of room",
+      "rear three-quarter view",
+      "direct rear view",
+      "low-angle floor-level shot",
+      "high-angle shot looking downward",
+      "side profile",
+      "medium environmental portrait",
+      "close-up face reference"
+    ],
+    "lighting": {
+      "base": "warm practical lamps mixed with soft ambient room light",
+      "night": "cooler city/window light can mix with warm interior light",
+      "avoid": [
+        "hard studio flash",
+        "beauty-filter glow",
+        "perfect commercial lighting"
+      ]
+    },
+    "camera_rules": [
+      "keep perspective physically plausible",
+      "do not warp room geometry to fit the subject",
+      "show enough environmental context in wide shots",
+      "preserve realistic mirror reflections",
+      "maintain consistent left/right placement of tattoos and room objects"
+    ]
+  },
+  "negative_constraints": [
+    "Do not make skin porcelain-smooth or airbrushed.",
+    "Do not change face shape between shots.",
+    "Do not shorten the hair.",
+    "Do not remove the chest, arm or back tattoo zones.",
+    "Do not relocate the chest tattoo above the necklace.",
+    "Do not invent large facial features, exaggerated eyes, or doll-like proportions.",
+    "Do not change the room into a luxury hotel, fashion showroom or minimalist studio.",
+    "Do not randomly rearrange the bed, desk, wardrobe and mirror between adjacent shots.",
+    "Do not add dramatic cinematic fog, excessive bokeh, or glossy influencer filters.",
+    "Do not create inconsistent clothing physics or impossible mirror reflections."
+  ],
+  "agent_prompt_template": {
+    "identity_lock": "Use the Character Bible as immutable identity context. Preserve face landmarks, hair silhouette, tattoo placement, jewelry, skin texture and body proportions.",
+    "environment_lock": "Use the Room Bible as immutable environment context. Preserve bed, desk, wardrobe, mirror, photo wall, door, window, AC and major prop relationships.",
+    "scene_variables": [
+      "camera position",
+      "focal length",
+      "pose",
+      "outfit",
+      "time of day",
+      "expression"
+    ],
+    "instruction": "Only change scene variables. Never redesign the character or room unless the request explicitly says to unlock a specific element."
+  },
+  "master_reference_plan": {
+    "recommended_next_assets": [
+      "character front / 3-4 view / side / rear turnaround sheet",
+      "face close-up sheet showing eyes, nose, lips, dimples, beauty marks and skin texture",
+      "tattoo close-up sheet for chest, arm and back linework",
+      "hair turnaround sheet",
+      "jewelry/accessory sheet",
+      "room floor-plan / top-down layout",
+      "room four-corner photography sheet",
+      "wardrobe catalog sheet",
+      "lighting reference sheet"
+    ],
+    "reason": "The current generated collage establishes the design language well, but several small details vary between generated frames. A dedicated master reference set is the safest way to make another agent reproduce the character and room consistently."
+  }
+}
