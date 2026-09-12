@@ -21,6 +21,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen
 from video.flow import agent, clips, reader
+from video.flow import download as download_mod
 from video.session import PROJECT_READY, FlowSession
 
 PRICE_RE = re.compile(r"generating will use\s+(\d+)\s+credit", re.IGNORECASE)
@@ -147,6 +148,21 @@ async def snapshot(session: FlowSession, project_id: str, attempts: int = 4) -> 
     raise last
 
 
+async def fetch_720(session: FlowSession, record: dict[str, Any], stem: Path, attempts: int = 6) -> Path:
+    """Insist on the 720p rendition before accepting anything smaller.
+
+    `=m22` answers 404 for a while after the record says done; taking `=m18` immediately leaves a
+    360x640 clip inside a 720x1280 cut (measured 2026-09-13 on tryon-05).
+    """
+    for attempt in range(attempts):
+        try:
+            return await download_mod.fetch_to_file(session.page.request, record["url"] + "=m22", stem)
+        except RuntimeError:
+            if attempt < attempts - 1:
+                await asyncio.sleep(15)
+    return await clips._fetch_with_retry(session.page.request, record, stem)
+
+
 async def _notice(page: Any) -> str:
     """Whatever Flow told the user (toast, snackbar, inline refusal). Transient, so read it early."""
     try:
@@ -252,7 +268,7 @@ async def generate(
     credits_after = (await reader.credits(session))["balance"]
     path = None
     if output is not None and clips.is_done(output):
-        path = str(await clips._fetch_with_retry(session.page.request, output, out_dir / job_id))
+        path = str(await fetch_720(session, output, out_dir / job_id))
     status = "done" if path else "failed"
     ledger.append(
         job_id,
