@@ -58,6 +58,25 @@ async def _fetch_with_retry(request: Any, row: dict[str, Any], stem: Path, attem
     raise RuntimeError(str(last))
 
 
+async def _prompt_ready(page: Any, box: Any, start: Any, prompt: str, timeout: float = 25.0) -> bool:
+    """Type the prompt if the box is empty and wait until it is really there and the button is enabled.
+
+    Entering Extend creates the scene and re-renders the editor, so a click 500ms after typing could land
+    on a cleared box and submit nothing at all (measured 2026-09-13: rpcids [], 0 credits).
+    """
+    needle = prompt[:40]
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        text = (await box.inner_text()).strip()
+        if needle in text and not await start.is_disabled():
+            return True
+        if needle not in text:
+            await box.click(timeout=8_000)
+            await page.keyboard.type(prompt)
+        await asyncio.sleep(1)
+    return False
+
+
 async def _open(session: FlowSession, project_id: str, media_id: str) -> None:
     await session.goto(f"{session.project_url(project_id)}/edit/{media_id}", ready=EDITOR)
     await session.page.wait_for_timeout(3_000)
@@ -139,14 +158,19 @@ async def _generate_from_editor(
         await item.click(timeout=8_000)
         await page.wait_for_timeout(1_500)
     box = page.locator(f"{EDITOR} [contenteditable='true']").first
-    await box.click(timeout=8_000)
-    await page.keyboard.type(prompt)
-    await page.wait_for_timeout(500)
     start = page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
+    if not await _prompt_ready(page, box, start, prompt):
+        raise RuntimeError(f"{kind}: the prompt never reached the editor box, nothing was submitted")
     ledger.append(
         job_id, "submitted", kind=kind, source_media_id=media_id, prompt=prompt, credits_before=credits_before
     )
     frames = await capture(session, lambda: start.click(timeout=8_000), settle=15.0)
+    if not frames and await _prompt_ready(page, box, start, prompt):
+        # The click hit a stale editor (entering Extend re-renders it) and submitted nothing: click again.
+        frames = await capture(session, lambda: start.click(timeout=8_000), settle=15.0)
+    if not frames:
+        ledger.append(job_id, "failed", credits_before=credits_before, credits_after=credits_before, spent=0)
+        raise RuntimeError(f"{kind}: Start generation fired no request, so nothing was submitted (0 credits)")
     fresh: list[dict[str, Any]] = []
     scenes_after: set[str] = set()
     deadline = asyncio.get_running_loop().time() + wait

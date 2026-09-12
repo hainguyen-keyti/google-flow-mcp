@@ -81,9 +81,16 @@ def test_fetch_with_retry_gives_up_on_other_errors(monkeypatch, tmp_path: Path):
 
 class _Clickable:
     first = property(lambda self: self)
+    text = "keep going"
 
     async def click(self, timeout=None):
         return None
+
+    async def inner_text(self):
+        return self.text
+
+    async def is_disabled(self):
+        return False
 
 
 class _Keyboard:
@@ -238,6 +245,67 @@ def test_menu_item_retries_once_then_reports_the_missing_item():
         asyncio.run(clips._menu_item(session, "Add clip", "Extend"))
     assert page.clicks == ["toolbar", "toolbar"]
     assert page.escapes == 1
+
+
+def test_prompt_ready_types_the_prompt_when_the_editor_box_came_back_empty():
+    typed = []
+
+    class Box(_Clickable):
+        text = ""
+
+        async def click(self, timeout=None):
+            typed.append("click")
+
+        async def inner_text(self):
+            return Box.text
+
+    class Keyboard:
+        async def type(self, text):
+            typed.append(text)
+            Box.text = text
+
+    page = type("P", (), {"keyboard": Keyboard()})()
+    box, start = Box(), _Clickable()
+    try:
+        assert asyncio.run(clips._prompt_ready(page, box, start, "keep going", timeout=5.0)) is True
+        assert typed == ["click", "keep going"]
+    finally:
+        Box.text = ""
+
+
+def test_editor_job_fails_loudly_when_start_generation_fires_no_request(monkeypatch, tmp_path):
+    # Measured 2026-09-13 00:49: a click on a stale editor submitted nothing, rpcids [] and 0 credits,
+    # yet the job reported "pending" as if it were still generating.
+    async def fake_snapshot(session, project_id):
+        return [], set()
+
+    async def fake_credits(session):
+        return {"balance": 650}
+
+    async def fake_open(session, project_id, media_id):
+        return None
+
+    async def fake_menu_item(session, button, item):
+        return _Clickable()
+
+    async def silent_capture(session, action, *, settle):
+        await action()
+        return {}
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", fake_menu_item)
+    monkeypatch.setattr(clips, "capture", silent_capture)
+    monkeypatch.setattr(clips.reader, "credits", fake_credits)
+    with pytest.raises(RuntimeError, match="0 credits"):
+        asyncio.run(
+            clips._generate_from_editor(
+                _Session(), "p", "src", "keep going", kind="extend", out_dir=tmp_path, job_id="j", wait=5.0
+            )
+        )
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")
+    assert [r["status"] for r in rows] == ["submitted", "failed"]
+    assert rows[-1]["spent"] == 0
 
 
 def test_rendition_labels_match_the_download_media_menu():
