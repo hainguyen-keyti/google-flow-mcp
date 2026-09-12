@@ -20,7 +20,7 @@ def _skip_keychain(*args, **kwargs):
 browser_cookie3.chrome = _skip_keychain
 browser_cookie3.load = _skip_keychain
 
-from gflow_cli.cli import main  # noqa: E402
+from gflow_cli.cli import main
 
 sys.argv[0] = "gflow"
 main()
