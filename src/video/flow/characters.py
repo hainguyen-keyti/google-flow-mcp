@@ -135,7 +135,13 @@ async def delete(session: FlowSession, project_id: str, entity_id: str) -> dict[
     await _open_editor(session, project_id, entity_id)
     trash = page.get_by_role("button", name=re.compile("^Delete$", re.IGNORECASE)).first
     await trash.click(timeout=8_000)
-    dialog = page.locator("[role=dialog], mat-dialog-container").first
+    # Measured 2026-09-12 23:53: the confirm is an overlay pane holding a single "Delete" button (earlier
+    # that day it was a mat-dialog), so accept either container and click the button inside it.
+    dialog = (
+        page.locator("[role=dialog], mat-dialog-container, .cdk-overlay-pane")
+        .filter(has=page.get_by_role("button", name=re.compile("delete|remove|confirm", re.IGNORECASE)))
+        .last
+    )
     frames: dict[str, list[Any]] = {}
     dialog_seen = False
     try:

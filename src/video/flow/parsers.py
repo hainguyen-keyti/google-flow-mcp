@@ -181,19 +181,30 @@ def _record_fields(record: list[Any]) -> dict[str, Any]:
     return fields
 
 
-def _split_listing(payload: Any) -> tuple[list[Any], dict[str, list[Any]]]:
+def _split_listing(payload: Any) -> tuple[list[Any], list[list[Any]]]:
     descriptors, records = _at(payload, 1), _at(payload, 2)
     if not isinstance(descriptors, list) or not isinstance(records, list):
         raise TypeError("Zzl0ze: expected [_, [descriptor, ...], [record, ...], ...]")
-    by_media: dict[str, list[Any]] = {}
+    kept = [r for r in records if isinstance(r, list) and len(r) >= 7 and _uuid(_at(r, 2))]
+    return descriptors, kept
+
+
+def _current_version(records: list[list[Any]]) -> dict[str, list[Any]]:
+    """One record per media id: the newest finished version (an Omni edit adds a 'CAI' record for the
+    same media id), else the newest record."""
+    by_media: dict[str, list[list[Any]]] = {}
     for record in records:
-        if isinstance(record, list) and len(record) >= 7 and _uuid(_at(record, 2)):
-            by_media[record[2]] = record
-    return descriptors, by_media
+        by_media.setdefault(record[2], []).append(record)
+    chosen: dict[str, list[Any]] = {}
+    for media_id, versions in by_media.items():
+        versions.sort(key=lambda r: _epoch(_at(r, 5, 0)) or 0, reverse=True)
+        chosen[media_id] = next((v for v in versions if _record_fields(v)["url"]), versions[0])
+    return chosen
 
 
 def media(payload: Any) -> list[dict[str, Any]]:
-    descriptors, by_media = _split_listing(payload)
+    descriptors, records_ = _split_listing(payload)
+    by_media = _current_version(records_)
     out = []
     for descriptor in descriptors:
         media_id, info, project_id = _at(descriptor, 0), _at(descriptor, 3), _at(descriptor, 4)
@@ -220,20 +231,22 @@ def media(payload: Any) -> list[dict[str, Any]]:
 
 
 def records(payload: Any) -> list[dict[str, Any]]:
-    """Every generation record in Zzl0ze[2], including the ones without a grid descriptor (clips that
-    live inside a scene, character portrait candidates); `listed` tells whether the grid shows it."""
-    descriptors, by_media = _split_listing(payload)
+    """Every generation record in Zzl0ze[2]: the ones without a grid descriptor (clips inside a scene,
+    character portrait candidates) and every version of an edited media (type 'CAI' rows share the
+    media id with the original 'CAE' row); `listed` tells whether the grid shows the media."""
+    descriptors, records_ = _split_listing(payload)
     listed = {_at(d, 0) for d in descriptors}
     out = []
-    for media_id, record in by_media.items():
+    for record in records_:
         out.append(
             {
-                "id": media_id,
+                "id": record[2],
                 "project_id": _str(_at(record, 1)),
                 "workflow_id": _str(_at(record, 0)),
+                "type": _str(_at(record, 3)),
                 "created": _epoch(_at(record, 5, 0)),
                 **_record_fields(record),
-                "listed": media_id in listed,
+                "listed": record[2] in listed,
             }
         )
     return out

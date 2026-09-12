@@ -13,6 +13,20 @@ def test_extension_prefers_content_type_then_url():
     assert download.extension_for(None, "https://x/y") == ".bin"
 
 
+def test_latest_version_prefers_the_newest_finished_version_of_a_media():
+    rows = [
+        {"id": "m", "workflow_id": "orig", "created": 10, "url": "https://x/orig"},
+        {"id": "m", "workflow_id": "edit-pending", "created": 30, "url": None},
+        {"id": "m", "workflow_id": "edit-done", "created": 20, "url": "https://x/edit"},
+        {"id": "other", "workflow_id": "o", "created": 40, "url": "https://x/o"},
+    ]
+    assert download.latest_version(rows, "m")["workflow_id"] == "edit-done"
+    with pytest.raises(LookupError):
+        download.latest_version(rows, "zzz")
+    with pytest.raises(ValueError):
+        download.latest_version([{"id": "m", "created": 1, "url": None}], "m")
+
+
 def test_select_media_finds_the_item_or_fails_loud():
     media = [{"id": "a", "url": "https://x/a"}, {"id": "b", "url": None}]
     assert download.select_media(media, "a")["url"] == "https://x/a"

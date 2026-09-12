@@ -136,6 +136,7 @@ def test_records_include_generations_without_a_descriptor():
         "id": "c1be1764-ee48-4530-b51c-9818fce873bb",
         "project_id": PROJECT,
         "workflow_id": "513526c6-5ef1-46e6-a185-0e47210089f1",
+        "type": "CAE",
         "created": 1789228805,
         "kind": "video",
         "status": 3,
@@ -148,6 +149,50 @@ def test_records_include_generations_without_a_descriptor():
     assert rows["01f70107-75de-417e-89eb-1c76567877f4"]["listed"] is True
     portrait = rows["4341f5b1-fd8f-4242-8a67-b8207899dfc9"]
     assert portrait["kind"] == "image" and portrait["listed"] is False and portrait["url"] is None
+
+
+EDIT_VERSION_RECORD = [
+    "44127014-8b33-442c-89e1-d212ddb8e3e3",
+    PROJECT,
+    "01f70107-75de-417e-89eb-1c76567877f4",
+    "CAI",
+    None,
+    [
+        [1789230719, 756808000],
+        "make it night time with warm lamp light",
+        None,
+        None,
+        None,
+        POSTER + "-edit",
+        [None, [["abra_edit", 4, [10], None, 2, 1]]],
+        None,
+        [3],
+        1,
+        POSTER + "-edit",
+        None,
+        None,
+        900000,
+    ],
+    None,
+    [[None, 1, None, None, None, None, None, "<root/>", POSTER + "-edit-full"], [None, None, [8]], []],
+]
+
+
+def test_records_keep_every_version_of_an_edited_media():
+    # Measured 2026-09-12 23:50: an Omni edit adds a second record ("CAI", model abra_edit) for the SAME
+    # media id; the grid keeps one tile, "Show history" lists both steps.
+    listing = [None, [DESCRIPTOR], [LISTED_RECORD, EDIT_VERSION_RECORD], [], [], None, None, []]
+    rows = parsers.records(listing)
+    assert [r["workflow_id"] for r in rows] == [
+        "923b7b19-4b47-4324-89fb-1557d636742f",
+        "44127014-8b33-442c-89e1-d212ddb8e3e3",
+    ]
+    assert [r["id"] for r in rows] == ["01f70107-75de-417e-89eb-1c76567877f4"] * 2
+    assert [r["type"] for r in rows] == ["CAE", "CAI"]
+    assert rows[1]["prompt"] == "make it night time with warm lamp light"
+    assert rows[1]["url"] == POSTER + "-edit-full"
+    assert rows[1]["listed"] is True
+    assert len(parsers.media(listing)) == 1
 
 
 def test_records_keep_the_media_count_untouched():

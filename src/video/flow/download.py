@@ -94,7 +94,19 @@ async def fetch_asset(request: Any, kind: str, base_url: str, stem: Path) -> Pat
     raise RuntimeError(f"no rendition of {kind} returned a real asset: {'; '.join(seen)}")
 
 
+def latest_version(rows: list[dict[str, Any]], media_id: str) -> dict[str, Any]:
+    """The newest finished version of a media id among generation records (an edit adds a version)."""
+    versions = sorted((r for r in rows if r.get("id") == media_id), key=lambda r: r.get("created") or 0)
+    if not versions:
+        raise LookupError(f"media {media_id} is not in the project listing")
+    for item in reversed(versions):
+        if item.get("url"):
+            return item
+    raise ValueError(f"media {media_id} has no download url in the listing")
+
+
 async def download(session: FlowSession, project_id: str, media_id: str, out_dir: Path = Path("out")) -> Path:
-    """Any generation record downloads, listed on the grid or not (clips inside scenes, extensions)."""
-    item = select_media(await reader.records(session, project_id), media_id)
+    """Any generation record downloads, listed on the grid or not (clips inside scenes, extensions);
+    an edited media downloads its newest finished version."""
+    item = latest_version(await reader.records(session, project_id), media_id)
     return await fetch_asset(session.page.request, item["kind"], item["url"], out_dir / media_id)

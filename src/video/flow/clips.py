@@ -25,7 +25,11 @@ DONE_STATUS = 3
 
 
 def new_records(before: set[str], rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted((r for r in rows if r["id"] not in before), key=lambda r: (r["created"] or 0, r["id"]))
+    """Records whose workflow id was not seen before: an edit is a new record on the SAME media id."""
+    return sorted(
+        (r for r in rows if r["workflow_id"] not in before),
+        key=lambda r: (r["created"] or 0, r["workflow_id"]),
+    )
 
 
 def is_done(row: dict[str, Any]) -> bool:
@@ -111,7 +115,7 @@ async def _generate_from_editor(
     if ledger.has_submitted(job_id):
         raise gen.AlreadySubmitted(f"job {job_id} already has a submitted row; use a new job id")
     rows, scenes_before = await _snapshot(session, project_id)
-    before = {r["id"] for r in rows}
+    before = {r["workflow_id"] for r in rows}
     credits_before = (await reader.credits(session))["balance"]
     await _open(session, project_id, media_id)
     page = session.page
@@ -143,10 +147,17 @@ async def _generate_from_editor(
     outputs = []
     for row in fresh:
         role = role_of(row, prompt)
-        entry: dict[str, Any] = {"media_id": row["id"], "role": role, "status": row["status"], "path": None}
+        entry: dict[str, Any] = {
+            "media_id": row["id"],
+            "workflow_id": row["workflow_id"],
+            "role": role,
+            "status": row["status"],
+            "path": None,
+        }
         if role == "generated" and is_done(row):
+            stem = out_dir / (row["id"] if row["id"] != media_id else f"{row['id']}_{row['workflow_id'][:8]}")
             try:
-                path = await _fetch_with_retry(session.page.request, row, out_dir / row["id"])
+                path = await _fetch_with_retry(session.page.request, row, stem)
                 entry["path"] = str(path)
             except Exception as exc:  # noqa: BLE001
                 entry["error"] = str(exc)[:200]
