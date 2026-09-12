@@ -13,6 +13,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from video import gen
 from video.flow import download as download_mod
 from video.flow import parsers, reader
@@ -62,20 +64,26 @@ async def _open(session: FlowSession, project_id: str, media_id: str) -> None:
 
 
 async def _menu_item(session: FlowSession, button: str, item: str) -> Any:
-    """Open a toolbar menu and return its item; one retry when the menu did not render in time."""
+    """Open a toolbar menu and return its item, waiting for the overlay to render.
+
+    The wait matters: "Add clip" both opens a menu and, clicked again, appends a copy of the clip, so a
+    second click costs a stray clip instead of a retry (measured 2026-09-13 00:39, two copies, 0 credits).
+    """
     page = session.page
     for attempt in range(2):
         await page.get_by_role("button", name=re.compile(button, re.IGNORECASE)).first.click(timeout=8_000)
-        await page.wait_for_timeout(800)
         found = (
             page.locator("[role=menuitem], .cdk-overlay-pane button")
             .filter(has_text=re.compile(item, re.IGNORECASE))
             .first
         )
-        if await found.count():
+        try:
+            await found.wait_for(state="visible", timeout=6_000)
             return found
-        await page.keyboard.press("Escape")
-        await page.wait_for_timeout(1_500 * (attempt + 1))
+        except PlaywrightTimeoutError:
+            if attempt == 0:
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(1_500)
     raise LookupError(f"menu {button!r} has no item matching {item!r}")
 
 

@@ -17,6 +17,7 @@ from video.session import FlowSession
 _ENTITY_RE = re.compile(r"/character/([A-Za-z0-9-]+)")
 NEW_PAGE = "flow-character-page"
 EDIT_PAGE = "flow-character-edit-page"
+CONFIRM_DIALOG = "flow-confirmation-dialog"
 
 
 def entity_id_from_url(url: str) -> str:
@@ -131,26 +132,28 @@ async def set_personality(
 
 
 async def delete(session: FlowSession, project_id: str, entity_id: str) -> dict[str, Any]:
+    """Trash the character and confirm. Measured 2026-09-13 00:39: the trash icon opens a
+    `flow-confirmation-dialog` ("This character will be permanently deleted.") with Cancel and Delete.
+    Matching overlay panes generically instead picked up the trash button's own tooltip pane."""
     page = session.page
     await _open_editor(session, project_id, entity_id)
-    trash = page.get_by_role("button", name=re.compile("^Delete$", re.IGNORECASE)).first
-    await trash.click(timeout=8_000)
-    # Measured 2026-09-12/13: the confirm is either a mat-dialog with a Delete button or an overlay pane
-    # whose "Delete" is a menu item (fresh characters), so accept a button or a menuitem in any overlay.
-    confirm = (
-        page.locator("[role=dialog], mat-dialog-container, .cdk-overlay-pane")
-        .locator("button, [role=menuitem]")
-        .filter(has_text=re.compile("delete|remove|confirm", re.IGNORECASE))
-        .last
-    )
     frames: dict[str, list[Any]] = {}
     dialog_seen = False
-    try:
-        await confirm.wait_for(state="visible", timeout=8_000)
+    for attempt in range(2):
+        trash = page.get_by_role("button", name=re.compile("^Delete$", re.IGNORECASE)).first
+        await trash.click(timeout=8_000)
+        dialog = page.locator(CONFIRM_DIALOG).last
+        try:
+            await dialog.wait_for(state="visible", timeout=15_000)
+        except PlaywrightTimeoutError:
+            if attempt == 0:
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(2_000)
+            continue
         dialog_seen = True
-        frames = await capture(session, lambda: confirm.click(timeout=8_000), settle=5.0)
-    except PlaywrightTimeoutError:
-        await page.wait_for_timeout(3_000)
+        confirm = dialog.get_by_role("button", name=re.compile("delete|remove|confirm", re.IGNORECASE)).last
+        frames = await capture(session, lambda c=confirm: c.click(timeout=8_000), settle=5.0)
+        break
     remaining = await list_characters(session, project_id)
     if any(c["entity_id"] == entity_id for c in remaining):
         raise RuntimeError(

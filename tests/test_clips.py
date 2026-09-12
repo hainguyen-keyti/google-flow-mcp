@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import cli, gen
 from video.flow import clips
@@ -171,6 +172,72 @@ def test_editor_job_keeps_polling_past_the_scene_copy_until_its_own_record_is_do
     assert [o["role"] for o in result["outputs"]] == ["copy", "generated"]
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("job-9")
     assert [r["status"] for r in rows] == ["submitted", "done"]
+
+
+class _MenuPage:
+    """Toolbar button plus a menu item that becomes visible after `appears_after` wait_for calls."""
+
+    def __init__(self, appears_after: int):
+        self.appears_after = appears_after
+        self.waits = 0
+        self.clicks: list[str] = []
+        self.escapes = 0
+        page = self
+
+        class Item:
+            async def wait_for(self, state=None, timeout=None):
+                page.waits += 1
+                if page.waits <= page.appears_after:
+                    raise PlaywrightTimeoutError("not visible")
+
+        class Chain:
+            def filter(self, has_text=None):
+                return self
+
+            @property
+            def first(self):
+                return Item()
+
+        class Button(Chain):
+            @property
+            def first(self):
+                return self
+
+            async def click(self, timeout=None):
+                page.clicks.append("toolbar")
+
+        class Keyboard:
+            async def press(self, key):
+                page.escapes += 1
+
+        self._chain, self._button, self.keyboard = Chain(), Button(), Keyboard()
+
+    def get_by_role(self, role, name=None):
+        return self._button
+
+    def locator(self, selector):
+        return self._chain
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+def test_menu_item_opens_the_toolbar_menu_once_when_the_item_renders():
+    # A second "Add clip" click appends a copy of the clip, so the helper must wait, not re-click.
+    page = _MenuPage(appears_after=0)
+    session = type("S", (), {"page": page})()
+    assert asyncio.run(clips._menu_item(session, "Add clip", "Extend")) is not None
+    assert page.clicks == ["toolbar"]
+    assert page.escapes == 0
+
+
+def test_menu_item_retries_once_then_reports_the_missing_item():
+    page = _MenuPage(appears_after=99)
+    session = type("S", (), {"page": page})()
+    with pytest.raises(LookupError, match="Extend"):
+        asyncio.run(clips._menu_item(session, "Add clip", "Extend"))
+    assert page.clicks == ["toolbar", "toolbar"]
+    assert page.escapes == 1
 
 
 def test_rendition_labels_match_the_download_media_menu():
