@@ -77,6 +77,20 @@ async def _prompt_ready(page: Any, box: Any, start: Any, prompt: str, timeout: f
     return False
 
 
+async def _await_submit(session: FlowSession, click: Any, *, settle: float = 30.0, patience: float = 90.0):
+    """Click once, then stay on the editor until a request has actually gone out.
+
+    The submit is sent well after the click (measured 2026-09-13: ~20s). Navigating away to poll 15s
+    later cancelled it, costing 0 credits and generating nothing, which looked exactly like a dead click.
+    """
+    frames = await capture(session, click, settle=settle)
+    waited = settle
+    while not frames and waited < patience:
+        frames = await capture(session, lambda: session.page.wait_for_timeout(15_000), settle=0.0)
+        waited += 15.0
+    return frames
+
+
 async def _open(session: FlowSession, project_id: str, media_id: str) -> None:
     await session.goto(f"{session.project_url(project_id)}/edit/{media_id}", ready=EDITOR)
     await session.page.wait_for_timeout(3_000)
@@ -167,7 +181,7 @@ async def _generate_from_editor(
     # Exactly one click, ever. A second click lands in the plain edit box once the editor re-renders and
     # submits a differently priced job on top (measured 2026-09-13: an extra Omni edit, 20 credits).
     # Whether the submit worked is decided by the listing and the credit balance below, not by a retry.
-    frames = await capture(session, lambda: start.click(timeout=8_000), settle=15.0)
+    frames = await _await_submit(session, lambda: start.click(timeout=8_000))
     fresh: list[dict[str, Any]] = []
     scenes_after: set[str] = set()
     deadline = asyncio.get_running_loop().time() + wait

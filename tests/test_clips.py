@@ -292,12 +292,19 @@ def test_editor_job_clicks_generate_once_and_fails_loudly_when_nothing_was_gener
         return _Clickable()
 
     async def silent_capture(session, action, *, settle):
-        clicks.append("generate")
         await action()
         return {}
 
     async def no_sleep(seconds):
         return None
+
+    class RecordingPage(_Page):
+        def get_by_role(self, role, name=None):
+            class Button(_Clickable):
+                async def click(self, timeout=None):
+                    clicks.append("generate")
+
+            return Button()
 
     monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
     monkeypatch.setattr(clips, "_open", fake_open)
@@ -305,16 +312,55 @@ def test_editor_job_clicks_generate_once_and_fails_loudly_when_nothing_was_gener
     monkeypatch.setattr(clips, "capture", silent_capture)
     monkeypatch.setattr(clips.reader, "credits", fake_credits)
     monkeypatch.setattr(clips.asyncio, "sleep", no_sleep)
+    session = type("S", (), {"page": RecordingPage()})()
     with pytest.raises(RuntimeError, match="spent 0 credits"):
         asyncio.run(
             clips._generate_from_editor(
-                _Session(), "p", "src", "keep going", kind="extend", out_dir=tmp_path, job_id="j", wait=5.0
+                session, "p", "src", "keep going", kind="extend", out_dir=tmp_path, job_id="j", wait=5.0
             )
         )
     assert clicks == ["generate"], "Start generation must be clicked exactly once, never retried"
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")
     assert [r["status"] for r in rows] == ["submitted", "failed"]
     assert rows[-1]["spent"] == 0
+
+
+def test_await_submit_stays_on_the_editor_until_a_request_goes_out(monkeypatch):
+    # Measured 2026-09-13 01:05: the submit leaves ~20s after the click, so polling (which navigates
+    # away) 15s later cancelled it: 0 credits, rpcids [], and no generation at all.
+    calls = []
+    replies = iter([{}, {}, {"uwAyfb": [[]]}])
+
+    async def fake_capture(session, action, *, settle):
+        calls.append(settle)
+        await action()
+        return next(replies)
+
+    async def wait_for_timeout(ms):
+        calls.append(f"wait{ms}")
+
+    async def click():
+        calls.append("click")
+
+    monkeypatch.setattr(clips, "capture", fake_capture)
+    session = type("S", (), {"page": type("P", (), {"wait_for_timeout": staticmethod(wait_for_timeout)})()})()
+    frames = asyncio.run(clips._await_submit(session, click, settle=30.0, patience=90.0))
+    assert frames == {"uwAyfb": [[]]}
+    assert calls.count("click") == 1, "the click must never be repeated while waiting"
+    assert calls.count("wait15000") == 2
+
+
+def test_await_submit_gives_up_after_its_patience(monkeypatch):
+    async def always_silent(session, action, *, settle):
+        await action()
+        return {}
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(clips, "capture", always_silent)
+    session = type("S", (), {"page": type("P", (), {"wait_for_timeout": staticmethod(noop)})()})()
+    assert asyncio.run(clips._await_submit(session, noop, settle=30.0, patience=60.0)) == {}
 
 
 def test_rendition_labels_match_the_download_media_menu():
