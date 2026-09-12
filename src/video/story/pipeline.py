@@ -12,12 +12,16 @@ PRICE_PER_SHOT = 10
 
 
 def job_state(ledger: gen.Ledger, job_id: str) -> str:
+    """new, done, retryable (a failure that provably cost nothing) or blocked (money may have moved)."""
     rows = ledger.rows(job_id)
     if any(r.get("status") == "done" for r in rows):
         return "done"
-    if rows:
-        return "blocked"
-    return "new"
+    if not rows:
+        return "new"
+    last = rows[-1]
+    if last.get("status") == "failed" and last.get("spent") == 0:
+        return "retryable"
+    return "blocked"
 
 
 def check_resumable(ledger: gen.Ledger, job_ids: list[str]) -> list[str]:
@@ -31,7 +35,7 @@ def check_resumable(ledger: gen.Ledger, job_ids: list[str]) -> list[str]:
                 f"{job_id} has a submitted row but no done row: credits may already be spent. "
                 f"Check out/story/ledger.jsonl and Flow before rerunning."
             )
-        if state == "new":
+        if state in ("new", "retryable"):
             todo.append(job_id)
     return todo
 

@@ -80,21 +80,31 @@ _PRICE_VISIBLE_JS = (
 )
 
 
-async def _open_settings(page: Any) -> str:
-    """Open the settings panel and wait for its live price line, whatever overlay was open before."""
-    await page.keyboard.press("Escape")
-    await page.wait_for_timeout(600)
-    trigger = page.locator(SETTINGS).first
-    await trigger.wait_for(state="visible", timeout=20_000)
-    await trigger.click(timeout=8_000)
-    try:
-        await page.wait_for_function(_PRICE_VISIBLE_JS, timeout=15_000)
-    except PlaywrightTimeoutError as exc:
-        visible = await page.evaluate(_OVERLAY_TEXT_JS)
-        raise RuntimeError(
-            f"composer settings never showed a price line; overlays said {visible[:200]!r}"
-        ) from exc
-    return await page.evaluate(_OVERLAY_TEXT_JS)
+async def _open_settings(page: Any, label: str = "settings") -> str:
+    """Open the settings panel and wait for its live price line, whatever overlay was open before.
+
+    The trigger toggles, so a panel left open from an earlier step would be closed by the click; Escape
+    first, then click, then wait for the price line to actually render. Retries the toggle once.
+    """
+    for attempt in range(2):
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(800)
+        trigger = page.locator(SETTINGS).first
+        await trigger.wait_for(state="visible", timeout=20_000)
+        await trigger.click(timeout=8_000)
+        try:
+            await page.wait_for_function(_PRICE_VISIBLE_JS, timeout=12_000)
+            return await page.evaluate(_OVERLAY_TEXT_JS)
+        except PlaywrightTimeoutError:
+            if attempt == 0:
+                continue
+            visible = await page.evaluate(_OVERLAY_TEXT_JS)
+            await page.screenshot(path=f"out/t4_settings_fail_{label}.png")
+            raise RuntimeError(
+                f"composer settings never showed a price line at step {label!r}; "
+                f"overlays said {visible[:200]!r} (screenshot out/t4_settings_fail_{label}.png)"
+            ) from None
+    raise RuntimeError(f"composer settings unreachable at step {label!r}")
 
 
 async def configure(
@@ -103,16 +113,32 @@ async def configure(
     mode: str = "Ingredients",
     aspect: str = "9:16",
     count: str = "x1",
+    label: str = "settings",
 ) -> dict[str, Any]:
     """Write every composer setting and report the price the UI now quotes."""
     page = session.page
-    await _open_settings(page)
+    await _open_settings(page, label)
     applied = {name: await _click_option(page, name) for name in (mode, aspect, count)}
     text = await page.evaluate(_OVERLAY_TEXT_JS)
     price = price_from(text)
     await page.keyboard.press("Escape")
     await page.wait_for_timeout(1_000)
     return {"applied": applied, "price": price, "settings_text": text[:300]}
+
+
+_NOTICE_JS = """() => [...document.querySelectorAll(
+  '[role=alert], [role=status], .mat-mdc-snack-bar-label, mat-snack-bar-container, [class*=snack], [class*=toast], [class*=error-message], [class*=rejection]')]
+  .filter(e => e.offsetParent !== null)
+  .map(e => (e.innerText || '').trim().replace(/\\s+/g, ' '))
+  .filter(t => t.length > 3).slice(0, 4).join(' | ')"""
+
+
+async def _notice(page: Any) -> str:
+    """Whatever Flow told the user (toast, snackbar, inline refusal). Transient, so read it early."""
+    try:
+        return (await page.evaluate(_NOTICE_JS))[:400]
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _in_picker(page: Any, text: str) -> Any:
@@ -165,8 +191,8 @@ async def generate(
     wait: float = 300.0,
 ) -> dict[str, Any]:
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
-    if ledger.has_submitted(job_id):
-        raise gen.AlreadySubmitted(f"job {job_id} already has a submitted row; nothing was spent")
+    if any(r.get("status") == "done" for r in ledger.rows(job_id)):
+        raise gen.AlreadySubmitted(f"job {job_id} is already done; delete its output to redo it")
     rows, _ = await clips._snapshot(session, project_id)
     before = {r["workflow_id"] for r in rows}
     credits_before = (await reader.credits(session))["balance"]
@@ -174,14 +200,14 @@ async def generate(
     await agent.set_mode(session, project_id, False)
     await session.goto(session.project_url(project_id), ready=PROJECT_READY)
     await session.page.wait_for_timeout(2_500)
-    settings = await configure(session, aspect=aspect)
+    settings = await configure(session, aspect=aspect, label="pre")
     await attach_character(session, character)
     box = session.page.locator("flow-prompt-box [contenteditable='true']").first
     await box.click(timeout=8_000)
     await session.page.keyboard.insert_text(prompt)
     await session.page.wait_for_timeout(1_500)
 
-    confirm = await configure(session, aspect=aspect)
+    confirm = await configure(session, aspect=aspect, label="confirm")
     ensure_price(confirm["price"], expected_credits)
     start = session.page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
     ledger.append(
@@ -195,6 +221,7 @@ async def generate(
         credits_before=credits_before,
     )
     frames = await clips._await_submit(session, lambda: start.click(timeout=8_000))
+    notice = await _notice(session.page)
 
     output, fresh = None, []
     deadline = asyncio.get_running_loop().time() + wait
@@ -222,11 +249,13 @@ async def generate(
         credits_after=credits_after,
         spent=credits_before - credits_after,
         rpcids=sorted(frames),
+        notice=notice or (await _notice(session.page)),
     )
     if not path:
         raise RuntimeError(
             f"{job_id}: nothing was generated within {wait:.0f}s, spent "
-            f"{credits_before - credits_after} credits; rpcids {sorted(frames)}; settings {settings['applied']}"
+            f"{credits_before - credits_after} credits; rpcids {sorted(frames)}; "
+            f"settings {settings['applied']}; Flow said: {notice or '(no message captured)'}"
         )
     return {
         "job_id": job_id,
