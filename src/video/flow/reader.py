@@ -70,10 +70,10 @@ async def project(session: FlowSession, project_id: str, settle: float = 10.0) -
 
 
 async def characters(session: FlowSession, project_id: str) -> list[dict[str, Any]]:
-    url = f"{session.project_url(project_id)}/character"
-    frames = await capture(session, lambda: session.goto(url), settle=8.0)
-    rendered = await session.page.locator("flow-character-page").count() > 0
-    return parsers.characters_or_empty(frames, character_page_rendered=rendered)
+    frames = await capture(
+        session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=8.0
+    )
+    return parsers.characters_from_listing(one(frames, "Zzl0ze"))
 
 
 async def tools(session: FlowSession, project_id: str) -> list[dict[str, Any]]:

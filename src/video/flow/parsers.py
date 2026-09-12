@@ -75,22 +75,56 @@ def video_models(payload: Any) -> list[str]:
     return [arm[0] for arm in arms if isinstance(arm, list) and isinstance(_at(arm, 0), str)]
 
 
-def characters(payload: Any) -> list[dict[str, Any]]:
-    if not isinstance(payload, list):
-        raise TypeError("WuwhI: expected a list")
-    return [{"id": _str(_at(c, 0)), "name": _str(_at(c, 1)), "raw": c} for c in payload]
-
-
-def characters_or_empty(
-    frames: dict[str, list[Any]], *, character_page_rendered: bool
-) -> list[dict[str, Any]]:
-    """A project with no characters renders the New-character page and emits no list rpc (measured
-    2026-09-12 on all 16 projects), so that page is the evidence for an empty list."""
-    if frames.get("WuwhI"):
-        return characters(frames["WuwhI"][0])
-    if character_page_rendered:
+def characters_from_listing(payload: Any) -> list[dict[str, Any]]:
+    """Characters ride inside the project listing: Zzl0ze[5] holds one entry per entity
+    ([_, entity_id, _, [_, name, ...], portrait_media_id, ...]); None when the project has none."""
+    entries = _at(payload, 5)
+    if entries is None:
         return []
-    raise LookupError(f"no character list rpc and no character page; saw {sorted(frames)}")
+    if not isinstance(entries, list):
+        raise TypeError("Zzl0ze[5]: expected a list of character entries")
+    out = []
+    for entry in entries:
+        entity_id = _at(entry, 1)
+        if not _uuid(entity_id):
+            continue
+        out.append(
+            {
+                "entity_id": entity_id,
+                "name": _str(_at(entry, 3, 1)),
+                "portrait_media_id": _str(_at(entry, 4)),
+            }
+        )
+    return out
+
+
+def upload_record(payload: Any) -> dict[str, Any]:
+    """maseQ answers an upload with [[media_id, project_id, workflow_id, "CAE", _, details, ...]]."""
+    record = _at(payload, 0)
+    if not (isinstance(record, list) and _uuid(_at(record, 0)) and _at(record, 3) == "CAE"):
+        raise TypeError("maseQ: expected [[media_id, project_id, workflow_id, 'CAE', ...]]")
+    size = _at(record, 5, 13)
+    return {
+        "media_id": record[0],
+        "project_id": _str(_at(record, 1)),
+        "workflow_id": _str(_at(record, 2)),
+        "size_bytes": size if isinstance(size, int) else None,
+    }
+
+
+def voices_from_listing(payload: Any) -> list[dict[str, Any]]:
+    """Preset voices ride in Zzl0ze[3] as [id, 3, name, ...] entries next to the project's assets."""
+    assets = _at(payload, 3)
+    if not isinstance(assets, list):
+        return []
+    return [
+        {"id": asset[0], "name": asset[2]}
+        for asset in assets
+        if isinstance(asset, list)
+        and _at(asset, 1) == 3
+        and isinstance(_at(asset, 0), str)
+        and isinstance(_at(asset, 2), str)
+    ]
 
 
 def _record_model(record: list[Any]) -> str | None:

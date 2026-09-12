@@ -106,7 +106,7 @@ def characters(project_id: str, profile: str, as_json: bool) -> None:
         click.echo(json.dumps(rows, indent=2))
         return
     for row in rows:
-        click.echo(f"{row['id']}  {row['name']}")
+        click.echo(f"{row['entity_id']}  {row['name']}")
     click.echo(f"characters={len(rows)}")
 
 
@@ -178,6 +178,75 @@ def project_delete(project_id: str, yes: bool, profile: str) -> None:
             "refusing to delete without --yes; Flow deletes clips, ingredients and prompts permanently"
         )
     click.echo(json.dumps(_read(profile, lambda s: projects.delete(s, project_id))))
+
+
+@flow.command()
+@click.argument("project_id")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--profile", default="default", show_default=True)
+def upload(project_id: str, file: str, profile: str) -> None:
+    """Upload a local image or video into a project ($0)."""
+    from pathlib import Path
+
+    from video.flow import uploads
+
+    click.echo(json.dumps(_read(profile, lambda s: uploads.upload(s, project_id, Path(file)))))
+
+
+@flow.command()
+@click.argument("project_id")
+@click.option("--profile", default="default", show_default=True)
+def uploads(project_id: str, profile: str) -> None:
+    """Show the Uploads view of a project: rpcids, item count, tiles ($0)."""
+    from video.flow import uploads as uploads_mod
+
+    click.echo(json.dumps(_read(profile, lambda s: uploads_mod.list_uploads(s, project_id))))
+
+
+@flow.group()
+def character() -> None:
+    """Create, rename, describe and delete characters (portrait generation is credit-free)."""
+
+
+@character.command("create")
+@click.argument("project_id")
+@click.argument("prompt")
+@click.option("--name", default=None)
+@click.option("--personality", default=None)
+@click.option("--wait", default=90.0, show_default=True, type=float, help="Seconds to wait for the portrait.")
+@click.option("--profile", default="default", show_default=True)
+def character_create(
+    project_id: str, prompt: str, name: str | None, personality: str | None, wait: float, profile: str
+) -> None:
+    from video.flow import characters as characters_mod
+
+    result = _read(
+        profile,
+        lambda s: characters_mod.create(s, project_id, prompt, name=name, personality=personality, wait=wait),
+    )
+    click.echo(json.dumps(result))
+
+
+@character.command("list")
+@click.argument("project_id")
+@click.option("--profile", default="default", show_default=True)
+def character_list(project_id: str, profile: str) -> None:
+    from video.flow import characters as characters_mod
+
+    click.echo(json.dumps(_read(profile, lambda s: characters_mod.list_characters(s, project_id))))
+
+
+@character.command("delete")
+@click.argument("project_id")
+@click.argument("entity_id")
+@click.option("--yes", is_flag=True, help="Required: deleting a character is permanent.")
+@click.option("--profile", default="default", show_default=True)
+def character_delete(project_id: str, entity_id: str, yes: bool, profile: str) -> None:
+    from video.flow import characters as characters_mod
+
+    if not yes:
+        raise click.UsageError("refusing to delete without --yes")
+    click.echo(json.dumps(_read(profile, lambda s: characters_mod.delete(s, project_id, entity_id))))
 
 
 @main.group()

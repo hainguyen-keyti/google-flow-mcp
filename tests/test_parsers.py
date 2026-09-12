@@ -42,10 +42,6 @@ def test_video_models_lists_the_available_arms():
     ]
 
 
-def test_characters_empty_project_is_an_empty_list():
-    assert parsers.characters(payload("WuwhI")) == []
-
-
 def test_media_joins_descriptors_with_generation_records():
     media = parsers.media(payload("Zzl0ze"))
     assert len(media) == 15
