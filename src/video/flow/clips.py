@@ -164,13 +164,10 @@ async def _generate_from_editor(
     ledger.append(
         job_id, "submitted", kind=kind, source_media_id=media_id, prompt=prompt, credits_before=credits_before
     )
+    # Exactly one click, ever. A second click lands in the plain edit box once the editor re-renders and
+    # submits a differently priced job on top (measured 2026-09-13: an extra Omni edit, 20 credits).
+    # Whether the submit worked is decided by the listing and the credit balance below, not by a retry.
     frames = await capture(session, lambda: start.click(timeout=8_000), settle=15.0)
-    if not frames and await _prompt_ready(page, box, start, prompt):
-        # The click hit a stale editor (entering Extend re-renders it) and submitted nothing: click again.
-        frames = await capture(session, lambda: start.click(timeout=8_000), settle=15.0)
-    if not frames:
-        ledger.append(job_id, "failed", credits_before=credits_before, credits_after=credits_before, spent=0)
-        raise RuntimeError(f"{kind}: Start generation fired no request, so nothing was submitted (0 credits)")
     fresh: list[dict[str, Any]] = []
     scenes_after: set[str] = set()
     deadline = asyncio.get_running_loop().time() + wait
@@ -205,7 +202,9 @@ async def _generate_from_editor(
         outputs.append(entry)
     new_scenes = sorted(scenes_after - scenes_before)
     generated = [o for o in outputs if o["role"] == "generated"]
-    status = "done" if generated and all(o["path"] for o in generated) else "pending" if fresh else "failed"
+    status = (
+        "done" if generated and all(o["path"] for o in generated) else "pending" if generated else "failed"
+    )
     ledger.append(
         job_id,
         status,
@@ -216,8 +215,11 @@ async def _generate_from_editor(
         spent=credits_before - credits_after,
         rpcids=sorted(frames),
     )
-    if not fresh:
-        raise RuntimeError(f"{kind}: no new generation record within {wait:.0f}s; rpcids {sorted(frames)}")
+    if not generated:
+        raise RuntimeError(
+            f"{kind}: nothing was generated within {wait:.0f}s, spent {credits_before - credits_after} "
+            f"credits; rpcids {sorted(frames)}"
+        )
     return {
         "job_id": job_id,
         "kind": kind,

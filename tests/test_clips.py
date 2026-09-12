@@ -273,9 +273,12 @@ def test_prompt_ready_types_the_prompt_when_the_editor_box_came_back_empty():
         Box.text = ""
 
 
-def test_editor_job_fails_loudly_when_start_generation_fires_no_request(monkeypatch, tmp_path):
+def test_editor_job_clicks_generate_once_and_fails_loudly_when_nothing_was_generated(monkeypatch, tmp_path):
     # Measured 2026-09-13 00:49: a click on a stale editor submitted nothing, rpcids [] and 0 credits,
-    # yet the job reported "pending" as if it were still generating.
+    # yet the job reported "pending" as if it were still generating. Clicking again is not the answer:
+    # at 00:56 a second click added an Omni edit worth 20 credits on top of the 10-credit extend.
+    clicks = []
+
     async def fake_snapshot(session, project_id):
         return [], set()
 
@@ -289,20 +292,26 @@ def test_editor_job_fails_loudly_when_start_generation_fires_no_request(monkeypa
         return _Clickable()
 
     async def silent_capture(session, action, *, settle):
+        clicks.append("generate")
         await action()
         return {}
+
+    async def no_sleep(seconds):
+        return None
 
     monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
     monkeypatch.setattr(clips, "_open", fake_open)
     monkeypatch.setattr(clips, "_menu_item", fake_menu_item)
     monkeypatch.setattr(clips, "capture", silent_capture)
     monkeypatch.setattr(clips.reader, "credits", fake_credits)
-    with pytest.raises(RuntimeError, match="0 credits"):
+    monkeypatch.setattr(clips.asyncio, "sleep", no_sleep)
+    with pytest.raises(RuntimeError, match="spent 0 credits"):
         asyncio.run(
             clips._generate_from_editor(
                 _Session(), "p", "src", "keep going", kind="extend", out_dir=tmp_path, job_id="j", wait=5.0
             )
         )
+    assert clicks == ["generate"], "Start generation must be clicked exactly once, never retried"
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")
     assert [r["status"] for r in rows] == ["submitted", "failed"]
     assert rows[-1]["spent"] == 0
