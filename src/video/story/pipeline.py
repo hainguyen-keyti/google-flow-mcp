@@ -192,6 +192,16 @@ def _done_path(ledger: gen.Ledger, job_id: str) -> Path | None:
     return Path(done[-1]["path"]) if done else None
 
 
+def worn_path(out_dir: Path, job_id: str) -> Path | None:
+    """The clip after the Omni edit put the garment on her.
+
+    The edit is billed under its own job id and leaves the base row untouched, so whoever reads the
+    ledger would otherwise hand the pre-edit clip to the cut and to the shots that continue from it.
+    """
+    candidate = Path(out_dir) / f"{job_id}_worn.mp4"
+    return candidate if candidate.is_file() else None
+
+
 def picked(ledger: gen.Ledger, row: dict[str, Any]) -> str | None:
     """The take a human chose for this shot, if one was chosen."""
     picks = [r for r in ledger.rows(row["job_id"]) if r.get("status") == "selected"]
@@ -253,6 +263,10 @@ def clip_paths(out_dir: Path) -> list[tuple[str, Path]]:
     found, missing = [], []
     for row in shots2.plan():
         takes = {job: _done_path(ledger, job) for job in take_ids(row["job_id"], row["hands_risk"])}
+        if row["edit_to_product"]:
+            edited = worn_path(out_dir, row["job_id"])
+            if edited is not None:
+                takes[row["job_id"]] = edited
         done = {job: path for job, path in takes.items() if path is not None}
         pick = picked(ledger, row)
         if pick and pick in done:
@@ -350,6 +364,9 @@ async def run2(
             if job not in todo:
                 done = [r for r in ledger.rows(job) if r.get("status") == "done"]
                 path = done[-1].get("path") if done else None
+                if row["edit_to_product"]:
+                    edited = worn_path(out_dir, job)
+                    path = str(edited) if edited is not None else path
                 if index == 0:
                     paths[key] = path
                 results.append({"job_id": job, "key": key, "status": "already done", "path": path})

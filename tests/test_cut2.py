@@ -99,6 +99,24 @@ def test_picking_a_take_the_next_shot_did_not_continue_from_is_reported(tmp_path
     assert pipeline.inconsistent_chain(tmp_path) == []
 
 
+def test_the_edited_reveal_is_what_goes_into_the_cut_not_the_clip_before_the_edit(tmp_path):
+    # The Omni edit is the shot that has the garment on her; the ledger row still names the base clip,
+    # so both the cut and the shots that continue from it must take the edited file.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    for index, shot in enumerate(shots2.SHOTS, start=1):
+        for job in pipeline.take_ids(shots2.job_id(index), shot.hands_risk):
+            ledger.append(job, "done", path=str(tmp_path / f"{job}.mp4"), spent=10)
+    pipeline.select(tmp_path, "wardrobe", "tryon2-02", "cleaner hand")
+    pipeline.select(tmp_path, "pose", "tryon2-05", "cleaner hand")
+
+    paths = dict(pipeline.clip_paths(tmp_path))
+    assert paths["reveal"] == tmp_path / "tryon2-04.mp4", "no edited file yet, so the base clip stands"
+
+    worn = tmp_path / "tryon2-04_worn.mp4"
+    worn.write_bytes(b"mp4")
+    assert dict(pipeline.clip_paths(tmp_path))["reveal"] == worn
+
+
 def test_build2_refuses_to_stitch_a_chain_with_a_missing_shot(tmp_path):
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     ledger.append(shots2.job_id(1), "done", path=str(tmp_path / "tryon2-01.mp4"))
