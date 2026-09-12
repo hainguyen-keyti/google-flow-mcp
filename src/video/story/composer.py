@@ -172,6 +172,23 @@ _STATE_JS = """() => ({
 })"""
 
 
+async def _type_prompt(page: Any, box: Any, prompt: str, attempts: int = 3) -> bool:
+    """Type the prompt and prove it is really in the box.
+
+    An attached ingredient chip is enough to enable Start generation on its own, so a prompt that never
+    landed submits an empty job: a request goes out, nothing is generated and nothing is billed
+    (measured 2026-09-13 on tryon2-01, twice).
+    """
+    needle = prompt.strip()[:40]
+    for _ in range(attempts):
+        await box.click(timeout=8_000)
+        await page.keyboard.insert_text(prompt)
+        await page.wait_for_timeout(2_000)
+        if needle.lower() in (await box.inner_text()).lower():
+            return True
+    return False
+
+
 async def clear_prompt(session: FlowSession) -> dict[str, Any]:
     """Empty the composer before building a shot.
 
@@ -280,9 +297,11 @@ async def _submit(
     settings = await configure(session, mode=mode, aspect=aspect, label="pre")
     await setup(session)
     box = session.page.locator("flow-prompt-box [contenteditable='true']").first
-    await box.click(timeout=8_000)
-    await session.page.keyboard.insert_text(prompt)
-    await session.page.wait_for_timeout(1_500)
+    landed = await _type_prompt(session.page, box, prompt)
+    if not landed:
+        raise RuntimeError(
+            f"{job_id}: the prompt never reached the composer box, refusing to submit an empty job"
+        )
 
     confirm = await configure(session, mode=mode, aspect=aspect, label="confirm")
     ensure_price(confirm["price"], expected_credits)
@@ -296,6 +315,7 @@ async def _submit(
         quoted_credits=confirm["price"],
         credits_before=credits_before,
         left_over=left_over,
+        prompt_landed=landed,
     )
     frames = await clips._await_submit(session, lambda: start.click(timeout=8_000))
     notice = await _notice(session.page)
