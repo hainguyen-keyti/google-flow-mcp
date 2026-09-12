@@ -64,9 +64,12 @@ def test_run2_sends_every_shot_down_the_route_measured_for_it(monkeypatch, tmp_p
         "product",
         "character",
         "edit",
-        "extend",
-        "extend",
-        "extend",
+        "frames",
+        "edit",
+        "frames",
+        "edit",
+        "frames",
+        "edit",
     ]
     jobs = [job for _, job in calls]
     # Hands break on the shots that touch fabric, so each of those is shot twice and judged by eye.
@@ -77,7 +80,7 @@ def test_run2_sends_every_shot_down_the_route_measured_for_it(monkeypatch, tmp_p
 
 def test_run2_continues_the_chain_from_the_first_take_not_the_spare(monkeypatch, tmp_path):
     starts: list[str] = []
-    sources: list[tuple[str, str]] = []
+    framed: list[str] = []
 
     async def fake_persona(session, project_id, **kwargs):
         return {"entity_id": "e", "name": "Mai", "created": False}
@@ -102,16 +105,12 @@ def test_run2_continues_the_chain_from_the_first_take_not_the_spare(monkeypatch,
         return {"media_id": "u"}
 
     def fake_last_frame(clip, out):
+        framed.append(str(clip))
         out.write_bytes(b"png")
         return out
 
     async def fake_refetch(session, project_id, media_id, stem):
         return stem.with_suffix(".mp4")
-
-    async def fake_extend(session, project_id, media_id, prompt, **kwargs):
-        job = kwargs.get("job_id", "")
-        sources.append((job, media_id))
-        return {"outputs": [{"media_id": f"{media_id}+", "path": str(tmp_path / "ext.mp4")}], "spent": 10}
 
     monkeypatch.setattr(pipeline.persona, "ensure", fake_persona)
     monkeypatch.setattr(pipeline.product, "ensure", fake_product)
@@ -119,17 +118,28 @@ def test_run2_continues_the_chain_from_the_first_take_not_the_spare(monkeypatch,
     monkeypatch.setattr(pipeline.composer, "generate_from_frame", fake_frames)
     monkeypatch.setattr(pipeline, "_generate_with_product", fake_product_shot)
     monkeypatch.setattr(pipeline.clips, "edit", fake_edit)
-    monkeypatch.setattr(pipeline.clips, "extend", fake_extend)
     monkeypatch.setattr(pipeline.uploads_mod, "upload", fake_upload)
     monkeypatch.setattr(pipeline.post, "last_frame", fake_last_frame)
     monkeypatch.setattr(pipeline, "_refetch_720", fake_refetch)
 
     asyncio.run(pipeline.run2(None, "P", out_dir=tmp_path, wait=1.0))
 
-    # Both takes of a shot start from the same frame, and only the frames route pins a still at all.
-    assert starts == ["tryon2-02<-tryon2-02_start.png", "tryon2-02b<-tryon2-02b_start.png"]
-    # The shots after the reveal continue the edited clip, which shares the base clip's media id.
-    assert sources == [("tryon2-05", "m"), ("tryon2-05b", "m"), ("tryon2-06", "m+")]
+    # Both takes of a shot start from the same frame, and the next shot follows the first take.
+    assert starts == [
+        "tryon2-02<-tryon2-02_start.png",
+        "tryon2-02b<-tryon2-02b_start.png",
+        "tryon2-05<-tryon2-05_start.png",
+        "tryon2-05b<-tryon2-05b_start.png",
+        "tryon2-06<-tryon2-06_start.png",
+    ]
+    # A frame is cut from the clip BEFORE its edit: a still of her in the set is refused by Flow.
+    assert framed == [
+        str(tmp_path / "tryon2-01.mp4"),
+        str(tmp_path / "tryon2-01.mp4"),
+        str(tmp_path / "tryon2-04.mp4"),
+        str(tmp_path / "tryon2-04.mp4"),
+        str(tmp_path / "tryon2-05.mp4"),
+    ]
 
 
 def test_run2_skips_shots_already_done(monkeypatch, tmp_path):
@@ -155,72 +165,3 @@ def test_run2_skips_shots_already_done(monkeypatch, tmp_path):
 
     result = asyncio.run(pipeline.run2(None, "P", out_dir=tmp_path, wait=1.0))
     assert all(s["status"] == "already done" for s in result["shots"])
-
-
-def test_run2_can_continue_a_single_shot_from_what_the_ledger_already_holds(monkeypatch, tmp_path):
-    # `--only pose` must still find the reveal it continues: the source lives in the ledger, not in a
-    # variable this run happened to fill in.
-    sources: list[str] = []
-    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append("tryon2-04", "done", path=str(tmp_path / "tryon2-04.mp4"), media_id="m4", spent=10)
-    ledger.append("tryon2-04-edit", "done", outputs=[{"media_id": "m4", "path": "x"}], spent=20)
-
-    async def fake_persona(session, project_id, **kwargs):
-        return {"entity_id": "e", "name": "Mai", "created": False}
-
-    async def fake_product(session, project_id):
-        return {"media_id": "p"}
-
-    async def fake_extend(session, project_id, media_id, prompt, **kwargs):
-        sources.append(media_id)
-        return {"outputs": [{"media_id": "m5", "path": str(tmp_path / "ext.mp4")}], "spent": 10}
-
-    async def fake_refetch(session, project_id, media_id, stem):
-        return stem.with_suffix(".mp4")
-
-    monkeypatch.setattr(pipeline.persona, "ensure", fake_persona)
-    monkeypatch.setattr(pipeline.product, "ensure", fake_product)
-    monkeypatch.setattr(pipeline.clips, "extend", fake_extend)
-    monkeypatch.setattr(pipeline, "_refetch_720", fake_refetch)
-
-    asyncio.run(pipeline.run2(None, "P", out_dir=tmp_path, only=["pose"], wait=1.0))
-    assert sources == ["m4", "m4"], "both takes of the pose continue the reveal the ledger knows about"
-
-
-def test_an_extend_retry_takes_a_fresh_job_id_and_still_settles_the_shot_once(monkeypatch, tmp_path):
-    # The clip editor refuses any job id that ever reached "submitted", even when that attempt cost
-    # nothing, so a retry needs its own id; the shot itself must still read as exactly one done row.
-    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append("tryon2-04", "done", path=str(tmp_path / "tryon2-04.mp4"), media_id="m4", spent=10)
-    ledger.append("tryon2-05", "submitted", kind="frames")
-    ledger.append("tryon2-05", "failed", spent=0)
-    used: list[str] = []
-
-    async def fake_persona(session, project_id, **kwargs):
-        return {"entity_id": "e", "name": "Mai", "created": False}
-
-    async def fake_product(session, project_id):
-        return {"media_id": "p"}
-
-    async def fake_extend(session, project_id, media_id, prompt, **kwargs):
-        job = kwargs["job_id"]
-        used.append(job)
-        gen.Ledger(tmp_path / "ledger.jsonl").append(job, "done", outputs=[{"media_id": "m5"}], spent=10)
-        return {"outputs": [{"media_id": "m5", "path": str(tmp_path / "ext.mp4")}], "spent": 10}
-
-    async def fake_refetch(session, project_id, media_id, stem):
-        return stem.with_suffix(".mp4")
-
-    monkeypatch.setattr(pipeline.persona, "ensure", fake_persona)
-    monkeypatch.setattr(pipeline.product, "ensure", fake_product)
-    monkeypatch.setattr(pipeline.clips, "extend", fake_extend)
-    monkeypatch.setattr(pipeline, "_refetch_720", fake_refetch)
-
-    asyncio.run(pipeline.run2(None, "P", out_dir=tmp_path, only=["pose"], wait=1.0))
-
-    assert used == ["tryon2-05-try2", "tryon2-05b"], used
-    fresh = gen.Ledger(tmp_path / "ledger.jsonl")
-    done = [r for r in fresh.rows("tryon2-05") if r.get("status") == "done"]
-    assert len(done) == 1, done
-    assert done[0]["reused_from"] == "tryon2-05-try2" and done[0]["spent"] == 0
-    assert done[0]["media_id"] == "m5"

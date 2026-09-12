@@ -21,15 +21,17 @@ def test_each_shot_uses_the_route_measured_for_its_job():
         "wardrobe": "frames",
         "fabric": "product",
         "reveal": "character",
-        "pose": "extend",
-        "closing": "extend",
+        "pose": "frames",
+        "closing": "frames",
     }
     assert all(s.start_from is None for s in shots2.SHOTS if s.mode in ("character", "product"))
 
 
-def test_only_the_reveal_is_edited_into_the_product():
+def test_every_shot_that_shows_the_set_pays_for_its_own_edit():
+    # Words cannot put the set on her and a frame of her wearing it is refused, so the only way in is the
+    # Omni edit, once per shot that shows it.
     edited = [s.key for s in shots2.SHOTS if s.edit_to_product]
-    assert edited == ["reveal"], "one paid Omni edit; the later shots inherit the outfit through frames"
+    assert edited == ["reveal", "pose", "closing"]
 
 
 def test_every_continued_shot_follows_the_one_before_it():
@@ -37,10 +39,7 @@ def test_every_continued_shot_follows_the_one_before_it():
     for index, shot in enumerate(shots2.SHOTS):
         if shot.start_from:
             assert shot.start_from == keys[index - 1], f"{shot.key} must continue {keys[index - 1]}"
-    # Flow refuses to generate from a pinned frame of her in the set (measured 2026-09-13: submit taken,
-    # no record, no charge), so the shots after the reveal continue the clip itself instead.
-    assert [s.key for s in shots2.SHOTS if s.mode == "extend"] == ["pose", "closing"]
-    assert [s.key for s in shots2.SHOTS if s.mode == "frames"] == ["wardrobe"]
+    assert [s.key for s in shots2.SHOTS if s.mode == "frames"] == ["wardrobe", "pose", "closing"]
 
 
 def test_the_product_photo_is_used_only_where_no_face_is_needed():
@@ -50,9 +49,9 @@ def test_the_product_photo_is_used_only_where_no_face_is_needed():
     assert shots2.by_key("hook").product is False
 
 
-def test_expected_credits_counts_the_omni_edit_and_the_extra_takes():
-    # 6 shots at 10, plus 2 extra takes for the hands-risky shots, plus 20 for the one Omni edit.
-    assert shots2.expected_credits() == 6 * 10 + 2 * 10 + 20
+def test_expected_credits_counts_every_omni_edit_and_the_extra_takes():
+    # 6 shots at 10, plus 2 extra takes for the hands-risky shots, plus 20 for each of the 3 edits.
+    assert shots2.expected_credits() == 6 * 10 + 2 * 10 + 3 * 20
 
 
 def test_the_garment_is_named_once_and_then_inherited_not_described_again():
@@ -83,17 +82,14 @@ def test_the_fabric_shot_keeps_hands_out_of_frame():
 
 
 def test_every_shot_declares_its_duration_for_acceptance_to_read():
-    # Measured: a fresh generation is 8.01s, an extend is 7.01s.
-    assert {s.key: s.duration for s in shots2.SHOTS if s.mode == "extend"} == {"pose": 7, "closing": 7}
-    assert all(s.duration == 8 for s in shots2.SHOTS if s.mode != "extend")
-    assert shots2.total_seconds() == 4 * 8 + 2 * 7
+    assert all(s.duration == 8 for s in shots2.SHOTS)
+    assert shots2.total_seconds() == 6 * 8
 
 
 def test_captions_run_back_to_back_over_the_whole_cut():
     windows = shots2.captions()
     assert len(windows) == 6
     assert windows[0][0] == 0.0 and windows[-1][1] == float(shots2.total_seconds())
-    assert windows[-1][1] - windows[-1][0] == 7.0
     for index, (start, end, text) in enumerate(windows):
         assert text.strip()
         if index:

@@ -9,10 +9,10 @@ Why it is shaped like this, all measured:
   only the clothing.
 - Frames mode pins the first frame from a project image, so `wardrobe` starts from the last frame of the
   hook and inherits the room, the outfit, the face and the position.
-- After the reveal that route is closed: Flow takes the submit, creates no job and charges nothing when the
-  pinned frame shows her in the set (measured 2026-09-13 on `pose`). So `pose` and `closing` continue the
-  reveal CLIP itself through the editor, the same surface that accepted the Omni edit. That is also why
-  only `reveal` is edited: the shots after it inherit the garment for free, and they run 7s not 8s.
+- A pinned frame of her already IN the set is refused: Flow takes the submit, creates no job and charges
+  nothing (measured 2026-09-13 on `pose`). So `pose` and `closing` pin the last frame of the shot before
+  them as it was BEFORE its edit, in her own clothes, and each pays its own Omni edit to put the set on.
+  The clip editor was not a way around it: it opens the pre-edit version and its extend panel never came up.
 - Two real cuts remain, both cuts a real edit would make anyway: into the product close-up and into the
   reveal.
 - Veo mangles hands that manipulate fabric (Plan 2: tryon-03 lost a hand, tryon-05 fused fingers), so
@@ -111,8 +111,7 @@ SHOTS: tuple[Shot, ...] = (
     ),
     Shot(
         key="pose",
-        mode="extend",
-        duration=7,
+        edit_to_product=True,
         beat="show the fit: one slow turn so the cut and the drape read on camera",
         caption="Xoay một vòng cho dễ hình dung",
         hands_risk=True,
@@ -126,8 +125,7 @@ SHOTS: tuple[Shot, ...] = (
     ),
     Shot(
         key="closing",
-        mode="extend",
-        duration=7,
+        edit_to_product=True,
         beat="close the sale: she looks back at the viewer and invites the order",
         caption="Inbox chốt đơn nha",
         start_from="pose",
