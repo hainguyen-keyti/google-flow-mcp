@@ -43,11 +43,17 @@ def row(name: str, status: str, detail: str) -> None:
 
 
 def last_json(text: str):
-    for line in reversed(text.strip().splitlines()):
-        line = line.strip()
-        if line.startswith(("{", "[")):
-            return json.loads(line)
-    return json.loads(text)
+    """The JSON document ending the output: compact or pretty-printed, after any log lines."""
+    lines = text.strip().splitlines()
+    for start in range(len(lines)):
+        tail = "\n".join(lines[start:]).strip()
+        if not tail.startswith(("{", "[")):
+            continue
+        try:
+            return json.loads(tail)
+        except ValueError:
+            continue
+    raise ValueError(f"no JSON document in output: {text[-200:]!r}")
 
 
 def ffprobe(path: Path) -> dict:
