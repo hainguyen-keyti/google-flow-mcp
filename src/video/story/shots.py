@@ -25,6 +25,7 @@ _CREAM_DRESS = "cream lace slip dress with fine floral embroidery and a small ri
 class Shot:
     key: str
     beat: str
+    caption: str
     scene: bible.Scene
 
 
@@ -32,6 +33,7 @@ SHOTS: tuple[Shot, ...] = (
     Shot(
         key="hook",
         beat="stop the scroll: the seller greets the viewer from her room",
+        caption="Hôm nay thử đồ mới nha",
         scene=bible.Scene(
             camera="medium environmental portrait, 35mm equivalent, vertical framing, camera at eye level",
             pose="sitting on the edge of the bed, turning to the camera and giving a small wave",
@@ -42,6 +44,7 @@ SHOTS: tuple[Shot, ...] = (
     Shot(
         key="wardrobe",
         beat="show the stock: a full rail of pieces the viewer can buy",
+        caption="Cả tủ đều có sẵn size",
         scene=bible.Scene(
             camera="wide shot from the corner of the room, 24mm equivalent, vertical framing",
             pose="standing in front of the open wardrobe, running one hand along the hanging clothes",
@@ -52,6 +55,7 @@ SHOTS: tuple[Shot, ...] = (
     Shot(
         key="holdup",
         beat="present the product: one piece held up so the fabric reads on camera",
+        caption="Váy ren kem, vải mềm mát",
         scene=bible.Scene(
             camera="medium shot from the front, 50mm equivalent, vertical framing, shallow but natural depth",
             pose="holding the dress on its hanger up against her body and tilting her head to look at it",
@@ -62,6 +66,7 @@ SHOTS: tuple[Shot, ...] = (
     Shot(
         key="tryon",
         beat="the try-on itself: the dress worn and turned so the cut and drape are visible",
+        caption="Lên dáng đẹp lắm nè",
         scene=bible.Scene(
             camera="full-body mirror selfie, phone selfie perspective, vertical framing",
             pose="wearing the dress and turning slowly from front to three-quarter so the skirt moves",
@@ -72,6 +77,7 @@ SHOTS: tuple[Shot, ...] = (
     Shot(
         key="closing",
         beat="close the sale: she points at the folded pieces laid out for the viewer",
+        caption="Inbox chốt đơn nha",
         scene=bible.Scene(
             camera="high-angle shot looking slightly downward, 35mm equivalent, vertical framing",
             pose="sitting on the bed beside neatly folded clothes, gesturing toward them with an open hand",
@@ -97,4 +103,12 @@ def plan(data: dict[str, Any] | None = None) -> list[dict[str, Any]]:
             "prompt": bible.compose(shot.scene, data),
         }
         for index, shot in enumerate(SHOTS, start=1)
+    ]
+
+
+def captions() -> list[tuple[float, float, str]]:
+    """Caption windows laid back to back, one per shot, in cut order."""
+    return [
+        (index * float(DURATION), (index + 1) * float(DURATION), shot.caption)
+        for index, shot in enumerate(SHOTS)
     ]

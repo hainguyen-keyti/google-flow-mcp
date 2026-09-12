@@ -450,6 +450,27 @@ def story_run(project_id: str, out_dir: str, only: str | None, wait: float, pric
     click.echo(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+@story.command("build")
+@click.option("--out", "out_dir", default="out/story", show_default=True, type=click.Path(file_okay=False))
+def story_build(out_dir: str) -> None:
+    """Stitch the shots into one vertical video with captions, plus a QC contact sheet ($0, ffmpeg only)."""
+    from pathlib import Path
+
+    from video import post
+    from video.story import shots
+
+    directory = Path(out_dir)
+    clips = [directory / f"{shots.job_id(i)}.mp4" for i in range(1, len(shots.SHOTS) + 1)]
+    missing = [str(c) for c in clips if not c.is_file()]
+    if missing:
+        raise click.ClickException(f"missing shots: {', '.join(missing)}; run 'video story run' first")
+    final = post.concat_with_captions(
+        clips, shots.captions(), directory / "tryon_final.mp4", clip_seconds=float(shots.DURATION)
+    )
+    sheet = post.contact_sheet(clips, directory / "contact_sheet.jpg")
+    click.echo(json.dumps({"final": str(final), "contact_sheet": str(sheet), "clips": len(clips)}, indent=2))
+
+
 @story.command("reconcile")
 @click.argument("project_id")
 @click.option("--out", "out_dir", default="out/story", show_default=True, type=click.Path(file_okay=False))

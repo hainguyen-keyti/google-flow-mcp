@@ -34,6 +34,18 @@ def test_every_shot_is_a_complete_scene_with_its_own_look():
     assert len(outfits) >= 2, "a try-on video has to show more than one outfit"
 
 
+def test_captions_cover_the_whole_cut_back_to_back():
+    windows = shots.captions()
+    assert len(windows) == 5
+    assert windows[0][0] == 0.0
+    assert windows[-1][1] == 5 * shots.DURATION
+    for index, (start, end, text) in enumerate(windows):
+        assert end - start == shots.DURATION
+        assert text.strip(), f"shot {index} has no selling line"
+        if index:
+            assert start == windows[index - 1][1], "captions must not leave a silent gap"
+
+
 def test_plan_carries_the_locked_prompt_and_the_job_id():
     rows = shots.plan()
     assert [r["key"] for r in rows] == [s.key for s in shots.SHOTS]
