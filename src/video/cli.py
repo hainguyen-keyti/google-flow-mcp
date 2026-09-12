@@ -429,6 +429,27 @@ def story_plan(as_json: bool) -> None:
     click.echo(f"shots={len(rows)} aspect={shots.ASPECT} model={shots.MODEL} duration={shots.DURATION}s")
 
 
+@story.command("run")
+@click.argument("project_id")
+@click.option("--out", "out_dir", default="out/story", show_default=True, type=click.Path(file_okay=False))
+@click.option("--only", default=None, help="Comma-separated shot keys, e.g. 'hook,tryon'.")
+@click.option("--wait", default=300.0, show_default=True, type=float)
+@click.option("--price", default=10, show_default=True, help="Credits each shot may cost; a mismatch aborts.")
+@click.option("--profile", default="default", show_default=True)
+def story_run(project_id: str, out_dir: str, only: str | None, wait: float, price: int, profile: str) -> None:
+    """Generate the try-on shots with the character attached (SPENDS CREDITS, ledgered)."""
+    from pathlib import Path
+
+    from video.story import pipeline
+
+    keys = [k.strip() for k in only.split(",")] if only else None
+    result = _read(
+        profile,
+        lambda s: pipeline.run(s, project_id, out_dir=Path(out_dir), only=keys, wait=wait, price=price),
+    )
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 @main.group()
 def mcp() -> None:
     """Model Context Protocol server exposing every command above."""
