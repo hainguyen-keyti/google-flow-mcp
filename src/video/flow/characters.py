@@ -135,19 +135,19 @@ async def delete(session: FlowSession, project_id: str, entity_id: str) -> dict[
     await _open_editor(session, project_id, entity_id)
     trash = page.get_by_role("button", name=re.compile("^Delete$", re.IGNORECASE)).first
     await trash.click(timeout=8_000)
-    # Measured 2026-09-12 23:53: the confirm is an overlay pane holding a single "Delete" button (earlier
-    # that day it was a mat-dialog), so accept either container and click the button inside it.
-    dialog = (
+    # Measured 2026-09-12/13: the confirm is either a mat-dialog with a Delete button or an overlay pane
+    # whose "Delete" is a menu item (fresh characters), so accept a button or a menuitem in any overlay.
+    confirm = (
         page.locator("[role=dialog], mat-dialog-container, .cdk-overlay-pane")
-        .filter(has=page.get_by_role("button", name=re.compile("delete|remove|confirm", re.IGNORECASE)))
+        .locator("button, [role=menuitem]")
+        .filter(has_text=re.compile("delete|remove|confirm", re.IGNORECASE))
         .last
     )
     frames: dict[str, list[Any]] = {}
     dialog_seen = False
     try:
-        await dialog.wait_for(state="visible", timeout=8_000)
+        await confirm.wait_for(state="visible", timeout=8_000)
         dialog_seen = True
-        confirm = dialog.get_by_role("button", name=re.compile("delete|remove|confirm", re.IGNORECASE)).first
         frames = await capture(session, lambda: confirm.click(timeout=8_000), settle=5.0)
     except PlaywrightTimeoutError:
         await page.wait_for_timeout(3_000)
