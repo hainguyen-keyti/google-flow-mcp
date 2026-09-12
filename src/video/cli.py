@@ -249,6 +249,73 @@ def character_delete(project_id: str, entity_id: str, yes: bool, profile: str) -
     click.echo(json.dumps(_read(profile, lambda s: characters_mod.delete(s, project_id, entity_id))))
 
 
+@flow.group()
+def scene() -> None:
+    """Create and trash scenes (Scenebuilder) ($0)."""
+
+
+@scene.command("create")
+@click.argument("project_id")
+@click.option("--title", default=None)
+@click.option("--profile", default="default", show_default=True)
+def scene_create(project_id: str, title: str | None, profile: str) -> None:
+    from video.flow import scenes
+
+    click.echo(json.dumps(_read(profile, lambda s: scenes.create(s, project_id, title))))
+
+
+@scene.command("delete")
+@click.argument("project_id")
+@click.argument("scene_id")
+@click.option("--yes", is_flag=True)
+@click.option("--profile", default="default", show_default=True)
+def scene_delete(project_id: str, scene_id: str, yes: bool, profile: str) -> None:
+    from video.flow import scenes
+
+    if not yes:
+        raise click.UsageError("refusing to trash a scene without --yes")
+    click.echo(json.dumps(_read(profile, lambda s: scenes.delete(s, project_id, scene_id))))
+
+
+@flow.group()
+def agent() -> None:
+    """Flow Agent mode: toggle, or send a message (the agent may generate, spending credits)."""
+
+
+@agent.command("mode")
+@click.argument("project_id")
+@click.argument("state", type=click.Choice(["on", "off"]))
+@click.option("--profile", default="default", show_default=True)
+def agent_mode(project_id: str, state: str, profile: str) -> None:
+    from video.flow import agent as agent_mod
+
+    click.echo(json.dumps(_read(profile, lambda s: agent_mod.set_mode(s, project_id, state == "on"))))
+
+
+@agent.command("send")
+@click.argument("project_id")
+@click.argument("message")
+@click.option("--wait", default=60.0, show_default=True, type=float)
+@click.option("--profile", default="default", show_default=True)
+def agent_send(project_id: str, message: str, wait: float, profile: str) -> None:
+    from video.flow import agent as agent_mod
+
+    click.echo(json.dumps(_read(profile, lambda s: agent_mod.send(s, project_id, message, wait))))
+
+
+@main.group()
+def mcp() -> None:
+    """Model Context Protocol server exposing every command above."""
+
+
+@mcp.command("run")
+def mcp_run() -> None:
+    """Serve over stdio (for Claude Code .mcp.json, Claude Desktop, Cursor)."""
+    from video import mcp_server
+
+    mcp_server.run_stdio()
+
+
 @main.group()
 def gen() -> None:
     """Generate on Flow through gflow; every job is ledgered in OUT/ledger.jsonl (spends credits)."""

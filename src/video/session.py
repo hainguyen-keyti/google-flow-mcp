@@ -21,7 +21,8 @@ _GUARD = threading.Lock()
 
 MIGRATED_ROOT = "https://flow.google.com/"
 GRID_READY = 'a[href*="/project/"]'
-PROJECT_READY = ".settings-trigger-button"
+PROJECT_READY = "flow-project-page"
+COMPOSER_READY = ".settings-trigger-button"
 
 
 def profile_dir_for(profile: str) -> Path:

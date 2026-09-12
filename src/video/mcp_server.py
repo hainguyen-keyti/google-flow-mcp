@@ -1,0 +1,348 @@
+"""MCP server over stdio: every CLI capability as a tool. One browser session per call; FlowSession's
+guard serializes concurrent calls (I4). Generate tools spend credits and are ledgered like the CLI."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import Any
+
+from mcp.server import MCPServer
+
+from video import gen as gen_mod
+from video.flow import characters as characters_mod
+from video.flow import download as download_mod
+from video.flow import lane as lane_mod
+from video.flow import projects as projects_mod
+from video.flow import reader
+from video.flow import uploads as uploads_mod
+from video.session import FlowSession
+
+
+class Backend:
+    def __init__(self, profile: str = "default", out_dir: Path = Path("out")) -> None:
+        self.profile = profile
+        self.out_dir = out_dir
+
+    async def _with(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
+        async with FlowSession(self.profile) as session:
+            return await fn(session)
+
+    async def lane(self) -> dict[str, Any]:
+        return await self._with(lane_mod.run)
+
+    async def projects(self) -> list[dict[str, Any]]:
+        return await self._with(reader.projects)
+
+    async def credits(self) -> dict[str, Any]:
+        return await self._with(reader.credits)
+
+    async def media(self, project_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: reader.project(s, project_id))
+
+    async def characters(self, project_id: str) -> list[dict[str, Any]]:
+        return await self._with(lambda s: characters_mod.list_characters(s, project_id))
+
+    async def tools(self, project_id: str) -> list[dict[str, Any]]:
+        return await self._with(lambda s: reader.tools(s, project_id))
+
+    async def download(self, project_id: str, media_id: str, out_dir: str | None = None) -> str:
+        target = Path(out_dir) if out_dir else self.out_dir
+        return str(await self._with(lambda s: download_mod.download(s, project_id, media_id, target)))
+
+    async def upload(self, project_id: str, path: str) -> dict[str, Any]:
+        return await self._with(lambda s: uploads_mod.upload(s, project_id, Path(path)))
+
+    async def project_create(self, title: str | None = None) -> dict[str, Any]:
+        return await self._with(lambda s: projects_mod.create(s, title))
+
+    async def project_rename(self, project_id: str, title: str) -> str:
+        return await self._with(lambda s: projects_mod.rename(s, project_id, title))
+
+    async def project_delete(self, project_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: projects_mod.delete(s, project_id))
+
+    async def character_create(
+        self,
+        project_id: str,
+        prompt: str,
+        name: str | None = None,
+        personality: str | None = None,
+        wait: float = 90.0,
+    ) -> dict[str, Any]:
+        return await self._with(
+            lambda s: characters_mod.create(
+                s, project_id, prompt, name=name, personality=personality, wait=wait
+            )
+        )
+
+    async def character_delete(self, project_id: str, entity_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: characters_mod.delete(s, project_id, entity_id))
+
+    async def generate(
+        self,
+        *,
+        kind: str,
+        prompt: str,
+        project: str,
+        model: str | None = None,
+        aspect: str | None = None,
+        count: int = 1,
+        duration: int | None = None,
+        initial_frame: str | None = None,
+        end_frame: str | None = None,
+        refs: list[str] | None = None,
+        job_id: str | None = None,
+        out_dir: str | None = None,
+    ) -> dict[str, Any]:
+        job = gen_mod.Job(
+            job_id=job_id or str(uuid.uuid4()),
+            kind=kind,
+            prompt=prompt,
+            project=project,
+            model=model,
+            aspect=aspect,
+            count=count,
+            duration=duration,
+            initial_frame=Path(initial_frame) if initial_frame else None,
+            end_frame=Path(end_frame) if end_frame else None,
+            refs=[Path(r) for r in refs or []],
+        )
+        target = Path(out_dir) if out_dir else self.out_dir
+        return await gen_mod.run_job(
+            job, target, read_credits=lambda: gen_mod.read_credits_live(self.profile)
+        )
+
+
+backend = Backend()
+server = MCPServer(
+    "video",
+    instructions=(
+        "Google Flow (flow.google.com) control for this account. flow_* and project_*/character_* tools "
+        "are free; gen_* tools spend Flow credits and are recorded in out/ledger.jsonl. Always pass an "
+        "existing project id: this account cannot create projects through gflow."
+    ),
+)
+
+
+def _json(data: Any) -> str:
+    return json.dumps(data, ensure_ascii=False, default=str)
+
+
+def _require(value: str, name: str) -> None:
+    if not value:
+        raise ValueError(f"{name} is required")
+
+
+@server.tool(name="flow_lane", description="Which lane the profile is on (LABS, MIGRATED, SIGNED_OUT). Free.")
+async def flow_lane() -> str:
+    return _json(await backend.lane())
+
+
+@server.tool(name="flow_projects", description="List the account's Flow projects (id, title, created). Free.")
+async def flow_projects() -> str:
+    return _json(await backend.projects())
+
+
+@server.tool(name="flow_credits", description="Current Flow credit balance. Free.")
+async def flow_credits() -> str:
+    return _json(await backend.credits())
+
+
+@server.tool(
+    name="flow_media", description="A project's media (id, kind, model, size, url), meta and models. Free."
+)
+async def flow_media(project_id: str) -> str:
+    _require(project_id, "project_id")
+    return _json(await backend.media(project_id))
+
+
+@server.tool(name="flow_characters", description="A project's characters (entity_id, name, portrait). Free.")
+async def flow_characters(project_id: str) -> str:
+    _require(project_id, "project_id")
+    return _json(await backend.characters(project_id))
+
+
+@server.tool(name="flow_tools", description="The community Tools gallery (id, name, author, tags). Free.")
+async def flow_tools(project_id: str) -> str:
+    _require(project_id, "project_id")
+    return _json(await backend.tools(project_id))
+
+
+@server.tool(
+    name="flow_download", description="Download one media item to out_dir as <media_id>.<ext>. Free."
+)
+async def flow_download(project_id: str, media_id: str, out_dir: str | None = None) -> str:
+    _require(project_id, "project_id")
+    _require(media_id, "media_id")
+    return _json({"path": await backend.download(project_id, media_id, out_dir)})
+
+
+@server.tool(name="flow_upload", description="Upload a local image or video into a project. Free.")
+async def flow_upload(project_id: str, path: str) -> str:
+    _require(project_id, "project_id")
+    _require(path, "path")
+    return _json(await backend.upload(project_id, path))
+
+
+@server.tool(name="project_create", description="Create a project on the grid, optionally renaming it. Free.")
+async def project_create(title: str | None = None) -> str:
+    return _json(await backend.project_create(title))
+
+
+@server.tool(name="project_rename", description="Rename a project. Free.")
+async def project_rename(project_id: str, title: str) -> str:
+    _require(project_id, "project_id")
+    _require(title, "title")
+    return _json({"title": await backend.project_rename(project_id, title)})
+
+
+@server.tool(
+    name="project_delete", description="Delete a project permanently (clips, ingredients, prompts). Free."
+)
+async def project_delete(project_id: str) -> str:
+    _require(project_id, "project_id")
+    return _json(await backend.project_delete(project_id))
+
+
+@server.tool(
+    name="character_create",
+    description="Create a character from a face prompt (portrait via Nano Banana 2, credit-free), set name and personality.",
+)
+async def character_create(
+    project_id: str, prompt: str, name: str | None = None, personality: str | None = None, wait: float = 90.0
+) -> str:
+    _require(project_id, "project_id")
+    _require(prompt, "prompt")
+    return _json(await backend.character_create(project_id, prompt, name, personality, wait))
+
+
+@server.tool(name="character_delete", description="Delete a character entity permanently. Free.")
+async def character_delete(project_id: str, entity_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(entity_id, "entity_id")
+    return _json(await backend.character_delete(project_id, entity_id))
+
+
+async def _gen(kind: str, **kwargs: Any) -> str:
+    _require(kwargs.get("project", ""), "project")
+    _require(kwargs.get("prompt", ""), "prompt")
+    return _json(await backend.generate(kind=kind, **kwargs))
+
+
+@server.tool(name="gen_t2v", description="Text to video via gflow (spends credits; veo-lite 720p 8s = 10).")
+async def gen_t2v(
+    prompt: str,
+    project: str,
+    model: str | None = None,
+    aspect: str | None = None,
+    count: int = 1,
+    duration: int | None = None,
+    job_id: str | None = None,
+) -> str:
+    return await _gen(
+        "t2v",
+        prompt=prompt,
+        project=project,
+        model=model,
+        aspect=aspect,
+        count=count,
+        duration=duration,
+        job_id=job_id,
+    )
+
+
+@server.tool(
+    name="gen_i2v", description="Image (first frame, optional last frame) to video (spends credits)."
+)
+async def gen_i2v(
+    initial_frame: str,
+    prompt: str,
+    project: str,
+    end_frame: str | None = None,
+    model: str | None = None,
+    aspect: str | None = None,
+    duration: int | None = None,
+    job_id: str | None = None,
+) -> str:
+    _require(initial_frame, "initial_frame")
+    return await _gen(
+        "i2v",
+        prompt=prompt,
+        project=project,
+        model=model,
+        aspect=aspect,
+        duration=duration,
+        initial_frame=initial_frame,
+        end_frame=end_frame,
+        job_id=job_id,
+    )
+
+
+@server.tool(name="gen_r2v", description="Reference images (ingredients) to video (spends credits).")
+async def gen_r2v(
+    refs: list[str],
+    prompt: str,
+    project: str,
+    model: str | None = None,
+    aspect: str | None = None,
+    duration: int | None = None,
+    job_id: str | None = None,
+) -> str:
+    if not refs:
+        raise ValueError("refs is required")
+    return await _gen(
+        "r2v",
+        prompt=prompt,
+        project=project,
+        model=model,
+        aspect=aspect,
+        duration=duration,
+        refs=refs,
+        job_id=job_id,
+    )
+
+
+@server.tool(name="gen_t2i", description="Text to image via gflow (credit-free, daily quota).")
+async def gen_t2i(
+    prompt: str,
+    project: str,
+    model: str | None = None,
+    aspect: str | None = None,
+    count: int = 1,
+    job_id: str | None = None,
+) -> str:
+    return await _gen(
+        "t2i", prompt=prompt, project=project, model=model, aspect=aspect, count=count, job_id=job_id
+    )
+
+
+@server.tool(name="gen_i2i", description="Reference images to image via gflow (credit-free, daily quota).")
+async def gen_i2i(
+    refs: list[str],
+    prompt: str,
+    project: str,
+    model: str | None = None,
+    aspect: str | None = None,
+    count: int = 1,
+    job_id: str | None = None,
+) -> str:
+    if not refs:
+        raise ValueError("refs is required")
+    return await _gen(
+        "i2i",
+        prompt=prompt,
+        project=project,
+        model=model,
+        aspect=aspect,
+        count=count,
+        refs=refs,
+        job_id=job_id,
+    )
+
+
+def run_stdio() -> None:
+    asyncio.run(server.run_stdio_async())
