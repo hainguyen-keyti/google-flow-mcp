@@ -429,6 +429,28 @@ def story_plan(as_json: bool) -> None:
     click.echo(f"shots={len(rows)} aspect={shots.ASPECT} model={shots.MODEL} duration={shots.DURATION}s")
 
 
+@story.command("plan2")
+@click.option("--json", "as_json", is_flag=True, help="Emit the whole plan as JSON.")
+def story_plan2(as_json: bool) -> None:
+    """Print the v2 shot list: two continuous blocks, one cut, hands-aware ($0)."""
+    from video.story import shots2
+
+    rows = shots2.plan()
+    if as_json:
+        click.echo(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    for row in rows:
+        start = f"continues {row['start_from']}" if row["start_from"] else "fresh base shot"
+        risk = " HANDS" if row["hands_risk"] else ""
+        product = " PRODUCT" if row["product"] else ""
+        click.echo(f"{row['job_id']}  {row['key']:9s} {row['mode']:11s} {start}{risk}{product}")
+        click.echo(f"    {row['beat']}")
+    click.echo(
+        f"shots={len(rows)} takes={len(rows) + shots2.EXTRA_TAKES} "
+        f"credits={shots2.expected_credits()} total={shots2.total_seconds()}s aspect={shots2.ASPECT}"
+    )
+
+
 @story.command("run")
 @click.argument("project_id")
 @click.option("--out", "out_dir", default="out/story", show_default=True, type=click.Path(file_okay=False))
