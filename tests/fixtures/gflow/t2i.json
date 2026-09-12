@@ -1,0 +1,24 @@
+{
+  "status": "ok",
+  "command": "image t2i",
+  "project_id": "c5d1301b-07fe-4485-86d9-49a47449a494",
+  "model": "NARWHAL",
+  "count": 1,
+  "images": [
+    {
+      "media_name": "31262e48-5af1-4d64-b66c-403f9122aa93",
+      "workflow_id": "8696d02a-bcfd-4392-a016-4fab51572c0c",
+      "seed": 1180517364,
+      "prompt": "a ceramic teacup on a wooden table, soft window light",
+      "model_name_type": "NARWHAL",
+      "aspect_ratio": "IMAGE_ASPECT_RATIO_LANDSCAPE",
+      "dimensions": {
+        "width": 1376,
+        "height": 768
+      },
+      "fife_url": "https://flow-content.google/image/31262e48-5af1-4d64-b66c-403f9122aa93?REDACTED",
+      "is_signed_url": true,
+      "local_path": "out/t5/31262e48-5af1-4d64-b66c-403f9122aa93_1.jpg"
+    }
+  ]
+}

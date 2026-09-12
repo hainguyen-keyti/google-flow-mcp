@@ -142,5 +142,158 @@ def download(project_id: str, media_id: str, out_dir: str, profile: str) -> None
     click.echo(str(path))
 
 
+@flow.group()
+def project() -> None:
+    """Create, rename, delete projects on the grid ($0)."""
+
+
+@project.command("create")
+@click.option("--title", default=None, help="Rename right after creation.")
+@click.option("--profile", default="default", show_default=True)
+def project_create(title: str | None, profile: str) -> None:
+    from video.flow import projects
+
+    click.echo(json.dumps(_read(profile, lambda s: projects.create(s, title))))
+
+
+@project.command("rename")
+@click.argument("project_id")
+@click.argument("title")
+@click.option("--profile", default="default", show_default=True)
+def project_rename(project_id: str, title: str, profile: str) -> None:
+    from video.flow import projects
+
+    click.echo(_read(profile, lambda s: projects.rename(s, project_id, title)))
+
+
+@project.command("delete")
+@click.argument("project_id")
+@click.option("--yes", is_flag=True, help="Required: deleting is permanent (clips, ingredients, prompts).")
+@click.option("--profile", default="default", show_default=True)
+def project_delete(project_id: str, yes: bool, profile: str) -> None:
+    from video.flow import projects
+
+    if not yes:
+        raise click.UsageError(
+            "refusing to delete without --yes; Flow deletes clips, ingredients and prompts permanently"
+        )
+    click.echo(json.dumps(_read(profile, lambda s: projects.delete(s, project_id))))
+
+
+@main.group()
+def gen() -> None:
+    """Generate on Flow through gflow; every job is ledgered in OUT/ledger.jsonl (spends credits)."""
+
+
+def _gen_options(fn):
+    for option in reversed(
+        [
+            click.option("--project", required=True, help="Existing Flow project id."),
+            click.option(
+                "--model",
+                default=None,
+                help="gflow model alias (veo-lite, veo-fast, veo-quality, omni-flash, nano2, nano-pro).",
+            ),
+            click.option("--aspect", default=None, help="9:16 or 16:9 (images also 1:1, 4:3)."),
+            click.option("--count", default=1, show_default=True, type=int),
+            click.option("--duration", default=None, type=int, help="4, 6, 8 (10 on omni-flash)."),
+            click.option(
+                "--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False)
+            ),
+            click.option(
+                "--job",
+                "job_id",
+                default=None,
+                help="Idempotency key; a job id with a submitted row is refused.",
+            ),
+            click.option("--profile", default="default", show_default=True),
+        ]
+    ):
+        fn = option(fn)
+    return fn
+
+
+def _run_gen(kind: str, prompt: str, opts: dict, **extra) -> None:
+    import uuid
+    from pathlib import Path
+
+    from video import gen as gen_mod
+
+    job = gen_mod.Job(
+        job_id=opts["job_id"] or str(uuid.uuid4()),
+        kind=kind,
+        prompt=prompt,
+        project=opts["project"],
+        model=opts["model"],
+        aspect=opts["aspect"],
+        count=opts["count"],
+        duration=opts["duration"],
+        **extra,
+    )
+
+    async def run():
+        return await gen_mod.run_job(
+            job, Path(opts["out_dir"]), read_credits=lambda: gen_mod.read_credits_live(opts["profile"])
+        )
+
+    click.echo(json.dumps(asyncio.run(run()), indent=2))
+
+
+@gen.command()
+@click.argument("prompt")
+@_gen_options
+def t2v(prompt: str, **opts) -> None:
+    """Text to video."""
+    _run_gen("t2v", prompt, opts)
+
+
+@gen.command()
+@click.argument("initial_frame", type=click.Path(exists=True, dir_okay=False))
+@click.argument("prompt")
+@click.option("--end-frame", default=None, type=click.Path(exists=True, dir_okay=False))
+@_gen_options
+def i2v(initial_frame: str, prompt: str, end_frame: str | None, **opts) -> None:
+    """Image (first frame, optional last frame) to video."""
+    from pathlib import Path
+
+    _run_gen(
+        "i2v",
+        prompt,
+        opts,
+        initial_frame=Path(initial_frame),
+        end_frame=Path(end_frame) if end_frame else None,
+    )
+
+
+@gen.command()
+@click.argument("prompt")
+@click.option("--ref", "refs", multiple=True, required=True, type=click.Path(exists=True, dir_okay=False))
+@_gen_options
+def r2v(prompt: str, refs: tuple[str, ...], **opts) -> None:
+    """Reference images (ingredients) to video."""
+    from pathlib import Path
+
+    _run_gen("r2v", prompt, opts, refs=[Path(r) for r in refs])
+
+
+@gen.command()
+@click.argument("prompt")
+@_gen_options
+def t2i(prompt: str, **opts) -> None:
+    """Text to image."""
+    _run_gen("t2i", prompt, opts)
+
+
+@gen.command()
+@click.argument("prompt")
+@click.option("--ref", "refs", multiple=True, required=True, type=click.Path(exists=True, dir_okay=False))
+@_gen_options
+def i2i(prompt: str, refs: tuple[str, ...], **opts) -> None:
+    """Reference images to image."""
+    from pathlib import Path
+
+    _run_gen("i2i", prompt, opts, refs=[Path(r) for r in refs])
+
+
 if __name__ == "__main__":
     main()
