@@ -10,41 +10,8 @@ import asyncio
 import json
 from typing import Any
 
+from video.flow.lane import LABS_ROOT, MIGRATED_ROOT, PROBE_JS, verdict
 from video.probes._common import build_client, out_path, resolve_profile_dir, step
-
-LABS_ROOT = "https://labs.google/fx/tools/flow"
-MIGRATED_ROOT = "https://flow.google.com/"
-
-_PROBE_JS = """
-() => {
-  const count = (sel) => document.querySelectorAll(sel).length;
-  return {
-    url: location.href,
-    title: document.title,
-    carriers: { google_symbols: count('i.google-symbols'), mat_icon: count('mat-icon') },
-    shells: {
-      aisandbox_root: count('aisandbox-root'),
-      next_route_announcer: count('next-route-announcer'),
-      flow_landing_page: count('flow-landing-page'),
-      router_outlet: count('router-outlet'),
-    },
-    project_links: count('a[href*="/project/"]'),
-  };
-}
-"""
-
-
-def verdict(labs: dict[str, Any], migrated: dict[str, Any]) -> str:
-    def grid(r: dict[str, Any]) -> bool:
-        return int(r.get("project_links") or 0) > 0
-
-    if not grid(labs) and not grid(migrated):
-        return "SIGNED_OUT"
-    if grid(migrated):
-        return "MIGRATED"
-    if grid(labs):
-        return "LABS"
-    return "INDETERMINATE"
 
 
 async def probe(profile: str, settle: float = 8.0) -> dict[str, Any]:
@@ -56,7 +23,7 @@ async def probe(profile: str, settle: float = 8.0) -> dict[str, Any]:
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
                 await page.wait_for_timeout(int(settle * 1000))
-                results["roots"][lane] = await page.evaluate(_PROBE_JS)
+                results["roots"][lane] = await page.evaluate(PROBE_JS)
             except Exception as exc:  # noqa: BLE001
                 results["roots"][lane] = {"nav_error": str(exc)[:300]}
     results["verdict"] = verdict(results["roots"].get("labs", {}), results["roots"].get("migrated", {}))
