@@ -165,6 +165,21 @@ async def _generate_with_product(
     }
 
 
+def free_editor_job(ledger: gen.Ledger, job_id: str) -> str:
+    """An id the clip editor will accept.
+
+    It refuses any id that ever reached "submitted", even an attempt that provably cost nothing, and it
+    lives outside this plan's blast radius, so the retry takes a new id and the shot is settled under its
+    own id by the caller.
+    """
+    if not ledger.has_submitted(job_id):
+        return job_id
+    attempt = 2
+    while ledger.has_submitted(f"{job_id}-try{attempt}"):
+        attempt += 1
+    return f"{job_id}-try{attempt}"
+
+
 async def _extend_shot(
     session, project_id: str, media_id: str, prompt: str, *, job_id: str, out_dir: Path, wait: float
 ) -> dict[str, Any]:
@@ -174,13 +189,26 @@ async def _extend_shot(
     and charges nothing (measured 2026-09-13 on tryon2-05). The editor is the surface that did accept the
     Omni edit, and continuing the clip holds the room and the garment better than any wording could.
     """
+    ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
+    attempt = free_editor_job(ledger, job_id)
     extended = await clips.extend(
-        session, project_id, media_id, prompt, out_dir=out_dir, job_id=job_id, wait=wait
+        session, project_id, media_id, prompt, out_dir=out_dir, job_id=attempt, wait=wait
     )
     produced = [o for o in extended.get("outputs", []) if o.get("path")]
     if not produced:
         raise RuntimeError(f"{job_id}: extend produced no clip; spent {extended.get('spent')}")
     fresh = await _refetch_720(session, project_id, produced[0]["media_id"], out_dir / job_id)
+    if attempt != job_id:
+        # The money moved under the attempt id; the shot points at it rather than counting it twice.
+        ledger.append(
+            job_id,
+            "done",
+            kind="extend",
+            media_id=produced[0]["media_id"],
+            path=str(fresh),
+            spent=0,
+            reused_from=attempt,
+        )
     return {
         "job_id": job_id,
         "kind": "extend",

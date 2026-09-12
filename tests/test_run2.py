@@ -185,3 +185,42 @@ def test_run2_can_continue_a_single_shot_from_what_the_ledger_already_holds(monk
 
     asyncio.run(pipeline.run2(None, "P", out_dir=tmp_path, only=["pose"], wait=1.0))
     assert sources == ["m4", "m4"], "both takes of the pose continue the reveal the ledger knows about"
+
+
+def test_an_extend_retry_takes_a_fresh_job_id_and_still_settles_the_shot_once(monkeypatch, tmp_path):
+    # The clip editor refuses any job id that ever reached "submitted", even when that attempt cost
+    # nothing, so a retry needs its own id; the shot itself must still read as exactly one done row.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("tryon2-04", "done", path=str(tmp_path / "tryon2-04.mp4"), media_id="m4", spent=10)
+    ledger.append("tryon2-05", "submitted", kind="frames")
+    ledger.append("tryon2-05", "failed", spent=0)
+    used: list[str] = []
+
+    async def fake_persona(session, project_id, **kwargs):
+        return {"entity_id": "e", "name": "Mai", "created": False}
+
+    async def fake_product(session, project_id):
+        return {"media_id": "p"}
+
+    async def fake_extend(session, project_id, media_id, prompt, **kwargs):
+        job = kwargs["job_id"]
+        used.append(job)
+        gen.Ledger(tmp_path / "ledger.jsonl").append(job, "done", outputs=[{"media_id": "m5"}], spent=10)
+        return {"outputs": [{"media_id": "m5", "path": str(tmp_path / "ext.mp4")}], "spent": 10}
+
+    async def fake_refetch(session, project_id, media_id, stem):
+        return stem.with_suffix(".mp4")
+
+    monkeypatch.setattr(pipeline.persona, "ensure", fake_persona)
+    monkeypatch.setattr(pipeline.product, "ensure", fake_product)
+    monkeypatch.setattr(pipeline.clips, "extend", fake_extend)
+    monkeypatch.setattr(pipeline, "_refetch_720", fake_refetch)
+
+    asyncio.run(pipeline.run2(None, "P", out_dir=tmp_path, only=["pose"], wait=1.0))
+
+    assert used == ["tryon2-05-try2", "tryon2-05b"], used
+    fresh = gen.Ledger(tmp_path / "ledger.jsonl")
+    done = [r for r in fresh.rows("tryon2-05") if r.get("status") == "done"]
+    assert len(done) == 1, done
+    assert done[0]["reused_from"] == "tryon2-05-try2" and done[0]["spent"] == 0
+    assert done[0]["media_id"] == "m5"
