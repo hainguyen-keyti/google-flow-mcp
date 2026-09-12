@@ -90,19 +90,18 @@ Chủ repo bác bản đầu: máy quay giật, mất tay lúc chuyển động,
 gốc là chữ không khoá được đồ vật, chỉ gương mặt mới có entity. Đường đã đo:
 
 - `hook` và `reveal` đi bằng **character chip** (đúng mặt); `fabric` đi bằng **r2v với ảnh món đồ** (không
-  có người trong khung nên vải thắng); `wardrobe` đi bằng **Frames**, ghim khung cuối của cảnh trước làm
-  khung đầu, nên thừa hưởng nguyên phòng, tư thế và bộ đồ.
-- Một lần **Omni edit trả tiền** trên `reveal` mặc đồ vào người (giữ mặt, đổi quần áo, 20 credit). Các cảnh
-  sau không trả thêm cho bộ đồ. Prompt của chúng **không tả lại món đồ**, chỉ nói "same outfit as the
-  starting frame": tả lại bằng chữ chính là chỗ đồ bị trôi.
-- Sau cảnh reveal, đường Frames **đóng**: Flow nhận cú bấm rồi không tạo job và không trừ tiền khi khung
-  đầu là ảnh cô ấy đang mặc bộ đồ (đo 2026-09-13). `pose` và `closing` vì thế **extend chính clip reveal**
-  qua editor, đúng surface đã nhận Omni edit; extend ra 7 s nên hai cảnh đó khai `duration=7`.
+  có người trong khung nên vải thắng); `wardrobe`, `pose`, `closing` đi bằng **Frames**, ghim khung cuối của
+  cảnh trước làm khung đầu, nên thừa hưởng nguyên phòng, ánh sáng và tư thế.
+- **Khung đầu luôn lấy từ bản CHƯA edit** (cô ấy mặc đồ thường): Flow nhận cú bấm rồi không tạo job và
+  không trừ tiền khi khung đầu là ảnh cô ấy đang mặc bộ đồ (đo 2026-09-13). Clip editor cũng không phải
+  lối vòng: nó mở bản trước edit và panel extend không hiện ra.
+- Vì thế **mỗi cảnh khoe đồ trả một Omni edit riêng** (20 credit): `reveal`, `pose`, `closing`. Prompt
+  edit giống hệt nhau nên bộ đồ tả một lần duy nhất, không tả lại trong prompt từng cảnh.
 - Cảnh nào tay chạm vải thì sinh **2 take**, người soi strip rồi chọn, lý do loại ghi thẳng vào ledger.
 
 ```
 uv run video story plan2                                  # 6 cảnh + route của từng cảnh, $0
-uv run video story run2 <project> --out out/story2         # sinh chuỗi, 8 take + 1 edit = 100 credit
+uv run video story run2 <project> --out out/story2         # sinh chuỗi, 8 take + 3 edit = 140 credit
 uv run video story pick --key pose --take tryon2-05b --reason "take a dính ngón"   # $0
 uv run video story cut2 --out out/story2                   # loudnorm, xfade 0,5 s, chữ, strip + sheet, $0
 uv run python scripts/acceptance/story_quality.py --out out/story2
