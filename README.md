@@ -28,6 +28,7 @@ uv run video flow lane                      # MIGRATED projects=16
 uv run video flow projects [--json]
 uv run video flow credits
 uv run video flow media <project> [--json]  # media, model, dung lượng, URL
+uv run video flow media <project> --all     # mọi record kể cả clip trong scene, ảnh nháp character (unlisted)
 uv run video flow tools <project>           # gallery Tools cộng đồng
 uv run video flow characters <project>
 uv run video flow download <project> <media_id> --out out/   # tài sản gốc (=s0, =m22), không ghi đè
@@ -86,6 +87,9 @@ uv run pytest -q
 - URL trong listing là poster; tải tài sản gốc bằng hậu tố lh3 (`=s0` ảnh, `=m22` rồi `=m18` video).
 - Agent mode bật là Flow lưu theo project và ẩn chip settings của composer; tắt lại bằng
   `flow agent mode <project> off`.
+- `clip extend` tạo một scene mới (rpc `rqZuUc`) và clip mở rộng (Veo 3.1 Lite, 7 s, 720p) là record trong
+  listing KHÔNG có tile trên grid; lệnh trả `scene_id` và `outputs[].media_id`, `flow download` tải được
+  mọi record kể cả loại này. Mở scene trong Flow để xem bản ghép; "Download scene" xuất bản ghép.
 - Xoá scene là "Move to trash" trên tile của grid (rpc `BpMsoe`): scene vẫn nằm trong listing với cờ
   trashed và hiện ở view Trash; `scene list` mặc định ẩn scene đã trash, `--all` để thấy. Nút "Move to
   trash" bên trong editor scene không làm gì (đo 2 lần).

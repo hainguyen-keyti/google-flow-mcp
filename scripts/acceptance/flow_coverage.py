@@ -18,7 +18,13 @@ import time
 from pathlib import Path
 
 ROWS: list[tuple[str, str, str]] = []
+ONLY: set[str] = set()
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
+
+
+def wanted(*names: str) -> bool:
+    """With --rows, run only the listed rows (and the reads they depend on)."""
+    return not ONLY or any(name in ONLY for name in names)
 
 
 def run(*args: str, timeout: int = 900) -> tuple[int, str, str]:
@@ -78,105 +84,125 @@ def ffprobe(path: Path) -> dict:
 
 
 def free_matrix(project: str, out_dir: Path) -> None:
-    code, out, _ = run("flow", "lane")
-    match = re.search(r"(\w+) projects=(\d+)", out)
-    lane_ok = code == 0 and match and match.group(1) == "MIGRATED"
-    row(
-        "lane", "PASS" if lane_ok else "FAIL", out.strip().splitlines()[-1] if out.strip() else f"exit {code}"
-    )
-    lane_projects = int(match.group(2)) if match else -1
+    lane_projects, balance, media = -1, "", []
+    if wanted("lane", "projects", "project crud"):
+        code, out, _ = run("flow", "lane")
+        match = re.search(r"(\w+) projects=(\d+)", out)
+        lane_ok = code == 0 and match and match.group(1) == "MIGRATED"
+        if wanted("lane"):
+            row(
+                "lane",
+                "PASS" if lane_ok else "FAIL",
+                out.strip().splitlines()[-1] if out.strip() else f"exit {code}",
+            )
+        lane_projects = int(match.group(2)) if match else -1
 
-    code, out, _ = run("flow", "projects", "--json")
-    projects = last_json(out) if code == 0 else []
-    ok = code == 0 and len(projects) >= 1 and len(projects) == lane_projects
-    row("projects", "PASS" if ok else "FAIL", f"{len(projects)} projects (lane saw {lane_projects})")
+    if wanted("projects"):
+        code, out, _ = run("flow", "projects", "--json")
+        projects = last_json(out) if code == 0 else []
+        ok = code == 0 and len(projects) >= 1 and len(projects) == lane_projects
+        row("projects", "PASS" if ok else "FAIL", f"{len(projects)} projects (lane saw {lane_projects})")
 
-    code, out, _ = run("flow", "credits")
-    balance = out.strip().splitlines()[-1] if out.strip() else ""
-    row("credits", "PASS" if code == 0 and balance.isdigit() else "FAIL", f"balance={balance}")
+    if wanted("credits", "upscale 1080p"):
+        code, out, _ = run("flow", "credits")
+        balance = out.strip().splitlines()[-1] if out.strip() else ""
+        if wanted("credits"):
+            row("credits", "PASS" if code == 0 and balance.isdigit() else "FAIL", f"balance={balance}")
 
-    code, out, _ = run("flow", "media", project, "--json")
-    info = last_json(out) if code == 0 else {}
-    media = info.get("media", [])
-    row(
-        "media",
-        "PASS" if code == 0 and len(media) >= 1 else "FAIL",
-        f"{len(media)} items, models={','.join(info.get('models', []))}",
-    )
+    if wanted("media", "download", "upscale 1080p"):
+        code, out, _ = run("flow", "media", project, "--json")
+        info = last_json(out) if code == 0 else {}
+        media = info.get("media", [])
+        if wanted("media"):
+            row(
+                "media",
+                "PASS" if code == 0 and len(media) >= 1 else "FAIL",
+                f"{len(media)} items, models={','.join(info.get('models', []))}",
+            )
 
-    code, out, _ = run("flow", "tools", project, "--json")
-    tools = last_json(out) if code == 0 else []
-    row("tools", "PASS" if code == 0 and len(tools) >= 1 else "FAIL", f"{len(tools)} tools")
+    if wanted("tools"):
+        code, out, _ = run("flow", "tools", project, "--json")
+        tools = last_json(out) if code == 0 else []
+        row("tools", "PASS" if code == 0 and len(tools) >= 1 else "FAIL", f"{len(tools)} tools")
 
-    code, out, _ = run("flow", "characters", project, "--json")
-    characters = last_json(out) if code == 0 else None
-    row(
-        "characters",
-        "PASS" if code == 0 and isinstance(characters, list) else "FAIL",
-        f"{len(characters) if isinstance(characters, list) else characters} characters",
-    )
+    if wanted("characters"):
+        code, out, _ = run("flow", "characters", project, "--json")
+        characters = last_json(out) if code == 0 else None
+        row(
+            "characters",
+            "PASS" if code == 0 and isinstance(characters, list) else "FAIL",
+            f"{len(characters) if isinstance(characters, list) else characters} characters",
+        )
 
-    target = next((m for m in media if m.get("kind") == "video" and m.get("url")), None)
-    if target:
+    if wanted("download", "upscale 1080p"):
+        target = next((m for m in media if m.get("kind") == "video" and m.get("url")), None)
         dl_dir = out_dir / f"acceptance_{int(time.time())}"
-        code, out, _ = run("flow", "download", project, target["id"], "--out", str(dl_dir))
-        path = Path(out.strip().splitlines()[-1]) if code == 0 and out.strip() else None
-        probe = ffprobe(path) if path and path.exists() else {}
-        duration = float(probe.get("format", {}).get("duration", 0) or 0)
-        row("download", "PASS" if duration > 0 else "FAIL", f"{path} duration={duration:.2f}s")
+        if not target:
+            row("download", "FAIL", "no video with a url in the listing")
+            row("upscale 1080p", "FAIL", "no video with a url in the listing")
+        if target and wanted("download"):
+            code, out, _ = run("flow", "download", project, target["id"], "--out", str(dl_dir))
+            path = Path(out.strip().splitlines()[-1]) if code == 0 and out.strip() else None
+            probe = ffprobe(path) if path and path.exists() else {}
+            duration = float(probe.get("format", {}).get("duration", 0) or 0)
+            row("download", "PASS" if duration > 0 else "FAIL", f"{path} duration={duration:.2f}s")
+        if target and wanted("upscale 1080p"):
+            code, out, err = run(
+                "flow", "clip", "download", project, target["id"], "--quality", "1080p", "--out", str(dl_dir)
+            )
+            path = Path(out.strip().splitlines()[-1]) if code == 0 and out.strip() else None
+            probe = ffprobe(path) if path and path.exists() else {}
+            height = max((int(s.get("height") or 0) for s in probe.get("streams", [])), default=0)
+            code2, out2, _ = run("flow", "credits")
+            after = out2.strip().splitlines()[-1] if out2.strip() else ""
+            spent = int(balance) - int(after) if balance.isdigit() and after.isdigit() else None
+            row(
+                "upscale 1080p",
+                "PASS" if height >= 1080 else "FAIL",
+                f"{path} height={height} credits_spent={spent}" if path else err.strip()[-160:],
+            )
 
-        code, out, err = run(
-            "flow", "clip", "download", project, target["id"], "--quality", "1080p", "--out", str(dl_dir)
-        )
-        path = Path(out.strip().splitlines()[-1]) if code == 0 and out.strip() else None
-        probe = ffprobe(path) if path and path.exists() else {}
-        height = max((int(s.get("height") or 0) for s in probe.get("streams", [])), default=0)
-        code2, out2, _ = run("flow", "credits")
-        after = out2.strip().splitlines()[-1] if out2.strip() else ""
-        spent = int(balance) - int(after) if balance.isdigit() and after.isdigit() else None
+    if wanted("project crud"):
+        code, out, _ = run("flow", "project", "create", "--title", "acceptance probe")
+        created = last_json(out) if code == 0 else {}
+        new_id = created.get("id")
+        if new_id:
+            code2, out2, _ = run("flow", "project", "rename", new_id, "acceptance renamed")
+            code3, out3, _ = run("flow", "project", "delete", new_id, "--yes")
+            deleted = last_json(out3) if code3 == 0 else {}
+            ok = code2 == 0 and code3 == 0 and deleted.get("remaining") == lane_projects
+            row(
+                "project crud",
+                "PASS" if ok else "FAIL",
+                f"created {new_id}, remaining={deleted.get('remaining')}",
+            )
+        else:
+            row("project crud", "FAIL", f"create exit {code}")
+
+    if wanted("scene crud"):
+        code, out, _ = run("flow", "scene", "create", project, "--title", "acceptance scene")
+        scene = last_json(out) if code == 0 else {}
+        scene_id = scene.get("scene_id")
+        if scene_id:
+            code2, out2, _ = run("flow", "scene", "delete", project, scene_id, "--yes")
+            row(
+                "scene crud",
+                "PASS" if code2 == 0 else "FAIL",
+                f"scene {scene_id} rpcids={scene.get('rpcids')}",
+            )
+        else:
+            row("scene crud", "FAIL", f"create exit {code}")
+
+    if wanted("agent mode"):
+        code, out, _ = run("flow", "agent", "mode", project, "on")
+        on = last_json(out) if code == 0 else {}
+        code2, out2, _ = run("flow", "agent", "mode", project, "off")
+        off = last_json(out2) if code2 == 0 else {}
         row(
-            "upscale 1080p",
-            "PASS" if height >= 1080 else "FAIL",
-            f"{path} height={height} credits_spent={spent}" if path else err.strip()[-160:],
+            "agent mode",
+            "PASS" if on.get("enabled") is True and off.get("enabled") is False else "FAIL",
+            f"on={on} off={off}",
         )
-    else:
-        row("download", "FAIL", "no video with a url in the listing")
-        row("upscale 1080p", "FAIL", "no video with a url in the listing")
-
-    code, out, _ = run("flow", "project", "create", "--title", "acceptance probe")
-    created = last_json(out) if code == 0 else {}
-    new_id = created.get("id")
-    if new_id:
-        code2, out2, _ = run("flow", "project", "rename", new_id, "acceptance renamed")
-        code3, out3, _ = run("flow", "project", "delete", new_id, "--yes")
-        deleted = last_json(out3) if code3 == 0 else {}
-        ok = code2 == 0 and code3 == 0 and deleted.get("remaining") == lane_projects
-        row(
-            "project crud",
-            "PASS" if ok else "FAIL",
-            f"created {new_id}, remaining={deleted.get('remaining')}",
-        )
-    else:
-        row("project crud", "FAIL", f"create exit {code}")
-
-    code, out, _ = run("flow", "scene", "create", project, "--title", "acceptance scene")
-    scene = last_json(out) if code == 0 else {}
-    scene_id = scene.get("scene_id")
-    if scene_id:
-        code2, out2, _ = run("flow", "scene", "delete", project, scene_id, "--yes")
-        row("scene crud", "PASS" if code2 == 0 else "FAIL", f"scene {scene_id} rpcids={scene.get('rpcids')}")
-    else:
-        row("scene crud", "FAIL", f"create exit {code}")
-
-    code, out, _ = run("flow", "agent", "mode", project, "on")
-    on = last_json(out) if code == 0 else {}
-    code2, out2, _ = run("flow", "agent", "mode", project, "off")
-    off = last_json(out2) if code2 == 0 else {}
-    row(
-        "agent mode",
-        "PASS" if on.get("enabled") is True and off.get("enabled") is False else "FAIL",
-        f"on={on} off={off}",
-    )
 
 
 def character_round_trip(project: str) -> None:
@@ -208,7 +234,7 @@ def character_round_trip(project: str) -> None:
     )
 
 
-def spend_matrix(project: str, out_dir: Path, ref_image: Path | None) -> None:
+def spend_matrix(project: str, out_dir: Path, ref_image: Path | None, source_media: str | None) -> None:
     def video_row(name: str, *args: str, expect_outputs: int = 1, group: str = "gen") -> dict:
         scope = ("--project", project) if group == "gen" else ()
         code, out, err = run(group, *args, *scope, "--out", str(out_dir))
@@ -242,115 +268,133 @@ def spend_matrix(project: str, out_dir: Path, ref_image: Path | None) -> None:
             f"{dims} {[o.get('path') for o in outputs[:1]]}",
         )
 
-    image_row(
-        "t2i", "t2i", "a ceramic teacup on a wooden table, soft light", "--model", "nano2", "--aspect", "16:9"
-    )
-    t2v = video_row(
-        "t2v",
-        "t2v",
-        "a small wooden sailboat model on a desk, slow push in",
-        "--model",
-        "veo-lite",
-        "--aspect",
-        "16:9",
-    )
-    source = (t2v.get("outputs") or [{}])[0].get("media_id")
-    if source:
-        video_row(
-            "extend",
-            "clip",
-            "extend",
-            project,
-            source,
-            "the sailboat keeps rocking gently, camera holds still",
-            group="flow",
-        )
-        video_row(
-            "omni edit",
-            "clip",
-            "edit",
-            project,
-            source,
-            "make it night time with warm lamp light",
-            group="flow",
-        )
-    else:
-        row("extend", "FAIL", "no t2v media id to extend")
-        row("omni edit", "FAIL", "no t2v media id to edit")
-
-    code, out, err = run(
-        "flow",
-        "agent",
-        "send",
-        project,
-        "Reply in one short sentence: what can you do here? Do not generate anything.",
-    )
-    sent = last_json(out) if code == 0 else {}
-    run("flow", "agent", "mode", project, "off")
-    row(
-        "agent send",
-        "PASS" if code == 0 and sent.get("reply_excerpt") else "FAIL",
-        f"spent={sent.get('credits_before', 0) - sent.get('credits_after', 0)} rpcids={sent.get('rpcids')} "
-        f"reply={str(sent.get('reply_excerpt', ''))[:120]!r}"
-        if sent
-        else err.strip()[-160:],
-    )
-    if ref_image and ref_image.exists():
+    if wanted("t2i"):
         image_row(
-            "i2i",
-            "i2i",
-            "the same object, painted deep blue",
-            "--ref",
-            str(ref_image),
+            "t2i",
+            "t2i",
+            "a ceramic teacup on a wooden table, soft light",
             "--model",
             "nano2",
             "--aspect",
             "16:9",
         )
-        video_row(
-            "r2v",
-            "r2v",
-            "the same object from the reference, camera orbits",
-            "--ref",
-            str(ref_image),
+    source = source_media
+    if wanted("t2v") or (source is None and wanted("extend", "omni edit")):
+        t2v = video_row(
+            "t2v",
+            "t2v",
+            "a small wooden sailboat model on a desk, slow push in",
             "--model",
             "veo-lite",
             "--aspect",
             "16:9",
         )
+        source = source or (t2v.get("outputs") or [{}])[0].get("media_id")
+    if wanted("extend"):
+        if source:
+            video_row(
+                "extend",
+                "clip",
+                "extend",
+                project,
+                source,
+                "the sailboat keeps rocking gently, camera holds still",
+                group="flow",
+            )
+        else:
+            row("extend", "FAIL", "no t2v media id to extend")
+    if wanted("omni edit"):
+        if source:
+            video_row(
+                "omni edit",
+                "clip",
+                "edit",
+                project,
+                source,
+                "make it night time with warm lamp light",
+                group="flow",
+            )
+        else:
+            row("omni edit", "FAIL", "no t2v media id to edit")
+
+    if wanted("agent send"):
+        code, out, err = run(
+            "flow",
+            "agent",
+            "send",
+            project,
+            "Reply in one short sentence: what can you do here? Do not generate anything.",
+        )
+        sent = last_json(out) if code == 0 else {}
+        row(
+            "agent send",
+            "PASS" if code == 0 and sent.get("reply_excerpt") and sent.get("mode_restored") else "FAIL",
+            f"spent={sent.get('credits_before', 0) - sent.get('credits_after', 0)} rpcids={sent.get('rpcids')} "
+            f"mode_restored={sent.get('mode_restored')} reply={str(sent.get('reply_excerpt', ''))[:120]!r}"
+            if sent
+            else err.strip()[-160:],
+        )
+    if ref_image and ref_image.exists():
+        if wanted("i2i"):
+            image_row(
+                "i2i",
+                "i2i",
+                "the same object, painted deep blue",
+                "--ref",
+                str(ref_image),
+                "--model",
+                "nano2",
+                "--aspect",
+                "16:9",
+            )
+        if wanted("r2v"):
+            video_row(
+                "r2v",
+                "r2v",
+                "the same object from the reference, camera orbits",
+                "--ref",
+                str(ref_image),
+                "--model",
+                "veo-lite",
+                "--aspect",
+                "16:9",
+            )
+        if wanted("i2v"):
+            video_row(
+                "i2v",
+                "i2v",
+                str(ref_image),
+                "the scene comes alive, gentle motion",
+                "--model",
+                "veo-lite",
+                "--aspect",
+                "16:9",
+            )
+    if wanted("omni 10s 9:16"):
         video_row(
-            "i2v",
-            "i2v",
-            str(ref_image),
-            "the scene comes alive, gentle motion",
+            "omni 10s 9:16",
+            "t2v",
+            "a red paper boat drifting on a pond",
+            "--model",
+            "omni-flash",
+            "--duration",
+            "10",
+            "--aspect",
+            "9:16",
+        )
+    if wanted("count 2"):
+        video_row(
+            "count 2",
+            "t2v",
+            "a ceramic teacup on a wooden table",
             "--model",
             "veo-lite",
             "--aspect",
             "16:9",
+            "--count",
+            "2",
+            expect_outputs=2,
         )
-    video_row(
-        "omni 10s 9:16",
-        "t2v",
-        "a red paper boat drifting on a pond",
-        "--model",
-        "omni-flash",
-        "--duration",
-        "10",
-        "--aspect",
-        "9:16",
-    )
-    video_row(
-        "count 2",
-        "t2v",
-        "a ceramic teacup on a wooden table",
-        "--model",
-        "veo-lite",
-        "--aspect",
-        "16:9",
-        "--count",
-        "2",
-        expect_outputs=2,
-    )
 
 
 def main() -> int:
@@ -362,16 +406,23 @@ def main() -> int:
     )
     ap.add_argument("--ref-image", default=None)
     ap.add_argument("--out", default="out")
+    ap.add_argument("--rows", default="", help="Comma-separated row names to run (default: every row).")
+    ap.add_argument(
+        "--source-media", default=None, help="Video media id for extend/omni edit instead of a fresh t2v."
+    )
     args = ap.parse_args()
+    ONLY.update(name.strip() for name in args.rows.split(",") if name.strip())
     if not shutil.which("ffprobe"):
         print("ffprobe missing", file=sys.stderr)
         return 1
     out_dir = Path(args.out)
     free_matrix(args.project, out_dir)
-    if args.character:
+    if args.character and wanted("character crud"):
         character_round_trip(args.project)
     if args.spend:
-        spend_matrix(args.project, out_dir, Path(args.ref_image) if args.ref_image else None)
+        spend_matrix(
+            args.project, out_dir, Path(args.ref_image) if args.ref_image else None, args.source_media
+        )
     print()
     print(f"{'STATUS':7s} {'ROW':22s} DETAIL")
     for name, status, detail in ROWS:

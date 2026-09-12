@@ -32,6 +32,26 @@ def is_done(row: dict[str, Any]) -> bool:
     return row.get("status") == DONE_STATUS and bool(row.get("url"))
 
 
+def role_of(row: dict[str, Any], prompt: str) -> str:
+    """Extend also copies the source clip into the new scene: only the record carrying our prompt is
+    the generated clip (measured 2026-09-12: copy has the source prompt and no size)."""
+    return "generated" if (row.get("prompt") or "").strip() == prompt.strip() else "copy"
+
+
+async def _fetch_with_retry(request: Any, row: dict[str, Any], stem: Path, attempts: int = 6) -> Path:
+    """lh3 renditions of a fresh clip can 404 for a while after the record says done."""
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return await download_mod.fetch_asset(request, row["kind"], row["url"], stem)
+        except RuntimeError as exc:
+            last = exc
+            if "404" not in str(exc) or attempt == attempts - 1:
+                raise
+            await asyncio.sleep(15)
+    raise RuntimeError(str(last))
+
+
 async def _open(session: FlowSession, project_id: str, media_id: str) -> None:
     await session.goto(f"{session.project_url(project_id)}/edit/{media_id}", ready=EDITOR)
     await session.page.wait_for_timeout(3_000)
@@ -122,18 +142,18 @@ async def _generate_from_editor(
     credits_after = (await reader.credits(session))["balance"]
     outputs = []
     for row in fresh:
-        entry: dict[str, Any] = {"media_id": row["id"], "status": row["status"], "path": None}
-        if is_done(row):
+        role = role_of(row, prompt)
+        entry: dict[str, Any] = {"media_id": row["id"], "role": role, "status": row["status"], "path": None}
+        if role == "generated" and is_done(row):
             try:
-                path = await download_mod.fetch_asset(
-                    session.page.request, row["kind"], row["url"], out_dir / row["id"]
-                )
+                path = await _fetch_with_retry(session.page.request, row, out_dir / row["id"])
                 entry["path"] = str(path)
             except Exception as exc:  # noqa: BLE001
                 entry["error"] = str(exc)[:200]
         outputs.append(entry)
     new_scenes = sorted(scenes_after - scenes_before)
-    status = "done" if fresh and all(o["path"] for o in outputs) else "pending" if fresh else "failed"
+    generated = [o for o in outputs if o["role"] == "generated"]
+    status = "done" if generated and all(o["path"] for o in generated) else "pending" if fresh else "failed"
     ledger.append(
         job_id,
         status,

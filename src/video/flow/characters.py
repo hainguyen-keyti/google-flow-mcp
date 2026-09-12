@@ -137,15 +137,19 @@ async def delete(session: FlowSession, project_id: str, entity_id: str) -> dict[
     await trash.click(timeout=8_000)
     dialog = page.locator("[role=dialog], mat-dialog-container").first
     frames: dict[str, list[Any]] = {}
+    dialog_seen = False
     try:
         await dialog.wait_for(state="visible", timeout=8_000)
+        dialog_seen = True
         confirm = dialog.get_by_role("button", name=re.compile("delete|remove|confirm", re.IGNORECASE)).first
         frames = await capture(session, lambda: confirm.click(timeout=8_000), settle=5.0)
     except PlaywrightTimeoutError:
         await page.wait_for_timeout(3_000)
     remaining = await list_characters(session, project_id)
     if any(c["entity_id"] == entity_id for c in remaining):
-        raise RuntimeError(f"delete: character {entity_id} is still listed; rpcids {sorted(frames)}")
+        raise RuntimeError(
+            f"delete: character {entity_id} is still listed; dialog_seen={dialog_seen} rpcids {sorted(frames)}"
+        )
     return {"entity_id": entity_id, "rpcids": sorted(frames), "remaining": len(remaining)}
 
 

@@ -38,6 +38,46 @@ def test_new_records_are_the_unseen_ids_oldest_first():
     assert clips.is_done({"id": "c", "status": 3, "url": None}) is False
 
 
+def test_role_of_tells_the_generated_clip_from_the_scene_copy():
+    prompt = "the sailboat keeps rocking gently, camera holds still"
+    assert clips.role_of({"prompt": prompt, "size_bytes": 1786375}, prompt) == "generated"
+    assert (
+        clips.role_of({"prompt": "a small wooden sailboat model on a desk", "size_bytes": None}, prompt)
+        == "copy"
+    )
+    assert clips.role_of({"prompt": None}, prompt) == "copy"
+
+
+def test_fetch_with_retry_waits_out_404_renditions(monkeypatch, tmp_path: Path):
+    calls = []
+
+    async def flaky(request, kind, url, stem):
+        calls.append(url)
+        if calls.count(url) < 3:
+            raise RuntimeError(
+                "no rendition of video returned a real asset: w=m22: HTTP 404; w=m18: HTTP 404"
+            )
+        return tmp_path / "x.mp4"
+
+    async def no_sleep(seconds):
+        calls.append(f"sleep {seconds}")
+
+    monkeypatch.setattr(clips.download_mod, "fetch_asset", flaky)
+    monkeypatch.setattr(clips.asyncio, "sleep", no_sleep)
+    row = {"kind": "video", "url": "https://x/a"}
+    assert asyncio.run(clips._fetch_with_retry(None, row, tmp_path / "a")) == tmp_path / "x.mp4"
+    assert calls == ["https://x/a", "sleep 15", "https://x/a", "sleep 15", "https://x/a"]
+
+
+def test_fetch_with_retry_gives_up_on_other_errors(monkeypatch, tmp_path: Path):
+    async def broken(request, kind, url, stem):
+        raise RuntimeError("download failed: HTTP 403")
+
+    monkeypatch.setattr(clips.download_mod, "fetch_asset", broken)
+    with pytest.raises(RuntimeError, match="403"):
+        asyncio.run(clips._fetch_with_retry(None, {"kind": "video", "url": "u"}, tmp_path / "a"))
+
+
 def test_rendition_labels_match_the_download_media_menu():
     assert clips.RENDITIONS == {"gif": "270p", "720p": "720p", "1080p": "1080p", "4k": "4K"}
 

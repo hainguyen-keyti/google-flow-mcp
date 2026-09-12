@@ -1,6 +1,9 @@
 """Flow Agent mode on the migrated host (measured 2026-09-12): the agent chip on the composer toggles
-the prompt box into the agent box (rpc DA4VGb, Kcr7Ub on enable). Sending a message may make the
-agent generate media, which spends credits: every send is ledgered with credits before and after (I1, I5)."""
+the prompt box into the agent box (rpc DA4VGb, Kcr7Ub on enable). After a message the page keeps an agent
+session panel (flow-agent-panel) open: the chip is not rendered and the composer settings are hidden until
+the panel's Close button is clicked, so set_mode closes it first and send restores the mode it found.
+Sending a message may make the agent generate media, which spends credits: every send is ledgered with
+credits before and after (I1, I5)."""
 
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ from video.flow.reader import capture
 from video.session import PROJECT_READY, FlowSession
 
 CHIP = "button.agent-mode-chip, flow-agent-mode-toggle-chip button"
+PANEL = "flow-agent-panel"
 _TEXT_JS = "() => (document.body.innerText || '').trim().replace(/\\s+/g, ' ')"
 
 
@@ -23,16 +27,42 @@ async def _open(session: FlowSession, project_id: str) -> None:
     await session.page.wait_for_timeout(2_000)
 
 
+async def _close_panel(page: Any) -> bool:
+    panel = page.locator(PANEL).first
+    if await panel.count() == 0:
+        return False
+    close = panel.get_by_role("button", name=re.compile("^Close$", re.IGNORECASE)).first
+    if await close.count() == 0:
+        return False
+    await close.click(timeout=8_000)
+    await page.wait_for_timeout(1_500)
+    return True
+
+
+async def _settle_composer(page: Any) -> bool:
+    """Wait for the chip or the agent session panel, whichever renders first; close the panel."""
+    for _ in range(20):
+        if await page.locator(CHIP).first.count():
+            return False
+        if await _close_panel(page):
+            return True
+        await page.wait_for_timeout(1_000)
+    return False
+
+
 async def set_mode(session: FlowSession, project_id: str, enabled: bool) -> dict[str, Any]:
     page = session.page
     await _open(session, project_id)
+    panel_closed = await _settle_composer(page)
     chip = page.locator(CHIP).first
-    pressed = (await chip.get_attribute("aria-pressed")) == "true"
+    await chip.wait_for(state="visible", timeout=15_000)
+    was = (await chip.get_attribute("aria-pressed")) == "true"
+    pressed = was
     frames: dict[str, list[Any]] = {}
     if pressed != enabled:
         frames = await capture(session, lambda: chip.click(timeout=8_000), settle=4.0)
         pressed = (await chip.get_attribute("aria-pressed")) == "true"
-    return {"enabled": pressed, "rpcids": sorted(frames)}
+    return {"enabled": pressed, "was": was, "panel_closed": panel_closed, "rpcids": sorted(frames)}
 
 
 async def send(
@@ -64,6 +94,7 @@ async def send(
     frames = await capture(session, lambda: send_button.click(timeout=8_000), settle=wait)
     after = await page.evaluate(_TEXT_JS)
     reply = after[len(before) - 200 if len(before) > 200 else 0 :][:800]
+    restored = await set_mode(session, project_id, state["was"])
     credits_after = (await reader.credits(session))["balance"]
     ledger.append(
         job_id,
@@ -77,6 +108,7 @@ async def send(
         "job_id": job_id,
         "rpcids": sorted(frames),
         "reply_excerpt": reply,
+        "mode_restored": restored["enabled"] == state["was"],
         "credits_before": credits_before,
         "credits_after": credits_after,
     }
