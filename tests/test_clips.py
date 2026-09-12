@@ -26,6 +26,18 @@ def test_editor_jobs_refuse_a_job_id_that_already_has_a_submitted_row(tmp_path: 
         )
 
 
+def test_new_records_are_the_unseen_ids_oldest_first():
+    rows = [
+        {"id": "old", "created": 1, "status": 3, "url": "https://x/old"},
+        {"id": "b", "created": 20, "status": 3, "url": "https://x/b"},
+        {"id": "a", "created": 10, "status": 1, "url": None},
+    ]
+    assert [r["id"] for r in clips.new_records({"old"}, rows)] == ["a", "b"]
+    assert clips.is_done(rows[1]) is True
+    assert clips.is_done(rows[2]) is False
+    assert clips.is_done({"id": "c", "status": 3, "url": None}) is False
+
+
 def test_rendition_labels_match_the_download_media_menu():
     assert clips.RENDITIONS == {"gif": "270p", "720p": "720p", "1080p": "1080p", "4k": "4K"}
 

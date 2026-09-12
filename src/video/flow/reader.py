@@ -69,6 +69,13 @@ async def project(session: FlowSession, project_id: str, settle: float = 10.0) -
     }
 
 
+async def records(session: FlowSession, project_id: str, settle: float = 8.0) -> list[dict[str, Any]]:
+    frames = await capture(
+        session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=settle
+    )
+    return parsers.records(one(frames, "Zzl0ze"))
+
+
 async def characters(session: FlowSession, project_id: str) -> list[dict[str, Any]]:
     frames = await capture(
         session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=8.0

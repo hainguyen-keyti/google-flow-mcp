@@ -95,6 +95,6 @@ async def fetch_asset(request: Any, kind: str, base_url: str, stem: Path) -> Pat
 
 
 async def download(session: FlowSession, project_id: str, media_id: str, out_dir: Path = Path("out")) -> Path:
-    info = await reader.project(session, project_id)
-    item = select_media(info["media"], media_id)
+    """Any generation record downloads, listed on the grid or not (clips inside scenes, extensions)."""
+    item = select_media(await reader.records(session, project_id), media_id)
     return await fetch_asset(session.page.request, item["kind"], item["url"], out_dir / media_id)

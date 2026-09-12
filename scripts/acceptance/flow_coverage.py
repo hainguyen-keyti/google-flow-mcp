@@ -21,14 +21,17 @@ ROWS: list[tuple[str, str, str]] = []
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 
 
-def run(*args: str, timeout: int = 600) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        ["uv", "run", "--no-sync", "video", *args],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+def run(*args: str, timeout: int = 900) -> tuple[int, str, str]:
+    try:
+        proc = subprocess.run(
+            ["uv", "run", "--no-sync", "video", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timeout after {timeout}s: video {' '.join(args)}"
     if SECRET.search(proc.stdout + proc.stderr):
         row("I2 secret leak", "FAIL", f"session material in output of {' '.join(args)}")
     return proc.returncode, proc.stdout, proc.stderr

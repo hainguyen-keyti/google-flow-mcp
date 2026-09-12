@@ -160,7 +160,28 @@ def _record_model(record: list[Any]) -> str | None:
     return _str(_at(record, 5, 6, 1, 0, 0))
 
 
-def media(payload: Any) -> list[dict[str, Any]]:
+def _record_fields(record: list[Any]) -> dict[str, Any]:
+    details = _at(record, 5)
+    status = _at(details, 8, 0)
+    size = _at(details, 13)
+    fields: dict[str, Any] = {
+        "status": status if isinstance(status, int) else None,
+        "size_bytes": size if isinstance(size, int) else None,
+    }
+    if len(record) >= 8:
+        fields["kind"] = "video"
+        fields["prompt"] = _str(_at(details, 1))
+        fields["model"] = _record_model(record)
+        fields["url"] = _url(_at(record, 7, 0, 8)) or _url(_at(details, 10)) or _url(_at(details, 5))
+    else:
+        fields["kind"] = "image"
+        fields["prompt"] = _str(_at(details, 6, 2, 0, 0))
+        fields["model"] = None
+        fields["url"] = _url(_at(details, 10)) or _url(_at(details, 5))
+    return fields
+
+
+def _split_listing(payload: Any) -> tuple[list[Any], dict[str, list[Any]]]:
     descriptors, records = _at(payload, 1), _at(payload, 2)
     if not isinstance(descriptors, list) or not isinstance(records, list):
         raise TypeError("Zzl0ze: expected [_, [descriptor, ...], [record, ...], ...]")
@@ -168,6 +189,11 @@ def media(payload: Any) -> list[dict[str, Any]]:
     for record in records:
         if isinstance(record, list) and len(record) >= 7 and _uuid(_at(record, 2)):
             by_media[record[2]] = record
+    return descriptors, by_media
+
+
+def media(payload: Any) -> list[dict[str, Any]]:
+    descriptors, by_media = _split_listing(payload)
     out = []
     for descriptor in descriptors:
         media_id, info, project_id = _at(descriptor, 0), _at(descriptor, 3), _at(descriptor, 4)
@@ -188,21 +214,28 @@ def media(payload: Any) -> list[dict[str, Any]]:
         }
         record = by_media.get(media_id)
         if record is not None:
-            details = _at(record, 5)
-            status = _at(details, 8, 0)
-            size = _at(details, 13)
-            item["status"] = status if isinstance(status, int) else None
-            item["size_bytes"] = size if isinstance(size, int) else None
-            if len(record) >= 8:
-                item["kind"] = "video"
-                item["prompt"] = _str(_at(details, 1))
-                item["model"] = _record_model(record)
-                item["url"] = _url(_at(record, 7, 0, 8)) or _url(_at(details, 10)) or _url(_at(details, 5))
-            else:
-                item["kind"] = "image"
-                item["prompt"] = _str(_at(details, 6, 2, 0, 0))
-                item["url"] = _url(_at(details, 10)) or _url(_at(details, 5))
+            item.update(_record_fields(record))
         out.append(item)
+    return out
+
+
+def records(payload: Any) -> list[dict[str, Any]]:
+    """Every generation record in Zzl0ze[2], including the ones without a grid descriptor (clips that
+    live inside a scene, character portrait candidates); `listed` tells whether the grid shows it."""
+    descriptors, by_media = _split_listing(payload)
+    listed = {_at(d, 0) for d in descriptors}
+    out = []
+    for media_id, record in by_media.items():
+        out.append(
+            {
+                "id": media_id,
+                "project_id": _str(_at(record, 1)),
+                "workflow_id": _str(_at(record, 0)),
+                "created": _epoch(_at(record, 5, 0)),
+                **_record_fields(record),
+                "listed": media_id in listed,
+            }
+        )
     return out
 
 
