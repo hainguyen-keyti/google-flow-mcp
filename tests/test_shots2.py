@@ -136,5 +136,7 @@ def test_each_join_says_whether_it_is_a_cut_or_a_dissolve():
     # start pose; those keep a dissolve to cover the restart.
     joins = shots2.joins()
     assert len(joins) == len(shots2.SHOTS) - 1
-    assert joins == ["cut", "cut", "cut", "dissolve", "dissolve"]
+    # Every join is a cut. A dissolve reads as slow on a phone, and on TikTok the jump cut IS the
+    # grammar: the three mirror shots cutting straight into each other is what the format expects.
+    assert joins == ["cut"] * 5
     assert shots2.by_key("hook").join == "cut"
