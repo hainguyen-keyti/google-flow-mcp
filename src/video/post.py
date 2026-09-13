@@ -17,6 +17,8 @@ WIDTH, HEIGHT, FPS = 720, 1280, 24
 SHEET_CELL = 240
 STRIP_CELL, STRIP_COLS = 180, 8
 FADE = 0.5
+# One frame of blend. The eye reads it as a cut, and it keeps cuts and dissolves on one path.
+CUT = round(1 / FPS, 3)
 LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11"
 # A clip whose loudness range beats the target cannot be moved by gain alone: measured 2026-09-13,
 # the wardrobe shot had 15.7 dB of range and 2.6 dB of headroom, and loudnorm stopped at -19.7 LUFS.
@@ -110,6 +112,35 @@ def duration(path: Path) -> float:
         return float(done.stdout.strip())
     except ValueError:
         return 0.0
+
+
+def video_duration(path: Path) -> float:
+    """Length of the picture, which is what a transition actually works on.
+
+    Loudness normalising leaves the audio slightly longer than the video and the container reports the
+    longer of the two, so timing a cut off the container drifts a few hundredths per join.
+    """
+    done = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=duration",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        return float(done.stdout.strip())
+    except ValueError:
+        return duration(path)
 
 
 def last_frame(clip: Path, out: Path) -> Path:
@@ -305,30 +336,46 @@ def normalise(
     return out
 
 
-def xfade_total(durations: list[float], fade: float = FADE) -> float:
-    """Every transition eats one fade out of the running time."""
-    return sum(durations) - max(0, len(durations) - 1) * fade
+def join_fades(joins: list[str] | None, fade: float = FADE, joins_needed: int = 0) -> list[float]:
+    """How long each join lasts: a named cut is one frame, anything else is the full dissolve."""
+    if joins is None:
+        return [fade] * joins_needed
+    return [CUT if join == "cut" else fade for join in joins]
 
 
-def xfade_starts(durations: list[float], fade: float = FADE) -> list[float]:
+def _fade_list(count: int, fade: float | list[float]) -> list[float]:
+    joins = max(0, count - 1)
+    if isinstance(fade, (int, float)):
+        return [float(fade)] * joins
+    return [float(value) for value in fade][:joins]
+
+
+def xfade_total(durations: list[float], fade: float | list[float] = FADE) -> float:
+    """Every transition eats its own fade out of the running time."""
+    return sum(durations) - sum(_fade_list(len(durations), fade))
+
+
+def xfade_starts(durations: list[float], fade: float | list[float] = FADE) -> list[float]:
     """Where each clip begins once the transitions overlap."""
+    fades = _fade_list(len(durations), fade)
     starts, clock = [], 0.0
     for index, seconds in enumerate(durations):
         starts.append(clock)
-        clock += seconds - (fade if index < len(durations) - 1 else 0.0)
+        clock += seconds - (fades[index] if index < len(fades) else 0.0)
     return starts
 
 
 def caption_windows(
-    durations: list[float], texts: list[str], fade: float = FADE, lead: float = 0.4
+    durations: list[float], texts: list[str], fade: float | list[float] = FADE, lead: float = 0.4
 ) -> list[Caption]:
     """Caption windows on the faded timeline, clear of the dissolves at both ends."""
     starts = xfade_starts(durations, fade)
+    fades = _fade_list(len(durations), fade)
     windows: list[Caption] = []
     for index, (start, seconds, text) in enumerate(zip(starts, durations, texts, strict=False)):
         if not text:
             continue
-        tail = fade if index < len(durations) - 1 else 0.0
+        tail = fades[index] if index < len(fades) else 0.0
         begin = start + lead
         end = start + seconds - tail - lead
         windows.append((round(begin, 2), round(max(begin + 0.5, end), 2), text))
@@ -349,10 +396,14 @@ def _caption_chain(stage: str, captions: list[Caption]) -> list[str]:
 
 
 def build_xfade_filter(
-    durations: list[float], captions: list[Caption], fade: float = FADE, transition: str = "fade"
+    durations: list[float],
+    captions: list[Caption],
+    fade: float | list[float] = FADE,
+    transition: str = "fade",
 ) -> str:
-    """Dissolve between shots instead of cutting: the hard concat is what made the old cut jump."""
+    """Join the shots, each join with its own length: a frame for a cut, longer for a dissolve."""
     count = len(durations)
+    fades = _fade_list(count, fade)
     parts = [
         f"[{i}:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
         f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS},format=yuv420p,settb=AVTB[v{i}]"
@@ -363,11 +414,13 @@ def build_xfade_filter(
     ]
     stage, astage = "v0", "a0"
     for index in range(1, count):
-        offset = sum(durations[:index]) - index * fade
+        this_fade = fades[index - 1]
+        offset = sum(durations[:index]) - sum(fades[:index])
         parts.append(
-            f"[{stage}][v{index}]xfade=transition={transition}:duration={fade}:offset={offset:.3f}[x{index}]"
+            f"[{stage}][v{index}]xfade=transition={transition}:duration={this_fade}:"
+            f"offset={offset:.3f}[x{index}]"
         )
-        parts.append(f"[{astage}][a{index}]acrossfade=d={fade}:c1=tri:c2=tri[ax{index}]")
+        parts.append(f"[{astage}][a{index}]acrossfade=d={this_fade}:c1=tri:c2=tri[ax{index}]")
         stage, astage = f"x{index}", f"ax{index}"
     parts.append(f"[{astage}]anull[a]")
     if not captions:
@@ -377,13 +430,15 @@ def build_xfade_filter(
     return ";".join(parts)
 
 
-def crossfade_with_captions(clips: list[Path], texts: list[str], out: Path, fade: float = FADE) -> Path:
+def crossfade_with_captions(
+    clips: list[Path], texts: list[str], out: Path, fade: float | list[float] = FADE
+) -> Path:
     """Stitch the shots with dissolves and burn one caption per shot."""
     if not clips:
         raise ValueError("no clips to stitch")
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    durations = [duration(Path(clip)) for clip in clips]
+    durations = [video_duration(Path(clip)) for clip in clips]
     captions = caption_windows(durations, texts, fade)
     args = ["ffmpeg", "-v", "error", "-y"]
     for clip in clips:

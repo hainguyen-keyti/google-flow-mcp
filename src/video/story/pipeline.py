@@ -417,14 +417,16 @@ def build2(*, out_dir: Path, fade: float = post.FADE) -> dict[str, Any]:
                 "key": key,
                 "source": str(source),
                 "path": str(target),
-                "seconds": round(post.duration(target), 3),
+                "seconds": round(post.video_duration(target), 3),
                 "lufs": post.lufs(target),
                 "trim": list(window) if window else None,
                 "gains": list(gains) if gains else None,
             }
         )
     captions = [shots2.by_key(key).caption for key, _ in sources]
-    final = post.crossfade_with_captions(normalised, captions, out_dir / FINAL_NAME, fade)
+    joins = [shots2.by_key(key).join for key, _ in sources[1:]]
+    fades = post.join_fades(joins, fade)
+    final = post.crossfade_with_captions(normalised, captions, out_dir / FINAL_NAME, fades)
     strips = [
         str(post.strip(clip, review / f"strip_{row['key']}.jpg"))
         for clip, row in zip(normalised, rows, strict=True)
@@ -433,8 +435,10 @@ def build2(*, out_dir: Path, fade: float = post.FADE) -> dict[str, Any]:
     result = {
         "final": str(final),
         "seconds": round(post.duration(final), 3),
-        "expected_seconds": round(post.xfade_total([r["seconds"] for r in rows], fade), 3),
+        "expected_seconds": round(post.xfade_total([r["seconds"] for r in rows], fades), 3),
         "fade": fade,
+        "joins": joins,
+        "fades": fades,
         "clips": rows,
         "strips": strips,
         "contact_sheet": str(sheet),

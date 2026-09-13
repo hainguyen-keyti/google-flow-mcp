@@ -101,6 +101,54 @@ def test_xfade_timeline_matches_the_measured_formula():
     assert post.xfade_starts([8.0, 8.0, 8.0], 0.5) == pytest.approx([0.0, 7.5, 15.0])
 
 
+@pytest.mark.slow
+def test_the_timeline_measures_the_video_stream_not_the_container(tmp_path):
+    # Loudness normalising re-encodes the audio a little longer than the picture, and the container
+    # reports the longer of the two. xfade works on the picture, so timing off the container drifts.
+    clip = tmp_path / "longer_audio.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=24:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=3:sample_rate=48000",
+            "-pix_fmt",
+            "yuv420p",
+            str(clip),
+        ],
+        check=True,
+    )
+    assert post.duration(clip) == pytest.approx(3.0, abs=0.1)
+    assert post.video_duration(clip) == pytest.approx(2.0, abs=0.1)
+
+
+def test_a_join_can_be_a_cut_instead_of_a_dissolve():
+    # Dissolving two different shots double-exposes them for half a second, which is what the owner saw.
+    # A cut is one frame of blend: invisible, and it keeps a single filter path.
+    fades = post.join_fades(["cut", "dissolve", "cut"], fade=0.5)
+    assert fades == [post.CUT, 0.5, post.CUT]
+    assert post.join_fades([], fade=0.5) == []
+    assert post.join_fades(None, fade=0.5, joins_needed=2) == [0.5, 0.5]
+
+
+def test_the_timeline_takes_a_different_fade_at_every_join():
+    durations = [8.0, 8.0, 8.0]
+    fades = [post.CUT, 0.5]
+    assert post.xfade_total(durations, fades) == pytest.approx(24.0 - post.CUT - 0.5, abs=0.001)
+    starts = post.xfade_starts(durations, fades)
+    assert starts == pytest.approx([0.0, 8.0 - post.CUT, 16.0 - post.CUT - 0.5])
+    spec = post.build_xfade_filter(durations, [], fades)
+    assert f"duration={post.CUT}" in spec and "duration=0.5" in spec
+
+
 def test_build_xfade_filter_offsets_every_transition_and_crossfades_the_audio():
     spec = post.build_xfade_filter([8.0, 8.0, 8.0], [], fade=0.5)
     assert spec.count("xfade=") == 2

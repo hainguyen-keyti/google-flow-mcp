@@ -88,10 +88,13 @@ def test_audio_is_judged_on_both_the_level_and_the_spread():
     assert quality.audio_check([None, -16.0])[0] == "FAIL"
 
 
-def test_the_final_duration_is_judged_against_the_crossfade_formula():
+def test_the_final_duration_is_judged_against_the_join_lengths_actually_used():
     quality = load()
     assert quality.duration_check([8.01, 8.01], 15.54, 0.5)[0] == "PASS"
     assert quality.duration_check([8.01, 8.01], 16.02, 0.5)[0] == "FAIL", "that is a hard concat"
+    # Mixed joins: one cut of a frame and one half-second dissolve.
+    assert quality.duration_check([8.0, 8.0, 8.0], 23.458, [0.042, 0.5])[0] == "PASS"
+    assert quality.duration_check([8.0, 8.0, 8.0], 23.0, [0.042, 0.5])[0] == "FAIL"
     assert quality.duration_check([], 0.0, 0.5)[0] == "FAIL"
 
 

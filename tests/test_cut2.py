@@ -26,7 +26,7 @@ def test_build2_evens_the_audio_dissolves_the_joins_and_sheets_every_clip(tmp_pa
 
     final = Path(result["final"])
     info = probe(final)
-    assert abs(float(info["format"]["duration"]) - result["expected_seconds"]) < 0.15, info
+    assert abs(post.video_duration(final) - result["expected_seconds"]) < 0.15, info
     video = next(s for s in info["streams"] if s["codec_type"] == "video")
     assert (video["width"], video["height"]) == (720, 1280)
 
@@ -49,9 +49,9 @@ def test_build2_applies_a_trim_so_a_broken_hand_costs_no_credits(tmp_path):
     pose = next(row for row in result["clips"] if row["key"] == "pose")
     assert abs(pose["seconds"] - 1.5) < 0.2, pose
     assert pose["trim"] == [0.0, 1.5]
-    expected = post.xfade_total([row["seconds"] for row in result["clips"]], post.FADE)
+    expected = post.xfade_total([row["seconds"] for row in result["clips"]], result["fades"])
     assert abs(result["expected_seconds"] - expected) < 0.01
-    assert abs(post.duration(Path(result["final"])) - expected) < 0.15
+    assert abs(post.video_duration(Path(result["final"])) - expected) < 0.15
 
 
 def test_pick_writes_down_which_take_won_and_why_the_other_was_dropped(tmp_path):
@@ -161,6 +161,18 @@ def test_the_pick_command_writes_the_choice_and_refuses_a_silent_one(tmp_path):
     assert json.loads(good.output)["take"] == "tryon2-02b"
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("tryon2-02")
     assert rows[-1]["status"] == "selected" and rows[-1]["reason"].startswith("take a lost")
+
+
+@pytest.mark.slow
+def test_build2_cuts_where_the_script_says_cut_and_dissolves_where_it_says_dissolve(tmp_path):
+    ledger_with_clips(tmp_path, seconds=3)
+    result = pipeline.build2(out_dir=tmp_path)
+
+    assert result["joins"] == shots2.joins()
+    assert result["fades"] == post.join_fades(shots2.joins(), post.FADE)
+    expected = post.xfade_total([row["seconds"] for row in result["clips"]], result["fades"])
+    assert abs(result["expected_seconds"] - expected) < 0.01
+    assert abs(post.video_duration(Path(result["final"])) - expected) < 0.15
 
 
 @pytest.mark.slow

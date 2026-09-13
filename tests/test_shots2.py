@@ -128,3 +128,13 @@ def test_story_plan2_is_free_and_never_opens_a_browser(monkeypatch):
     result = CliRunner().invoke(cli.main, ["story", "plan2"])
     assert result.exit_code == 0, result.output
     assert "tryon2-01" in result.output
+
+
+def test_each_join_says_whether_it_is_a_cut_or_a_dissolve():
+    # A dissolve between two different shots double-exposes them, which is what the owner saw. Cut those.
+    # The three mirror shots are re-renders of the same moment, so cutting them would jump her back to the
+    # start pose; those keep a dissolve to cover the restart.
+    joins = shots2.joins()
+    assert len(joins) == len(shots2.SHOTS) - 1
+    assert joins == ["cut", "cut", "cut", "dissolve", "dissolve"]
+    assert shots2.by_key("hook").join == "cut"

@@ -47,6 +47,7 @@ class Shot:
     scene: bible.Scene
     duration: int = 8
     hands_risk: bool = False
+    join: str = "cut"
     mode: str = "frames"
     start_from: str | None = None
     product: bool = False
@@ -112,6 +113,7 @@ SHOTS: tuple[Shot, ...] = (
     Shot(
         key="pose",
         mode="edit",
+        join="dissolve",
         edit_to_product=True,
         beat="show the fit: one slow turn so the cut and the drape read on camera",
         caption="Xoay một vòng cho dễ hình dung",
@@ -127,6 +129,7 @@ SHOTS: tuple[Shot, ...] = (
     Shot(
         key="closing",
         mode="edit",
+        join="dissolve",
         edit_to_product=True,
         beat="close the sale: she looks back at the viewer and invites the order",
         caption="Inbox chốt đơn nha",
@@ -142,6 +145,11 @@ SHOTS: tuple[Shot, ...] = (
 
 EXTRA_TAKES = sum(1 for shot in SHOTS if shot.hands_risk)
 EDIT_PRICE = 20
+
+
+def joins() -> list[str]:
+    """How each shot meets the one before it. The first shot has nothing to join to."""
+    return [shot.join for shot in SHOTS[1:]]
 
 
 def by_key(key: str) -> Shot:

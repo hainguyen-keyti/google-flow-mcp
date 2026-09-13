@@ -151,14 +151,16 @@ def audio_check(levels: list[float | None]) -> tuple[str, str]:
     return ("PASS" if in_window and spread <= LUFS_SPREAD else "FAIL"), detail
 
 
-def duration_check(clip_seconds: list[float], final_seconds: float, fade: float) -> tuple[str, str]:
+def duration_check(
+    clip_seconds: list[float], final_seconds: float, fade: float | list[float]
+) -> tuple[str, str]:
     if not clip_seconds:
         return "FAIL", "no clips to add up"
     expected = post.xfade_total(clip_seconds, fade)
     ok = abs(final_seconds - expected) <= 0.1
     detail = (
         f"final {final_seconds:.2f}s, formula {expected:.2f}s "
-        f"(sum {sum(clip_seconds):.2f} minus {len(clip_seconds) - 1} fades of {fade})"
+        f"(sum {sum(clip_seconds):.2f} minus joins {fade})"
     )
     return ("PASS" if ok else "FAIL"), detail
 
@@ -225,7 +227,11 @@ def main(argv: list[str] | None = None) -> int:
     row("final", "PASS" if shape_ok else "FAIL", f"{final} {shape}")
     row(
         "duration",
-        *duration_check([c["seconds"] for c in clips], seconds(info), cut.get("fade", post.FADE)),
+        *duration_check(
+            [c["seconds"] for c in clips],
+            post.video_duration(final) if final.is_file() else 0.0,
+            cut.get("fades") or cut.get("fade", post.FADE),
+        ),
     )
 
     strips = [Path(p) for p in cut.get("strips") or []]
