@@ -1,11 +1,30 @@
-"""MCP smoke: start the server in-memory, list tools, call flow_credits for real, check no secret leaks.
+"""MCP smoke: start the server in-memory and actually USE it, the way an agent would.
 
-uv run python scripts/acceptance/mcp_smoke.py
+    uv run python scripts/acceptance/mcp_smoke.py
+
+Exit code is 1 when any row is FAIL. Costs nothing, but it does drive a real browser: every read-only
+tool is called against the live account, so a run takes roughly 2 to 3 minutes (`Backend._with` opens one
+FlowSession per call, measured 7 to 14 seconds each on 2026-09-13).
+
+Why it calls tools for real instead of counting them. Until 2026-09-13 this script called exactly ONE of
+26 tools and accepted `len(names) >= 15`, so two capabilities (`flow clip reconcile` and `flow uploads`)
+were missing from the MCP surface for weeks with every gate green. A tool nobody calls is a tool nobody
+knows is broken.
+
+Why a plausible payload is checked and not just `is_error`. Also measured 2026-09-13: `flow_media` used
+to accept an `all_versions` argument it did not implement, drop it silently, and answer as if nothing had
+been asked. That returns `is_error=False` and looks perfect, so `is_error` alone proves very little.
+
+MUTATION TOOLS ARE NEVER CALLED (invariant I4). `agent_mode`, `scene_create`, `scene_delete`,
+`project_create`, `project_delete` and `flow_upload` cost nothing but change the owner's real project;
+a gate that ran them would quietly litter it on every run. The roster check below asserts they exist and
+the run asserts they stayed untouched.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import sys
 
@@ -16,8 +35,57 @@ from video import mcp_server
 
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 
+EXPECTED_TOOL_COUNT = 28
 
-async def main() -> int:
+# Free AND side-effect free: safe to call on the owner's live account on every run.
+READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits")
+READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_tools", "flow_uploads", "scene_list")
+
+# Free but they CHANGE things. Never called here; see I4 in the plan.
+MUTATING = ("agent_mode", "scene_create", "scene_delete", "project_create", "project_delete", "flow_upload")
+
+
+def payload_of(result):
+    text = "".join(getattr(chunk, "text", "") for chunk in result.content)
+    try:
+        return text, json.loads(text)
+    except ValueError:
+        return text, None
+
+
+async def call(session, name, arguments, expect):
+    """Call one tool and judge the answer, not merely the absence of an error.
+
+    Returns the parsed payload too, so a caller never has to spend a second browser session re-asking
+    for something it has already been told.
+    """
+    result = await session.call_tool(name, arguments)
+    text, payload = payload_of(result)
+    if result.is_error:
+        return "FAIL", f"{name}: is_error, {text[:90]}", payload
+    if SECRET.search(text):
+        return "FAIL", f"{name}: session material leaked into the reply", payload
+    if payload is None:
+        return "FAIL", f"{name}: reply is not JSON, {text[:90]}", payload
+    detail = expect(payload)
+    if detail is not None:
+        return "FAIL", f"{name}: {detail}", payload
+    return "PASS", f"{name}: {text[:70].replace(chr(10), ' ')}", payload
+
+
+def a_list(payload):
+    return None if isinstance(payload, list) else f"expected a list, got {type(payload).__name__}"
+
+
+def a_dict(payload):
+    return None if isinstance(payload, dict) else f"expected an object, got {type(payload).__name__}"
+
+
+def has_balance(payload):
+    return None if isinstance(payload, dict) and "balance" in payload else "no balance in the reply"
+
+
+async def run(findings):
     async with create_client_server_memory_streams() as (client_streams, server_streams):
         low = mcp_server.server._lowlevel_server
         serve = asyncio.create_task(
@@ -31,17 +99,82 @@ async def main() -> int:
         try:
             async with ClientSession(client_streams[0], client_streams[1]) as session:
                 await session.initialize()
-                names = sorted(t.name for t in (await session.list_tools()).tools)
-                print(f"tools/list: {len(names)} tools: {' '.join(names)}")
-                result = await session.call_tool("flow_credits", {})
-                text = "".join(getattr(c, "text", "") for c in result.content)
-                leak = bool(SECRET.search(text))
-                print(f"flow_credits: is_error={result.is_error} text={text[:120]} leak={leak}")
-                ok = len(names) >= 15 and not result.is_error and '"balance"' in text and not leak
-                print("PASS" if ok else "FAIL", "mcp smoke")
-                return 0 if ok else 1
+                names = sorted(tool.name for tool in (await session.list_tools()).tools)
+                findings.append(
+                    {
+                        "name": "roster",
+                        "status": "PASS" if len(names) == EXPECTED_TOOL_COUNT else "FAIL",
+                        "detail": f"{len(names)} tools served, expected exactly {EXPECTED_TOOL_COUNT}",
+                    }
+                )
+                missing = [tool for tool in MUTATING if tool not in names]
+                findings.append(
+                    {
+                        "name": "mutating present",
+                        "status": "PASS" if not missing else "FAIL",
+                        "detail": f"declared but deliberately not called: {len(MUTATING)}"
+                        if not missing
+                        else f"missing from the roster: {missing}",
+                    }
+                )
+
+                expectations = {"flow_lane": a_dict, "flow_projects": a_list, "flow_credits": has_balance}
+                projects = None
+                for name in READ_ONLY_NO_ARGS:
+                    status, detail, payload = await call(session, name, {}, expectations[name])
+                    findings.append({"name": name, "status": status, "detail": detail})
+                    if name == "flow_projects":
+                        projects = payload
+
+                project_id = None
+                if isinstance(projects, list) and projects and isinstance(projects[0], dict):
+                    project_id = projects[0].get("id")
+                if not project_id:
+                    findings.append(
+                        {
+                            "name": "project id",
+                            "status": "FAIL",
+                            "detail": "flow_projects gave no id, cannot exercise the per-project tools",
+                        }
+                    )
+                    return
+                findings.append(
+                    {"name": "project id", "status": "PASS", "detail": f"exercising against {project_id}"}
+                )
+
+                per_project = {
+                    "flow_media": a_dict,
+                    "flow_characters": a_list,
+                    "flow_tools": a_list,
+                    "flow_uploads": a_dict,
+                    "scene_list": a_list,
+                }
+                for name in READ_ONLY_PER_PROJECT:
+                    status, detail, _ = await call(
+                        session, name, {"project_id": project_id}, per_project[name]
+                    )
+                    findings.append({"name": name, "status": status, "detail": detail})
+
+                status, detail, _ = await call(
+                    session, "flow_media", {"project_id": project_id, "all_versions": True}, a_list
+                )
+                findings.append({"name": "flow_media all", "status": status, "detail": detail})
         finally:
             serve.cancel()
+
+
+async def main() -> int:
+    findings: list[dict[str, str]] = []
+    try:
+        await run(findings)
+    except Exception as exc:  # noqa: BLE001
+        findings.append({"name": "run", "status": "FAIL", "detail": f"{type(exc).__name__}: {exc}"})
+    print(f"{'STATUS':7s} {'ROW':18s} DETAIL")
+    for finding in findings:
+        print(f"{finding['status']:7s} {finding['name']:18s} {finding['detail']}")
+    failed = [f for f in findings if f["status"] == "FAIL"]
+    print(f"\nrows={len(findings)} pass={len(findings) - len(failed)} fail={len(failed)}")
+    return 1 if failed or not findings else 0
 
 
 if __name__ == "__main__":

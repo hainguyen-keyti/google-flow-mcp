@@ -116,6 +116,152 @@ class _Session:
     page = _Page()
 
 
+class _Download:
+    suggested_filename = "clip.mp4"
+
+    async def save_as(self, path):
+        Path(path).write_bytes(b"x")
+
+
+class _Countable(_Clickable):
+    """A locator that reports one match, so version selection can tell present from absent."""
+
+    async def count(self):
+        return 1
+
+
+async def _none(*args, **kwargs):
+    return None
+
+
+async def _clickable_menu_item(session, button, item):
+    return _Clickable()
+
+
+class _VersionPage:
+    """A page that remembers every selector it was asked for, so a test can prove which version was picked."""
+
+    def __init__(self):
+        self.selectors = []
+        self.request = object()
+        self.keyboard = _Keyboard()
+
+    def locator(self, selector):
+        self.selectors.append(selector)
+        return _Countable()
+
+    def get_by_role(self, role, name=None):
+        return _Clickable()
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    def expect_download(self, timeout=None):
+        class _Ctx:
+            async def __aenter__(inner):
+                return inner
+
+            async def __aexit__(inner, *exc):
+                return False
+
+            @property
+            def value(inner):
+                async def wait():
+                    return _Download()
+
+                return wait()
+
+        return _Ctx()
+
+
+def test_download_rendition_picks_the_version_before_it_reads_the_screen(monkeypatch, tmp_path):
+    # `_open` lands on the pre-edit version ON PURPOSE: the generation path needs every Omni edit to
+    # start from the same base. So "Download media" hands back the BASE clip unless a version is chosen
+    # first. Measured 2026-09-13: three separate download attempts all returned the base while looking
+    # like clean successes, and the clip that had actually been paid for was never fetched.
+    records = [
+        {"id": "m", "workflow_id": "w-base", "created": 1, "url": "https://lh3/xxxxxxxxxxxxxxxxxxxxbase"},
+        {"id": "m", "workflow_id": "w-edit", "created": 2, "url": "https://lh3/yyyyyyyyyyyyyyyyyyyyedit"},
+    ]
+
+    async def fake_snapshot(session, project_id):
+        return (records, set())
+
+    async def fake_open(session, project_id, media_id):
+        return None
+
+    async def fake_menu_item(session, button, item):
+        return _Clickable()
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", fake_menu_item)
+
+    page = _VersionPage()
+    session = type("_S", (), {"page": page})()
+    out = asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path))
+
+    assert out.exists()
+    aimed = [s for s in page.selectors if "yyyyyyyy" in s]
+    assert aimed, f"nothing selected the newest version before downloading: {page.selectors}"
+
+
+def test_download_rendition_can_be_aimed_at_one_version_by_workflow(monkeypatch, tmp_path):
+    records = [
+        {"id": "m", "workflow_id": "w-base", "created": 1, "url": "https://lh3/xxxxxxxxxxxxxxxxxxxxbase"},
+        {"id": "m", "workflow_id": "w-edit", "created": 2, "url": "https://lh3/yyyyyyyyyyyyyyyyyyyyedit"},
+    ]
+
+    async def fake_snapshot(session, project_id):
+        return (records, set())
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", _none)
+    monkeypatch.setattr(clips, "_menu_item", _clickable_menu_item)
+
+    page = _VersionPage()
+    session = type("_S", (), {"page": page})()
+    asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path, workflow_id="w-base"))
+
+    # Asking for the base must aim at the base, not at the newest version.
+    assert [s for s in page.selectors if "xxxxxxxx" in s]
+    assert not [s for s in page.selectors if "yyyyyyyy" in s]
+
+
+def test_download_rendition_refuses_rather_than_fetching_whatever_is_on_screen(monkeypatch, tmp_path):
+    # A miss used to mean downloading the displayed clip and calling it a success. That is how the same
+    # base clip came back three times on 2026-09-13 under three different filenames.
+    records = [{"id": "m", "workflow_id": "w", "created": 1, "url": "https://lh3/zzzzzzzzzzzzzzzzzzzzzzzz"}]
+
+    async def fake_snapshot(session, project_id):
+        return (records, set())
+
+    class _Empty(_Clickable):
+        async def count(self):
+            return 0
+
+    class _EmptyPage(_VersionPage):
+        def locator(self, selector):
+            self.selectors.append(selector)
+            return _Empty()
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", _none)
+    monkeypatch.setattr(clips, "_menu_item", _clickable_menu_item)
+
+    session = type("_S", (), {"page": _EmptyPage()})()
+    with pytest.raises(LookupError, match="history"):
+        asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path))
+
+    async def missing_snapshot(session, project_id):
+        return ([{"id": "m", "workflow_id": "w", "created": 1, "url": "u"}], set())
+
+    monkeypatch.setattr(clips, "_snapshot", missing_snapshot)
+    session = type("_S", (), {"page": _VersionPage()})()
+    with pytest.raises(LookupError, match="workflow"):
+        asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path, workflow_id="nope"))
+
+
 def _editor_reads(monkeypatch, balance: int = 295):
     """The two reads that run before anything can spend: the listing and the balance."""
 

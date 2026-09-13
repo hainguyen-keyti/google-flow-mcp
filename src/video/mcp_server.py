@@ -43,7 +43,11 @@ class Backend:
     async def credits(self) -> dict[str, Any]:
         return await self._with(reader.credits)
 
-    async def media(self, project_id: str) -> dict[str, Any]:
+    async def media(self, project_id: str, all_versions: bool = False) -> Any:
+        # The grid collapses a media to one row, so an Omni edit that stacks a new version onto the same
+        # media id is invisible there. `reader.records` is the only view that shows every version.
+        if all_versions:
+            return await self._with(lambda s: reader.records(s, project_id))
         return await self._with(lambda s: reader.project(s, project_id))
 
     async def characters(self, project_id: str) -> list[dict[str, Any]]:
@@ -103,12 +107,28 @@ class Backend:
         return await self._with(lambda s: agent_mod.send(s, project_id, message, wait=wait))
 
     async def clip_download(
-        self, project_id: str, media_id: str, quality: str = "1080p", out_dir: str | None = None
+        self,
+        project_id: str,
+        media_id: str,
+        quality: str = "1080p",
+        out_dir: str | None = None,
+        workflow_id: str | None = None,
     ) -> str:
         target = Path(out_dir) if out_dir else self.out_dir
         return str(
-            await self._with(lambda s: clips_mod.download_rendition(s, project_id, media_id, quality, target))
+            await self._with(
+                lambda s: clips_mod.download_rendition(
+                    s, project_id, media_id, quality, target, workflow_id=workflow_id
+                )
+            )
         )
+
+    async def clip_reconcile(self, project_id: str, out_dir: str | None = None) -> list[dict[str, Any]]:
+        target = Path(out_dir) if out_dir else self.out_dir
+        return await self._with(lambda s: clips_mod.reconcile_editor(s, project_id, out_dir=target))
+
+    async def uploads(self, project_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: uploads_mod.list_uploads(s, project_id))
 
     async def clip_extend(
         self,
@@ -213,11 +233,16 @@ async def flow_credits() -> str:
 
 
 @server.tool(
-    name="flow_media", description="A project's media (id, kind, model, size, url), meta and models. Free."
+    name="flow_media",
+    description=(
+        "A project's media (id, kind, model, size, url), meta and models. Free. Set all_versions=true "
+        "for every generation record instead: each Omni edit or upscale stacks another version onto the "
+        "SAME media id, and only this view shows them, so it is how you find the clip an edit produced."
+    ),
 )
-async def flow_media(project_id: str) -> str:
+async def flow_media(project_id: str, all_versions: bool = False) -> str:
     _require(project_id, "project_id")
-    return _json(await backend.media(project_id))
+    return _json(await backend.media(project_id, all_versions))
 
 
 @server.tool(name="flow_characters", description="A project's characters (entity_id, name, portrait). Free.")
@@ -328,16 +353,46 @@ async def agent_send(project_id: str, message: str, wait: float = 60.0) -> str:
 
 @server.tool(
     name="clip_download",
-    description="Download a clip rendition from the editor: gif (270p), 720p, 1080p or 4k (upscaled by Flow).",
+    description=(
+        "Download a clip rendition from the editor: gif (270p), 720p, 1080p or 4k (upscaled by Flow). "
+        "Defaults to the NEWEST finished version of the media; pass workflow_id (from flow_media with "
+        "all_versions=true) to fetch one specific version, such as the clip a particular edit produced."
+    ),
 )
 async def clip_download(
-    project_id: str, media_id: str, quality: str = "1080p", out_dir: str | None = None
+    project_id: str,
+    media_id: str,
+    quality: str = "1080p",
+    out_dir: str | None = None,
+    workflow_id: str | None = None,
 ) -> str:
     _require(project_id, "project_id")
     _require(media_id, "media_id")
     if quality.lower() not in clips_mod.RENDITIONS:
         raise ValueError(f"quality must be one of {sorted(clips_mod.RENDITIONS)}")
-    return _json({"path": await backend.clip_download(project_id, media_id, quality, out_dir)})
+    return _json({"path": await backend.clip_download(project_id, media_id, quality, out_dir, workflow_id)})
+
+
+@server.tool(
+    name="clip_reconcile",
+    description=(
+        "Close out editor jobs that spent credits without recording an outcome, by checking the listing "
+        "and the balance. Free: it reads and writes the ledger, it never generates. Run this after a "
+        "clip_extend or clip_edit died mid-flight, otherwise the spend has no outcome against it."
+    ),
+)
+async def clip_reconcile(project_id: str, out_dir: str | None = None) -> str:
+    _require(project_id, "project_id")
+    return _json(await backend.clip_reconcile(project_id, out_dir))
+
+
+@server.tool(
+    name="flow_uploads",
+    description="The project's Uploads view: rpcids, item count and tiles. Free.",
+)
+async def flow_uploads(project_id: str) -> str:
+    _require(project_id, "project_id")
+    return _json(await backend.uploads(project_id))
 
 
 @server.tool(name="clip_extend", description="Extend a clip with Veo 3.1 Lite (spends credits, ledgered).")

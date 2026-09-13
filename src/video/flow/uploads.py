@@ -54,6 +54,13 @@ async def list_uploads(session: FlowSession, project_id: str) -> dict[str, Any]:
     await session.goto(session.project_url(project_id), ready=PROJECT_READY)
     await page.wait_for_timeout(2_000)
     nav = page.locator("mat-list-item", has_text="Uploads").first
+    # A project that has never had an upload grows no "Uploads" nav item, and clicking a locator that
+    # matches nothing just waits out its timeout. Measured 2026-09-13 against a fresh project:
+    # `TimeoutError: Locator.click: Timeout 8000ms exceeded` on a perfectly healthy project. Absent means
+    # empty, so answer empty. Note this checks for ABSENCE only: a nav item that exists but fails to open
+    # still raises, because that is a broken Uploads view and not an empty one.
+    if await nav.count() == 0:
+        return {"rpcids": [], "count": 0, "tiles": await page.evaluate(_TILES_JS), "head": None}
     frames = await capture(session, lambda: nav.click(timeout=8_000), settle=6.0)
     listing = frames.get("WuwhI", [None])[0]
     return {

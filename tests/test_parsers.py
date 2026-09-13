@@ -67,3 +67,21 @@ def test_media_joins_descriptors_with_generation_records():
 def test_media_rejects_a_payload_that_is_not_a_listing():
     with pytest.raises(TypeError):
         parsers.media([840, 1, 2, 2, None, 840])
+
+
+def test_media_of_an_empty_project_is_empty_rather_than_an_error():
+    # A project with nothing in it simply has no descriptor and no record section, and `_at` answers
+    # None for an absent index. Measured 2026-09-13: flow_media raised TypeError against a fresh
+    # project, so an agent that created a project could not then look inside it.
+    assert parsers.media([None, None, None]) == []
+    assert parsers.media([None]) == []
+
+
+def test_media_still_refuses_a_listing_whose_sections_are_the_wrong_type():
+    # The empty case above must not become a licence to swallow corruption: absent is an empty project,
+    # present-but-not-a-list is a broken payload and has to keep raising. The credits reply used by the
+    # test above is exactly that shape, ints where the lists belong.
+    with pytest.raises(TypeError):
+        parsers.media([None, 1, [], None])
+    with pytest.raises(TypeError):
+        parsers.media([None, [], "nope", None])

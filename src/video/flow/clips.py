@@ -120,12 +120,55 @@ async def _menu_item(session: FlowSession, button: str, item: str) -> Any:
     raise LookupError(f"menu {button!r} has no item matching {item!r}")
 
 
+async def _select_version(
+    session: FlowSession, project_id: str, media_id: str, workflow_id: str | None
+) -> dict[str, Any]:
+    """Point the editor at one version, because "Download media" takes whatever is on screen.
+
+    `_open` lands on the pre-edit version and MUST keep doing so: `_generate_from_editor` relies on every
+    Omni edit starting from the same base, so fixing this in `_open` would make each edit stack on the
+    previous one. The fix belongs here instead, after the page is already open.
+
+    Measured 2026-09-13: the history panel renders one `.container` per version, and the tail of a
+    record's listing url appears inside that container's thumbnail src. Matching is not guaranteed for
+    every version, so a miss raises rather than downloading whatever happens to be showing: returning the
+    wrong clip while looking successful is the exact failure this function exists to prevent.
+    """
+    records, _ = await _snapshot(session, project_id)
+    if workflow_id:
+        wanted = next(
+            (r for r in records if r.get("id") == media_id and r.get("workflow_id") == workflow_id), None
+        )
+        if wanted is None:
+            raise LookupError(f"media {media_id} has no version with workflow {workflow_id}")
+        if not wanted.get("url"):
+            raise ValueError(f"version {workflow_id} of media {media_id} has no url in the listing")
+    else:
+        wanted = download_mod.latest_version(records, media_id)
+    tail = str(wanted["url"])[-24:]
+    entry = session.page.locator(f'.container:has(img[src*="{tail}"])')
+    if await entry.count() == 0:
+        raise LookupError(
+            f"the editor history has no entry matching version {wanted.get('workflow_id')} of {media_id}"
+        )
+    await entry.first.click(timeout=8_000)
+    await session.page.wait_for_timeout(3_000)
+    return wanted
+
+
 async def download_rendition(
-    session: FlowSession, project_id: str, media_id: str, quality: str, out_dir: Path
+    session: FlowSession,
+    project_id: str,
+    media_id: str,
+    quality: str,
+    out_dir: Path,
+    *,
+    workflow_id: str | None = None,
 ) -> Path:
     label = RENDITIONS[quality.lower()]
     page = session.page
     await _open(session, project_id, media_id)
+    await _select_version(session, project_id, media_id, workflow_id)
     item = await _menu_item(session, "Download media", label)
     async with page.expect_download(timeout=600_000) as download_info:
         await item.click(timeout=8_000)

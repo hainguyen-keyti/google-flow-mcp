@@ -182,7 +182,16 @@ def _record_fields(record: list[Any]) -> dict[str, Any]:
 
 
 def _split_listing(payload: Any) -> tuple[list[Any], list[list[Any]]]:
-    descriptors, records = _at(payload, 1), _at(payload, 2)
+    # An ABSENT section means an empty project: a project with nothing in it carries no descriptors and
+    # no records, and `_at` answers None for a missing index. A section that is PRESENT but not a list is
+    # a broken payload and still raises. Collapsing the two would silence real corruption, and the credits
+    # reply `[840, 1, 2, 2, None, 840]` is exactly that second case (ints where the lists belong).
+    # Measured 2026-09-13: flow_media raised against a fresh project, so an agent could create a project
+    # and then not be able to look inside it.
+    descriptors = _at(payload, 1)
+    records = _at(payload, 2)
+    descriptors = [] if descriptors is None else descriptors
+    records = [] if records is None else records
     if not isinstance(descriptors, list) or not isinstance(records, list):
         raise TypeError("Zzl0ze: expected [_, [descriptor, ...], [record, ...], ...]")
     kept = [r for r in records if isinstance(r, list) and len(r) >= 7 and _uuid(_at(r, 2))]
