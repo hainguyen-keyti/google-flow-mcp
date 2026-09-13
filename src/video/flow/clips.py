@@ -252,6 +252,71 @@ async def _generate_from_editor(
     }
 
 
+STUCK_STATUSES = ("opening", "submitted")
+
+
+def _stuck_editor_jobs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Editor jobs whose money state is unknown: opened or submitted, never settled.
+
+    One row per job, the earliest one, because that is the row carrying the balance from before the
+    spend. A job can hold both an `opening` and a `submitted` row and is still only one job.
+    """
+    settled = {r["job_id"] for r in rows if r.get("status") in ("done", "failed")}
+    first: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        job_id = row.get("job_id")
+        if row.get("status") not in STUCK_STATUSES or job_id in settled or job_id in first:
+            continue
+        first[job_id] = row
+    return list(first.values())
+
+
+def _editor_verdict(row: dict[str, Any], records: list[dict[str, Any]], credits_now: int) -> str:
+    """What really happened, judged by ground truth only, never by the editor's own say-so.
+
+    Same three-way rule as `story.pipeline.reconcile_decision`. It is repeated here on purpose: the flow
+    layer must not import the story layer, and four lines of rule are cheaper than that dependency.
+    """
+    media_id = row.get("source_media_id")
+    stamp = row.get("ts") or 0
+    if any(r.get("id") == media_id and (r.get("created") or 0) >= stamp for r in records):
+        return "done"
+    if credits_now == row.get("credits_before"):
+        return "failed"
+    return "unknown"
+
+
+async def reconcile_editor(session: FlowSession, project_id: str, *, out_dir: Path) -> list[dict[str, Any]]:
+    """Close out editor jobs that spent credits without ever recording an outcome.
+
+    A job left on `unknown` is left alone: money moved but nothing on that media proves what it bought,
+    and writing a guess into the ledger is worse than leaving the question open for a human.
+    """
+    ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
+    stuck = _stuck_editor_jobs(ledger.rows())
+    if not stuck:
+        return []
+    records, _ = await _snapshot(session, project_id)
+    credits_now = (await reader.credits(session))["balance"]
+    out = []
+    for row in stuck:
+        verdict = _editor_verdict(row, records, credits_now)
+        before = row.get("credits_before")
+        if verdict != "unknown":
+            ledger.append(
+                row["job_id"],
+                verdict,
+                kind=row.get("kind"),
+                source_media_id=row.get("source_media_id"),
+                credits_before=before,
+                credits_after=credits_now,
+                spent=(before - credits_now) if before is not None else None,
+                reconciled="checked the listing and the credit balance",
+            )
+        out.append({"job_id": row["job_id"], "verdict": verdict, "credits_now": credits_now})
+    return out
+
+
 async def extend(
     session: FlowSession,
     project_id: str,

@@ -250,6 +250,82 @@ def test_has_submitted_still_ignores_an_opening_row_and_blocks_the_settled_ones(
         assert ledger.has_submitted(job_id), status
 
 
+def _reconcile_world(monkeypatch, records, balance):
+    async def fake_snapshot(session, project_id):
+        return (records, set())
+
+    async def fake_credits(session):
+        return {"balance": balance}
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips.reader, "credits", fake_credits)
+
+
+def _record(media_id: str, created: float) -> dict:
+    return {
+        "id": media_id,
+        "workflow_id": f"w-{created:.0f}",
+        "created": created,
+        "status": 3,
+        "url": "https://x/n",
+        "prompt": "whatever",
+    }
+
+
+def test_reconcile_closes_an_orphan_as_done_when_the_media_gained_a_record(monkeypatch, tmp_path):
+    # This is the case that cost 20 credits: the editor spent, the driver died before its submitted row,
+    # and only Flow's listing knew the job existed.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("j", "opening", kind="extend", source_media_id="src-1", credits_before=295)
+    stamp = ledger.rows("j")[0]["ts"]
+    _reconcile_world(monkeypatch, [_record("src-1", stamp + 10)], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["done"]
+    rows = ledger.rows("j")
+    assert [r["status"] for r in rows] == ["opening", "done"]
+    assert rows[-1]["spent"] == 20
+    assert rows[-1]["credits_after"] == 275
+
+
+def test_reconcile_closes_an_orphan_as_failed_when_the_balance_never_moved(monkeypatch, tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("j", "opening", kind="edit", source_media_id="src-2", credits_before=295)
+    stamp = ledger.rows("j")[0]["ts"]
+    _reconcile_world(monkeypatch, [_record("src-2", stamp - 500)], balance=295)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["failed"]
+    rows = ledger.rows("j")
+    assert [r["status"] for r in rows] == ["opening", "failed"]
+    assert rows[-1]["spent"] == 0
+
+
+def test_reconcile_leaves_a_job_alone_when_the_evidence_does_not_agree(monkeypatch, tmp_path):
+    # Money moved but nothing new is on that media: guessing either way would put a lie in the ledger.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("j", "opening", kind="edit", source_media_id="src-3", credits_before=295)
+    _reconcile_world(monkeypatch, [], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
+def test_reconcile_ignores_jobs_that_already_have_an_outcome(monkeypatch, tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("settled", "opening", kind="edit", source_media_id="src-4", credits_before=295)
+    ledger.append("settled", "submitted", kind="edit", source_media_id="src-4")
+    ledger.append("settled", "done", spent=20)
+    _reconcile_world(monkeypatch, [], balance=275)
+
+    assert asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path)) == []
+    assert len(ledger.rows("settled")) == 3
+
+
 def test_editor_job_keeps_polling_past_the_scene_copy_until_its_own_record_is_done(monkeypatch, tmp_path):
     # Measured 2026-09-13 00:11: the scene's copy of the source is listed (status 3) seconds after Extend,
     # the extension itself only a minute later; stopping at the first done record lost the extension.
