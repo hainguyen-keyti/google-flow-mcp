@@ -46,6 +46,7 @@ Lệnh trên clip editor và agent, tốn credit, cùng ledger `out/ledger.jsonl
 ```
 uv run video flow clip extend <project> <media_id> "<prompt>" --out out    # Extend (Veo 3.1 Lite)
 uv run video flow clip edit <project> <media_id> "<prompt>" --out out      # video-to-video, Omni 1.1 Flash
+uv run video flow clip reconcile <project> --out out                      # $0, đóng sổ job editor mồ côi
 uv run video flow agent send <project> "<message>"   # agent có thể tự sinh nội dung
 ```
 
@@ -125,8 +126,15 @@ chủ repo chốt agent được gọi mọi thứ.
 ```
 uv run python scripts/acceptance/flow_coverage.py --project <id> [--character] [--spend --ref-image anh.jpg]
 uv run python scripts/acceptance/mcp_smoke.py
+uv run python scripts/acceptance/ledger_integrity.py     # $0, offline, không cần trình duyệt
 uv run pytest -q
 ```
+
+`ledger_integrity.py` canh đúng một luật: **không credit nào rời tài khoản qua clip editor mà không có
+dòng ledger trỏ tới nó**. Nó lái editor bằng stub hỏng đúng chỗ đã hỏng thật ngày 2026-09-13, lúc 20
+credit bay mất mà sổ rỗng nên phải đi truy listing của Flow bằng tay. Sáu hàng: hai hàng ghim dòng ý định
+còn lại khi extend chết ở menu và khi edit chết lúc mở editor, một hàng ghim dòng đó không chặn chạy lại,
+hai hàng ghim reconcile kết luận đúng bằng listing cộng số dư, và một hàng chống rò session.
 
 ## Canary: biết trước khi Google đổi UI
 
