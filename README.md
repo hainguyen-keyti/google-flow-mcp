@@ -128,6 +128,21 @@ uv run python scripts/acceptance/mcp_smoke.py
 uv run pytest -q
 ```
 
+## Canary: biết trước khi Google đổi UI
+
+```
+uv run python -m video.probes.canary --project <id>     # $0, exit 1 khi mỏ neo biến mất
+```
+
+Test của repo dùng fixture nên **xanh cả khi Flow đã đổi sạch giao diện**. Canary là chỗ bù: nó mở Flow
+thật, đếm đúng 11 mỏ neo mà driver đang bám vào, rồi exit khác 0 khi thiếu một cái. Nó **dùng chung hằng
+số với driver** chứ không chép lại, nên không thể xanh trong khi driver hỏng: dòng giá chấm bằng chính
+`composer.PRICE_RE`, shell trang bằng `session.PROJECT_READY`, trang editor bằng `clips.EDITOR`.
+
+Thứ mới xuất hiện trên trang không bao giờ tính là trôi, chỉ thứ mình với tay tới mà mất mới tính. Mỗi
+hàng đỏ in kèm câu "hỏng cái này thì mất gì", ví dụ mất dòng giá là mất luôn chốt chặn chi tiêu. Toàn bộ
+quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần. Chạy nó trước mỗi batch.
+
 ## Giới hạn đã đo (2026-09-12)
 
 - `gflow auth login`, `credits`, `character list` của gflow chết trên tài khoản di cư (lane labs). Repo này
