@@ -217,11 +217,12 @@ def main(argv: list[str] | None = None) -> int:
     stream = video_stream(info)
     has_audio = any(s.get("codec_type") == "audio" for s in info.get("streams", []))
     shape_ok = final.is_file() and (stream.get("width"), stream.get("height")) == SIZE and has_audio
-    row(
-        "final",
-        "PASS" if shape_ok else "FAIL",
-        f"{final} {stream.get('width')}x{stream.get('height')} audio={has_audio}",
+    shape = (
+        f"{stream.get('width')}x{stream.get('height')} audio={has_audio}"
+        if final.is_file()
+        else "does not exist"
     )
+    row("final", "PASS" if shape_ok else "FAIL", f"{final} {shape}")
     row(
         "duration",
         *duration_check([c["seconds"] for c in clips], seconds(info), cut.get("fade", post.FADE)),
