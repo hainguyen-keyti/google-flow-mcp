@@ -116,6 +116,72 @@ class _Session:
     page = _Page()
 
 
+def _editor_reads(monkeypatch, balance: int = 295):
+    """The two reads that run before anything can spend: the listing and the balance."""
+
+    async def fake_snapshot(session, project_id):
+        return ([], set())
+
+    async def fake_credits(session):
+        return {"balance": balance}
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips.reader, "credits", fake_credits)
+
+
+def test_an_extend_that_dies_on_the_menu_still_leaves_the_spend_written_down(monkeypatch, tmp_path):
+    # Measured 2026-09-13: choosing "Extend" from the menu is itself enough to create a paid job. The
+    # driver died right after that click and wrote no ledger row at all, so 20 credits left the account
+    # with nothing pointing at them and the job had to be found by hand in Flow's listing.
+    _editor_reads(monkeypatch)
+
+    async def fake_open(session, project_id, media_id):
+        return None
+
+    async def dying_menu_item(session, button, item):
+        raise LookupError(f"menu {button!r} has no item matching {item!r}")
+
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", dying_menu_item)
+
+    with pytest.raises(LookupError):
+        asyncio.run(
+            clips._generate_from_editor(
+                _Session(), "p", "src-1", "keep going", kind="extend", out_dir=tmp_path, job_id="j", wait=1.0
+            )
+        )
+
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")
+    assert [r["status"] for r in rows] == ["opening"], rows
+    assert rows[0]["kind"] == "extend"
+    assert rows[0]["source_media_id"] == "src-1"
+    assert rows[0]["credits_before"] == 295
+
+
+def test_an_edit_that_dies_opening_the_editor_still_leaves_the_spend_written_down(monkeypatch, tmp_path):
+    # The edit path has the same hole: everything between opening the editor and the submit row is a
+    # stretch where Flow can take money while the ledger stays empty.
+    _editor_reads(monkeypatch)
+
+    async def dying_open(session, project_id, media_id):
+        raise RuntimeError("editor never rendered")
+
+    monkeypatch.setattr(clips, "_open", dying_open)
+
+    with pytest.raises(RuntimeError, match="editor never rendered"):
+        asyncio.run(
+            clips._generate_from_editor(
+                _Session(), "p", "src-2", "dress her", kind="edit", out_dir=tmp_path, job_id="k", wait=1.0
+            )
+        )
+
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("k")
+    assert [r["status"] for r in rows] == ["opening"], rows
+    assert rows[0]["kind"] == "edit"
+    assert rows[0]["source_media_id"] == "src-2"
+    assert rows[0]["credits_before"] == 295
+
+
 def test_editor_job_keeps_polling_past_the_scene_copy_until_its_own_record_is_done(monkeypatch, tmp_path):
     # Measured 2026-09-13 00:11: the scene's copy of the source is listed (status 3) seconds after Extend,
     # the extension itself only a minute later; stopping at the first done record lost the extension.
@@ -178,7 +244,7 @@ def test_editor_job_keeps_polling_past_the_scene_copy_until_its_own_record_is_do
     assert fetched == ["w-new"]
     assert [o["role"] for o in result["outputs"]] == ["copy", "generated"]
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("job-9")
-    assert [r["status"] for r in rows] == ["submitted", "done"]
+    assert [r["status"] for r in rows] == ["opening", "submitted", "done"]
 
 
 class _MenuPage:
@@ -321,7 +387,7 @@ def test_editor_job_clicks_generate_once_and_fails_loudly_when_nothing_was_gener
         )
     assert clicks == ["generate"], "Start generation must be clicked exactly once, never retried"
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")
-    assert [r["status"] for r in rows] == ["submitted", "failed"]
+    assert [r["status"] for r in rows] == ["opening", "submitted", "failed"]
     assert rows[-1]["spent"] == 0
 
 
