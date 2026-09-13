@@ -79,6 +79,33 @@ def test_the_ledger_row_counts_a_reused_clip_at_the_price_it_really_cost():
     assert status == "FAIL", "a failure that moved money is never acceptable"
 
 
+def test_every_clip_in_the_cut_must_trace_back_to_a_ledger_row():
+    # The gate used to name the take the ledger settled on while the cut quietly used another file.
+    # Passing a row that names the wrong file is how an acceptance goes green on something nobody checked.
+    quality = load()
+    ledger = [
+        {"job_id": "tryon2-05", "status": "done", "path": "out/x/tryon2-05.mp4"},
+        {"job_id": "pose-reroll-1", "status": "done", "outputs": [{"path": "out/x/reroll.mp4"}]},
+    ]
+    clips = [{"key": "pose", "source": "out/x/tryon2-05.mp4"}]
+    status, detail = quality.provenance_check(clips, ledger)
+    assert status == "PASS" and "tryon2-05" in detail
+
+    # An override is legitimate, but the row has to SAY the cut is using a different file.
+    swapped = [{"key": "pose", "source": "out/x/reroll.mp4"}]
+    status, detail = quality.provenance_check(swapped, ledger)
+    assert status == "PASS"
+    assert "pose-reroll-1" in detail and "pose" in detail
+
+    # A file nobody paid for has no business in the cut.
+    orphan = [{"key": "pose", "source": "out/x/mystery.mp4"}]
+    status, detail = quality.provenance_check(orphan, ledger)
+    assert status == "FAIL"
+    assert "mystery.mp4" in detail
+
+    assert quality.provenance_check([], ledger)[0] == "FAIL"
+
+
 def test_audio_is_judged_on_both_the_level_and_the_spread():
     quality = load()
     assert quality.audio_check([-16.8, -15.6, -16.0])[0] == "PASS"

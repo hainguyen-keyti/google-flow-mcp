@@ -137,6 +137,45 @@ def ledger_check(rows: list[dict]) -> tuple[str, str]:
     return ("PASS" if ok else "FAIL"), detail
 
 
+def provenance_check(clips: list[dict], ledger_rows: list[dict]) -> tuple[str, str]:
+    """Every clip in the cut has to trace back to a job that was actually paid for and recorded.
+
+    The gate used to print the take the ledger settled on while the cut quietly used another file, so a
+    re-rolled clip could ride in unnamed. Naming the job each file really came from closes that.
+    """
+    if not clips:
+        return "FAIL", "no clips in the cut"
+    by_path: dict[str, str] = {}
+    jobs: list[str] = []
+    for row in ledger_rows:
+        job_id = row.get("job_id")
+        if job_id and job_id not in jobs:
+            jobs.append(job_id)
+        for path in [row.get("path"), *[o.get("path") for o in (row.get("outputs") or [])]]:
+            if path:
+                by_path.setdefault(str(path), job_id)
+
+    def trace(source: str) -> str | None:
+        if source in by_path:
+            return by_path[source]
+        stem = Path(source).name
+        # A file named after a job belongs to it: `<job>_worn.mp4` is that job's re-downloaded rendition.
+        matches = [job for job in jobs if stem.startswith(job)]
+        return max(matches, key=len) if matches else None
+
+    traced, orphans = [], []
+    for clip in clips:
+        source = str(clip.get("source") or "")
+        job_id = trace(source)
+        if job_id is None:
+            orphans.append(Path(source).name)
+        else:
+            traced.append(f"{clip.get('key')}={job_id}")
+    if orphans:
+        return "FAIL", f"no ledger row explains {orphans}"
+    return "PASS", "; ".join(traced)
+
+
 def audio_check(levels: list[float | None]) -> tuple[str, str]:
     """The owner heard the volume jump at every cut: level alone is not enough, the spread is the defect."""
     if not levels or any(level is None for level in levels):
@@ -251,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
         else []
     )
     row("takes", *takes_check(ledger_rows))
+    row("provenance", *provenance_check(clips, ledger_rows))
     row("ledger", *ledger_check(ledger_rows))
 
     orphaned = pipeline.inconsistent_chain(out) if ledger_rows else []
