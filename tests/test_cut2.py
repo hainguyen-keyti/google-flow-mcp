@@ -197,6 +197,51 @@ def test_load_grades_reads_a_missing_file_as_no_grade(tmp_path):
     assert pipeline.load_grades(tmp_path) == {"fabric": (1.14, 1.2, 1.09)}
 
 
+def test_a_takes_override_swaps_the_clip_without_touching_the_ledger(tmp_path):
+    # A re-roll lands under its own job id and its own file. The shot's ledger row still points at the
+    # take it settled on, and rewriting that row or that file would make the ledger describe bytes that
+    # are gone, which is the exact disease the ledger-integrity work cured.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    for index, shot in enumerate(shots2.SHOTS, start=1):
+        for job in pipeline.take_ids(shots2.job_id(index), shot.hands_risk):
+            clip = tmp_path / f"{job}.mp4"
+            clip.write_bytes(b"mp4")
+            ledger.append(job, "done", path=str(clip), spent=10)
+    pipeline.select(tmp_path, "wardrobe", "tryon2-02", "cleaner hand")
+    pipeline.select(tmp_path, "pose", "tryon2-05", "cleaner hand")
+    reroll = tmp_path / "pose-reroll-1.mp4"
+    reroll.write_bytes(b"mp4")
+
+    assert dict(pipeline.clip_paths(tmp_path))["pose"] == tmp_path / "tryon2-05.mp4"
+
+    (tmp_path / "takes.json").write_text(json.dumps({"pose": "pose-reroll-1.mp4"}))
+    assert dict(pipeline.clip_paths(tmp_path))["pose"] == reroll
+    # The ledger is untouched: one done row for the shot, still naming the take it settled on.
+    done = [r for r in ledger.rows("tryon2-05") if r.get("status") == "done"]
+    assert len(done) == 1 and done[0]["path"] == str(tmp_path / "tryon2-05.mp4")
+
+
+def test_a_takes_override_pointing_at_nothing_is_refused_not_ignored(tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    for index, shot in enumerate(shots2.SHOTS, start=1):
+        for job in pipeline.take_ids(shots2.job_id(index), shot.hands_risk):
+            clip = tmp_path / f"{job}.mp4"
+            clip.write_bytes(b"mp4")
+            ledger.append(job, "done", path=str(clip), spent=10)
+    pipeline.select(tmp_path, "wardrobe", "tryon2-02", "x")
+    pipeline.select(tmp_path, "pose", "tryon2-05", "x")
+    (tmp_path / "takes.json").write_text(json.dumps({"pose": "not_there.mp4"}))
+
+    with pytest.raises(RuntimeError, match="not_there.mp4"):
+        pipeline.clip_paths(tmp_path)
+
+
+def test_load_takes_reads_a_missing_file_as_no_override(tmp_path):
+    assert pipeline.load_takes(tmp_path) == {}
+    (tmp_path / "takes.json").write_text(json.dumps({"pose": "x.mp4"}))
+    assert pipeline.load_takes(tmp_path) == {"pose": "x.mp4"}
+
+
 def test_load_trims_reads_a_missing_file_as_no_trims(tmp_path):
     assert pipeline.load_trims(tmp_path) == {}
     (tmp_path / "trims.json").write_text(json.dumps({"pose": [1, 2.5]}))

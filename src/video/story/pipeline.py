@@ -341,6 +341,19 @@ def select(out_dir: Path, key: str, take: str, reason: str) -> dict[str, Any]:
     }
 
 
+def load_takes(out_dir: Path) -> dict[str, str]:
+    """Optional `takes.json`: use this file for a shot instead of the take its ledger row settled on.
+
+    A re-roll lands under its own job id and its own file. Pointing the cut at it here keeps the ledger
+    honest: the shot's row still names the take that was actually paid for and downloaded, and nothing
+    rewrites a row or overwrites a clip that a row already describes.
+    """
+    path = Path(out_dir) / "takes.json"
+    if not path.is_file():
+        return {}
+    return {key: str(value) for key, value in json.loads(path.read_text()).items()}
+
+
 def load_grades(out_dir: Path) -> dict[str, tuple[float, float, float]]:
     """Optional `grade.json`: per-channel gain for a shot whose colour drifted from the rest."""
     path = Path(out_dir) / "grade.json"
@@ -362,8 +375,20 @@ def load_trims(out_dir: Path) -> dict[str, tuple[float, float]]:
 def clip_paths(out_dir: Path) -> list[tuple[str, Path]]:
     """The clip of every shot, in story order; a gap or an unjudged pair of takes stops the cut."""
     ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
+    overrides = load_takes(out_dir)
     found, missing = [], []
     for row in shots2.plan():
+        override = overrides.get(row["key"])
+        if override:
+            chosen = Path(override)
+            if not chosen.is_absolute():
+                chosen = Path(out_dir) / override
+            if not chosen.is_file():
+                raise RuntimeError(
+                    f"{row['key']}: takes.json points at {override}, which is not a file in {out_dir}"
+                )
+            found.append((row["key"], chosen))
+            continue
         takes = {
             job: clip_file(out_dir, ledger, job, edited=row["edit_to_product"])
             for job in take_ids(row["job_id"], row["hands_risk"])
