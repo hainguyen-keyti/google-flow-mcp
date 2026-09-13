@@ -603,3 +603,22 @@ def test_clip_extend_and_edit_cli_print_json(monkeypatch):
         result = CliRunner().invoke(cli.main, ["flow", "clip", verb, "p", "m", "keep going"])
         assert result.exit_code == 0, result.output
         assert '"job_id": "j"' in result.output
+
+
+def test_clip_reconcile_cli_prints_every_verdict(monkeypatch):
+    seen = {}
+
+    def fake_read(profile, fn):
+        seen["profile"] = profile
+        return [
+            {"job_id": "j", "verdict": "done", "credits_now": 275},
+            {"job_id": "k", "verdict": "unknown", "credits_now": 275},
+        ]
+
+    monkeypatch.setattr(cli, "_read", fake_read)
+    result = CliRunner().invoke(cli.main, ["flow", "clip", "reconcile", "p", "--out", "out/x"])
+
+    assert result.exit_code == 0, result.output
+    assert '"verdict": "done"' in result.output
+    assert '"verdict": "unknown"' in result.output, "a job left open has to stay visible, not be hidden"
+    assert seen["profile"] == "default"

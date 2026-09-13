@@ -382,6 +382,20 @@ def clip_edit(
     click.echo(json.dumps(result))
 
 
+@clip.command("reconcile")
+@click.argument("project_id")
+@click.option("--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False))
+@click.option("--profile", default="default", show_default=True)
+def clip_reconcile(project_id: str, out_dir: str, profile: str) -> None:
+    """Close out editor jobs that spent credits but never recorded an outcome ($0, reads only)."""
+    from pathlib import Path
+
+    from video.flow import clips
+
+    rows = _read(profile, lambda s: clips.reconcile_editor(s, project_id, out_dir=Path(out_dir)))
+    click.echo(json.dumps(rows, indent=2, ensure_ascii=False))
+
+
 @flow.group()
 def agent() -> None:
     """Flow Agent mode: toggle, or send a message (the agent may generate, spending credits)."""
