@@ -142,6 +142,64 @@ def last_frame(clip: Path, out: Path) -> Path:
     return out
 
 
+GAIN_LIMIT = 2.0
+Gains = tuple[float, float, float]
+
+
+def mean_rgb(path: Path, at: float = 1.0, crop: str | None = None) -> Gains:
+    """Average colour of one frame, optionally of one region of it."""
+    chain = f"{crop}," if crop else ""
+    raw = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-ss",
+            f"{at:.2f}",
+            "-i",
+            str(path),
+            "-vf",
+            f"{chain}scale=64:64",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        capture_output=True,
+        check=False,
+    ).stdout
+    if not raw:
+        return (0.0, 0.0, 0.0)
+    count = len(raw) // 3
+    return tuple(round(sum(raw[channel::3]) / count, 1) for channel in range(3))
+
+
+def channel_gains(source: Gains, target: Gains) -> Gains:
+    """Per-channel gain that moves one measured colour onto another.
+
+    The owner's complaint was the garment changing between shots, and the close-up of it on the hanger
+    reads pinker and darker than the same garment on her. A channel gain is the smallest correction that
+    fixes that without touching anything else; anything wilder than a factor of two means the measurement
+    was wrong, so it is clamped rather than applied.
+    """
+    gains = []
+    for src, dst in zip(source, target, strict=True):
+        if src <= 0:
+            gains.append(1.0)
+            continue
+        gains.append(round(min(max(dst / src, 1 / GAIN_LIMIT), GAIN_LIMIT), 3))
+    return tuple(gains)
+
+
+def grade_filter(gains: Gains | None) -> str:
+    if not gains or all(abs(gain - 1.0) < 0.001 for gain in gains):
+        return ""
+    return f"colorchannelmixer=rr={gains[0]}:gg={gains[1]}:bb={gains[2]}"
+
+
 def parse_lufs(text: str) -> float | None:
     """Integrated loudness out of an ebur128 summary."""
     match = LUFS_RE.search(text or "")
@@ -220,7 +278,13 @@ def measure_loudness(clip: Path, start: float | None = None, end: float | None =
     return parse_loudnorm_json(done.stderr)
 
 
-def normalise(clip: Path, out: Path, start: float | None = None, end: float | None = None) -> Path:
+def normalise(
+    clip: Path,
+    out: Path,
+    start: float | None = None,
+    end: float | None = None,
+    gains: Gains | None = None,
+) -> Path:
     """One clip at broadcast loudness, optionally trimmed.
 
     The clips come back from Veo as far as 36 dB apart, which reads as the volume jumping at every cut;
@@ -230,8 +294,12 @@ def normalise(clip: Path, out: Path, start: float | None = None, end: float | No
     out.parent.mkdir(parents=True, exist_ok=True)
     args = ["ffmpeg", "-v", "error", "-y", *_trim_args(clip, start, end)]
     args += ["-af", f"{COMPRESSOR},{loudnorm_filter(measure_loudness(clip, start, end))}"]
+    grade = grade_filter(gains)
+    if grade:
+        args += ["-vf", grade]
     # Trimming has to re-encode: an input seek with -c:v copy would start at the nearest keyframe.
-    args += ["-c:v", "libx264", "-preset", "medium", "-crf", "20"] if start or end else ["-c:v", "copy"]
+    recode = ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
+    args += recode if (start or end or grade) else ["-c:v", "copy"]
     args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out)]
     _run(args)
     return out

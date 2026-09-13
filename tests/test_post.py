@@ -155,6 +155,33 @@ def test_the_measured_pass_feeds_its_numbers_into_the_second_one():
     assert post.parse_loudnorm_json("nothing here") is None
 
 
+def test_channel_gains_map_one_measured_colour_onto_another():
+    # Measured 2026-09-13: the garment reads rgb(159,132,129) on the hanger and rgb(182,159,140) on her.
+    gains = post.channel_gains((159.2, 131.9, 129.0), (182.2, 158.8, 140.1))
+    assert gains == pytest.approx((1.144, 1.204, 1.086), abs=0.001)
+    assert post.channel_gains((100, 100, 100), (100, 100, 100)) == (1.0, 1.0, 1.0)
+    # A wild correction is a measurement mistake, not a grade: clamp it rather than wreck the picture.
+    assert post.channel_gains((10, 10, 10), (200, 200, 200)) == (2.0, 2.0, 2.0)
+    assert post.channel_gains((0, 0, 0), (120, 120, 120)) == (1.0, 1.0, 1.0)
+
+
+def test_the_grade_filter_is_empty_when_there_is_nothing_to_correct():
+    assert post.grade_filter((1.0, 1.0, 1.0)) == ""
+    assert post.grade_filter(None) == ""
+    spec = post.grade_filter((1.144, 1.204, 1.086))
+    assert spec == "colorchannelmixer=rr=1.144:gg=1.204:bb=1.086"
+
+
+@pytest.mark.slow
+def test_normalise_moves_the_colour_when_it_is_given_a_grade(tmp_path):
+    clip = make_clip(tmp_path / "c.mp4", seconds=2, size="320x320")
+    before = post.mean_rgb(clip, at=1.0)
+    graded = post.normalise(clip, tmp_path / "g.mp4", gains=(1.3, 1.0, 0.8))
+    after = post.mean_rgb(graded, at=1.0)
+    assert after[0] > before[0], (before, after)
+    assert after[2] < before[2], (before, after)
+
+
 @pytest.mark.slow
 def test_a_clip_whose_loudness_range_beats_the_target_still_lands_on_level(tmp_path):
     # Real audio from the wardrobe shot: loudness range 15.7 dB with only 2.6 dB of headroom, so no

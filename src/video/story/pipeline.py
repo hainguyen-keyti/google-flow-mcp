@@ -341,6 +341,15 @@ def select(out_dir: Path, key: str, take: str, reason: str) -> dict[str, Any]:
     }
 
 
+def load_grades(out_dir: Path) -> dict[str, tuple[float, float, float]]:
+    """Optional `grade.json`: per-channel gain for a shot whose colour drifted from the rest."""
+    path = Path(out_dir) / "grade.json"
+    if not path.is_file():
+        return {}
+    raw = json.loads(path.read_text())
+    return {key: tuple(float(gain) for gain in gains) for key, gains in raw.items()}
+
+
 def load_trims(out_dir: Path) -> dict[str, tuple[float, float]]:
     """Optional `trims.json`: the seconds of each shot worth keeping, keyed by shot key."""
     path = Path(out_dir) / "trims.json"
@@ -388,17 +397,19 @@ def build2(*, out_dir: Path, fade: float = post.FADE) -> dict[str, Any]:
     """
     out_dir = Path(out_dir)
     trims = load_trims(out_dir)
+    grades = load_grades(out_dir)
     review = out_dir / "review"
     sources = clip_paths(out_dir)
     rows: list[dict[str, Any]] = []
     normalised: list[Path] = []
     for key, source in sources:
-        window = trims.get(key)
+        window, gains = trims.get(key), grades.get(key)
         target = post.normalise(
             source,
             out_dir / "norm" / f"{key}.mp4",
             start=window[0] if window else None,
             end=window[1] if window else None,
+            gains=gains,
         )
         normalised.append(target)
         rows.append(
@@ -409,6 +420,7 @@ def build2(*, out_dir: Path, fade: float = post.FADE) -> dict[str, Any]:
                 "seconds": round(post.duration(target), 3),
                 "lufs": post.lufs(target),
                 "trim": list(window) if window else None,
+                "gains": list(gains) if gains else None,
             }
         )
     captions = [shots2.by_key(key).caption for key, _ in sources]

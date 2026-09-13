@@ -163,6 +163,28 @@ def test_the_pick_command_writes_the_choice_and_refuses_a_silent_one(tmp_path):
     assert rows[-1]["status"] == "selected" and rows[-1]["reason"].startswith("take a lost")
 
 
+@pytest.mark.slow
+def test_build2_applies_a_colour_grade_and_records_it(tmp_path):
+    ledger_with_clips(tmp_path)
+    (tmp_path / "grade.json").write_text(json.dumps({"fabric": [1.3, 1.0, 0.8]}))
+    before = post.mean_rgb(tmp_path / "tryon2-03.mp4", at=1.0)
+
+    result = pipeline.build2(out_dir=tmp_path)
+
+    fabric = next(row for row in result["clips"] if row["key"] == "fabric")
+    assert fabric["gains"] == [1.3, 1.0, 0.8]
+    after = post.mean_rgb(Path(fabric["path"]), at=1.0)
+    assert after[0] > before[0] and after[2] < before[2], (before, after)
+    # Nothing else is touched.
+    assert all(row["gains"] is None for row in result["clips"] if row["key"] != "fabric")
+
+
+def test_load_grades_reads_a_missing_file_as_no_grade(tmp_path):
+    assert pipeline.load_grades(tmp_path) == {}
+    (tmp_path / "grade.json").write_text(json.dumps({"fabric": [1.14, 1.2, 1.09]}))
+    assert pipeline.load_grades(tmp_path) == {"fabric": (1.14, 1.2, 1.09)}
+
+
 def test_load_trims_reads_a_missing_file_as_no_trims(tmp_path):
     assert pipeline.load_trims(tmp_path) == {}
     (tmp_path / "trims.json").write_text(json.dumps({"pose": [1, 2.5]}))
