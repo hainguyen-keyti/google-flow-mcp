@@ -57,6 +57,42 @@ def with_client(fn):
     return asyncio.run(main())
 
 
+# Every tool with the smallest argument set it accepts. This table is what turns coverage into a property
+# of the suite rather than something re-counted by hand: measured 2026-09-14 by wrapping
+# ClientSession.call_tool at runtime, only 4 of 28 tools were ever really invoked, while two separate
+# grep-based counts of the same thing disagreed in opposite directions.
+TOOL_CALLS: dict[str, dict] = {
+    "flow_lane": {},
+    "flow_projects": {},
+    "flow_credits": {},
+    "flow_media": {"project_id": "P"},
+    "flow_characters": {"project_id": "P"},
+    "flow_tools": {"project_id": "P"},
+    "flow_download": {"project_id": "P", "media_id": "M"},
+    "flow_upload": {"project_id": "P", "path": "/tmp/a.png"},
+    "flow_uploads": {"project_id": "P"},
+    "project_create": {},
+    "project_rename": {"project_id": "P", "title": "new title"},
+    "project_delete": {"project_id": "P"},
+    "character_create": {"project_id": "P", "prompt": "a calm face"},
+    "character_delete": {"project_id": "P", "entity_id": "E"},
+    "scene_list": {"project_id": "P"},
+    "scene_create": {"project_id": "P"},
+    "scene_delete": {"project_id": "P", "scene_id": "S"},
+    "agent_mode": {"project_id": "P", "enabled": True},
+    "agent_send": {"project_id": "P", "message": "hello"},
+    "clip_download": {"project_id": "P", "media_id": "M"},
+    "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going"},
+    "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt"},
+    "clip_reconcile": {"project_id": "P"},
+    "gen_t2v": {"prompt": "a boat", "project": "P"},
+    "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P"},
+    "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P"},
+    "gen_t2i": {"prompt": "a boat", "project": "P"},
+    "gen_i2i": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P"},
+}
+
+
 # A CLI command with no MCP tool is unreachable for an agent, which is the whole product. Every entry
 # here is a claim that an agent never needs that command, so each one carries the reason it is safe.
 EXCLUDED_COMMANDS = {
@@ -100,6 +136,94 @@ def test_the_served_tools_are_exactly_the_declared_roster():
     # Equality, not a subset: a subset check passes a tool that was added without being declared, and
     # the old `len(names) >= 15` floor let 11 of 26 tools vanish unnoticed.
     assert served_tools() == EXPECTED_TOOLS
+
+
+class _Recorder:
+    """Stands in for the whole Backend, recording what each tool forwarded.
+
+    It replaces `mcp_server.backend` outright rather than one method at a time, because the tool bodies
+    look `backend` up in module globals at call time (verified 2026-09-14). Nothing here opens a
+    FlowSession, so no browser starts, no Flow request goes out, and no credit can move: that matters
+    because this file calls gen_*, clip_extend, clip_edit and agent_send, which all spend real money.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, method):
+        async def capture(*args, **kwargs):
+            self.calls.append((method, args, kwargs))
+            return {"recorded": method}
+
+        return capture
+
+    def methods(self):
+        return [method for method, _, _ in self.calls]
+
+
+def drive_every_tool(monkeypatch):
+    """Call every tool in the table once against a recording backend, and report what happened."""
+    recorder = _Recorder()
+    monkeypatch.setattr(mcp_server, "backend", recorder)
+
+    async def fn(session):
+        outcomes = {}
+        for name, arguments in TOOL_CALLS.items():
+            result = await session.call_tool(name, dict(arguments))
+            outcomes[name] = result
+        return outcomes
+
+    return recorder, with_client(fn)
+
+
+def test_every_tool_can_actually_be_called(monkeypatch):
+    # Measured 2026-09-14 by wrapping ClientSession.call_tool at runtime: before this test the suite
+    # really invoked only 4 of 28 tools (clip_download, flow_credits, flow_media, gen_t2v). A tool that
+    # nobody ever calls is a tool nobody knows is broken.
+    recorder, outcomes = drive_every_tool(monkeypatch)
+
+    errored = sorted(name for name, result in outcomes.items() if result.is_error)
+    assert errored == [], f"tools returned is_error: {errored}"
+    assert sorted(outcomes) == sorted(TOOL_CALLS)
+    assert len(recorder.calls) == len(TOOL_CALLS), (
+        f"{len(TOOL_CALLS)} tools called but the backend only saw {len(recorder.calls)}: {recorder.methods()}"
+    )
+
+
+def test_every_tool_forwards_its_arguments_to_the_backend(monkeypatch):
+    """An argument a tool accepts and then drops is invisible: the call still answers is_error=False.
+
+    Measured 2026-09-13: `flow_media` took an `all_versions` argument it did not implement, discarded it,
+    and replied as though nothing had been asked. That was found only because someone went looking. This
+    checks all 28 at once.
+
+    The assertion is deliberately loose about HOW a value arrives, because the mapping is not one to one:
+    `flow_media("P")` reaches the backend as `media("P", False)` positionally with the default filled in,
+    while `gen_t2v` arrives as `generate(kind="t2v", prompt=..., project=...)` in keyword form. Pinning 28
+    exact signatures would mostly test my transcription of them. What matters is that no value vanishes.
+    """
+    recorder, _ = drive_every_tool(monkeypatch)
+    # Pairing tool to call relies on both being in table order, which holds only while each tool calls the
+    # backend exactly once. Check that here rather than trusting another test, because a double call would
+    # shift every later pair and turn this into nonsense.
+    assert len(recorder.calls) == len(TOOL_CALLS)
+
+    lost = []
+    for tool, (method, args, kwargs) in zip(TOOL_CALLS, recorder.calls, strict=True):
+        received = list(args) + list(kwargs.values())
+        for name, value in TOOL_CALLS[tool].items():
+            if value not in received:
+                lost.append(f"{tool}({name}={value!r}) never reached backend.{method}")
+    assert lost == [], "arguments swallowed between the tool and the backend:\n" + "\n".join(lost)
+
+
+def test_the_call_table_covers_every_served_tool():
+    # Adding a tool to the server without adding it here fails immediately, so no tool can arrive
+    # unexercised. This is the guard that "4 of 28" could exist unnoticed for weeks without.
+    served = served_tools()
+    assert set(TOOL_CALLS) == served, (
+        f"table misses {sorted(served - set(TOOL_CALLS))}; table invents {sorted(set(TOOL_CALLS) - served)}"
+    )
 
 
 def test_every_cli_command_an_agent_needs_has_an_mcp_tool():
