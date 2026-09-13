@@ -182,6 +182,74 @@ def test_an_edit_that_dies_opening_the_editor_still_leaves_the_spend_written_dow
     assert rows[0]["credits_before"] == 295
 
 
+def test_an_orphaned_opening_row_does_not_block_the_same_job_from_running_again(monkeypatch, tmp_path):
+    # The point of the row is to record a spend, not to burn the job id. If it blocked, every failure
+    # would force a fresh id and the ledger would drift away from the shot it belongs to.
+    prompt = "keep going"
+    gen.Ledger(tmp_path / "ledger.jsonl").append("j", "opening", kind="extend", source_media_id="src")
+    ours = {
+        "id": "new",
+        "workflow_id": "w-new",
+        "created": 2,
+        "status": 3,
+        "url": "https://x/n",
+        "prompt": prompt,
+    }
+    snapshots = iter([([], set()), ([ours], {"scene-1"})])
+
+    async def fake_snapshot(session, project_id):
+        return next(snapshots)
+
+    async def fake_credits(session):
+        return {"balance": 295}
+
+    async def fake_open(session, project_id, media_id):
+        return None
+
+    async def fake_menu_item(session, button, item):
+        return _Clickable()
+
+    async def fake_capture(session, action, *, settle):
+        await action()
+        return {"uwAyfb": [[]]}
+
+    async def fake_fetch(request, row, stem, attempts=6):
+        return stem.with_suffix(".mp4")
+
+    async def no_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", fake_menu_item)
+    monkeypatch.setattr(clips, "capture", fake_capture)
+    monkeypatch.setattr(clips, "_fetch_with_retry", fake_fetch)
+    monkeypatch.setattr(clips.reader, "credits", fake_credits)
+    monkeypatch.setattr(clips.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(
+        clips._generate_from_editor(
+            _Session(), "p", "src", prompt, kind="extend", out_dir=tmp_path, job_id="j", wait=60.0
+        )
+    )
+
+    assert result["status"] == "done"
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")
+    assert [r["status"] for r in rows] == ["opening", "opening", "submitted", "done"], rows
+
+
+def test_has_submitted_still_ignores_an_opening_row_and_blocks_the_settled_ones(tmp_path):
+    # Pins the exact set the guard blocks on. Adding "opening" to it would turn every recorded spend
+    # into a dead job id, which is the opposite of what the row is for.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("a", "opening", kind="edit")
+    assert not ledger.has_submitted("a")
+
+    for job_id, status in (("b", "submitted"), ("c", "done"), ("d", "failed")):
+        ledger.append(job_id, status)
+        assert ledger.has_submitted(job_id), status
+
+
 def test_editor_job_keeps_polling_past_the_scene_copy_until_its_own_record_is_done(monkeypatch, tmp_path):
     # Measured 2026-09-13 00:11: the scene's copy of the source is listed (status 3) seconds after Extend,
     # the extension itself only a minute later; stopping at the first done record lost the extension.
