@@ -85,6 +85,21 @@ def has_balance(payload):
     return None if isinstance(payload, dict) and "balance" in payload else "no balance in the reply"
 
 
+def an_upload_count(payload):
+    """Why `a_dict` was not enough here. Measured 2026-09-14: flow_uploads was answering `count: null`,
+    a doubled tile figure and an empty rpcid list on a project holding 4 uploads, and this gate stayed
+    green through all of it, because every one of those replies is still a dict.
+    """
+    if not isinstance(payload, dict):
+        return f"expected an object, got {type(payload).__name__}"
+    count = payload.get("count")
+    if isinstance(count, bool) or not isinstance(count, int):
+        return f"count is {count!r}, expected an int"
+    if count < 0:
+        return f"count is {count}, expected 0 or more"
+    return None
+
+
 async def run(findings):
     async with create_client_server_memory_streams() as (client_streams, server_streams):
         low = mcp_server.server._lowlevel_server
@@ -146,7 +161,7 @@ async def run(findings):
                     "flow_media": a_dict,
                     "flow_characters": a_list,
                     "flow_tools": a_list,
-                    "flow_uploads": a_dict,
+                    "flow_uploads": an_upload_count,
                     "scene_list": a_list,
                 }
                 for name in READ_ONLY_PER_PROJECT:

@@ -1,18 +1,23 @@
 """Upload local media into a project (measured 2026-09-12: 'Add media' menu > Upload > file chooser,
-the upload answers on rpc maseQ; the Uploads view fires WuwhI)."""
+the upload answers on rpc maseQ). Counting uploads reads the DOM instead: measured 2026-09-14, opening
+the Uploads view fires no batchexecute at all, it is a client-side filter."""
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
+
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video.flow import parsers
 from video.flow.reader import capture
 from video.session import PROJECT_READY, FlowSession
 
-_TILES_JS = "() => document.querySelectorAll('flow-tile-container, flow-image-tile, flow-video-tile').length"
+# Count the wrapper only. The union `flow-tile-container, flow-image-tile, flow-video-tile` matched the
+# wrapper AND the tile nested inside it, so every figure came out doubled: measured 2026-09-14 in the
+# Uploads view of 604b2de7, container 4, image-tile 4, video-tile 0, union 8, against a screenshot of 4.
+_TILES_JS = "() => document.querySelectorAll('flow-tile-container').length"
 
 
 async def upload(session: FlowSession, project_id: str, path: Path) -> dict[str, Any]:
@@ -52,20 +57,21 @@ async def upload(session: FlowSession, project_id: str, path: Path) -> dict[str,
 async def list_uploads(session: FlowSession, project_id: str) -> dict[str, Any]:
     page = session.page
     await session.goto(session.project_url(project_id), ready=PROJECT_READY)
-    await page.wait_for_timeout(2_000)
+    # The sidebar lands a beat after PROJECT_READY and WHEN is not fixed: measured 2026-09-14, about
+    # 2000ms on a project holding uploads and about 3000ms on an upload-free one. Reading it after a flat
+    # 2s sleep answered `count: 0` for a project holding 4 uploads, so wait for the sidebar to exist.
+    try:
+        await page.locator("mat-list-item").first.wait_for(state="attached", timeout=30_000)
+    except PlaywrightTimeoutError as exc:
+        raise RuntimeError(f"list_uploads: the sidebar of {project_id} never rendered") from exc
+    # Only now does absence carry information: a project that has never had an upload grows no "Uploads"
+    # item. Asked any earlier, absence just means the page has not painted yet.
     nav = page.locator("mat-list-item", has_text="Uploads").first
-    # A project that has never had an upload grows no "Uploads" nav item, and clicking a locator that
-    # matches nothing just waits out its timeout. Measured 2026-09-13 against a fresh project:
-    # `TimeoutError: Locator.click: Timeout 8000ms exceeded` on a perfectly healthy project. Absent means
-    # empty, so answer empty. Note this checks for ABSENCE only: a nav item that exists but fails to open
-    # still raises, because that is a broken Uploads view and not an empty one.
     if await nav.count() == 0:
-        return {"rpcids": [], "count": 0, "tiles": await page.evaluate(_TILES_JS), "head": None}
-    frames = await capture(session, lambda: nav.click(timeout=8_000), settle=6.0)
-    listing = frames.get("WuwhI", [None])[0]
-    return {
-        "rpcids": sorted(frames),
-        "count": len(listing) if isinstance(listing, list) else None,
-        "tiles": await page.evaluate(_TILES_JS),
-        "head": json.dumps(listing)[:300] if listing is not None else None,
-    }
+        return {"count": 0}
+    await nav.click(timeout=8_000)
+    # Nothing to await: the click fires no request and leaves the URL alone, and the tiles of the view we
+    # came from stay in the DOM, so there is no anchor that says "the filter has run". 4s is what was
+    # measured to settle; a project with enough uploads to need scrolling is not handled.
+    await page.wait_for_timeout(4_000)
+    return {"count": await page.evaluate(_TILES_JS)}
