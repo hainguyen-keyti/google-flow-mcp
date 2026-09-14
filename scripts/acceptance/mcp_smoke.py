@@ -73,16 +73,94 @@ async def call(session, name, arguments, expect):
     return "PASS", f"{name}: {text[:70].replace(chr(10), ' ')}", payload
 
 
-def a_list(payload):
-    return None if isinstance(payload, list) else f"expected a list, got {type(payload).__name__}"
+def _each_has(items, *keys):
+    return all(isinstance(item, dict) and all(item.get(key) for key in keys) for item in items)
 
 
-def a_dict(payload):
-    return None if isinstance(payload, dict) else f"expected an object, got {type(payload).__name__}"
+def a_lane(payload):
+    # Every other row depends on this account being on the migrated host (CLAUDE.md rule 1).
+    if not isinstance(payload, dict):
+        return f"expected an object, got {type(payload).__name__}"
+    if payload.get("verdict") != "MIGRATED":
+        return f"verdict is {payload.get('verdict')!r}, expected 'MIGRATED'"
+    return None
 
 
-def has_balance(payload):
-    return None if isinstance(payload, dict) and "balance" in payload else "no balance in the reply"
+def a_project_list(payload):
+    # Ids are NOT all UUIDs: measured 2026-09-14, one project is `8822142b-ca75-46b7-aac8-03d2831_backfill`.
+    if not isinstance(payload, list) or not payload:
+        return "expected a non-empty list of projects"
+    ids = [project.get("id") if isinstance(project, dict) else None for project in payload]
+    if not all(isinstance(project_id, str) and project_id for project_id in ids):
+        return "a project has no id"
+    if len(set(ids)) != len(ids):
+        return f"project ids repeat: {len(ids)} projects, {len(set(ids))} distinct ids"
+    return None
+
+
+def a_balance(payload):
+    balance = payload.get("balance") if isinstance(payload, dict) else None
+    if isinstance(balance, bool) or not isinstance(balance, int) or balance < 0:
+        return f"balance is {balance!r}, expected an int of 0 or more"
+    return None
+
+
+def media_of(project_id):
+    def check(payload):
+        if not isinstance(payload, dict):
+            return f"expected an object, got {type(payload).__name__}"
+        meta = payload.get("meta")
+        meta_id = meta.get("id") if isinstance(meta, dict) else None
+        if meta_id != project_id:
+            return f"meta.id is {meta_id!r}, but the smoke asked for {project_id}"
+        media = payload.get("media")
+        if not isinstance(media, list):
+            return f"media is {type(media).__name__}, expected a list"
+        if any(not isinstance(item, dict) or item.get("project_id") != project_id for item in media):
+            return "a media record belongs to another project"
+        models = payload.get("models")
+        if not models or not isinstance(models, list) or not all(isinstance(name, str) for name in models):
+            return f"models is {models!r}, expected a non-empty list of names"
+        return None
+
+    return check
+
+
+def versions_of(project_id):
+    # Grid rows carry no `type` and version records always do, so a swallowed all_versions shows up here.
+    def check(payload):
+        if not isinstance(payload, list):
+            return f"expected a list, got {type(payload).__name__}"
+        for record in payload:
+            if not isinstance(record, dict) or record.get("project_id") != project_id:
+                return "a version record belongs to another project"
+            if not isinstance(record.get("type"), str) or not record.get("workflow_id"):
+                return "a record has no type or workflow_id: grid rows came back instead of versions"
+        return None
+
+    return check
+
+
+def a_character_list(payload):
+    if not isinstance(payload, list):
+        return f"expected a list, got {type(payload).__name__}"
+    return None if _each_has(payload, "entity_id", "name") else "a character has no entity_id or name"
+
+
+def a_tool_list(payload):
+    if not isinstance(payload, list) or not payload:
+        return "expected a non-empty list of tools"
+    return None if _each_has(payload, "id", "name") else "a tool has no id or name"
+
+
+def a_scene_list(payload):
+    # Called without include_trashed. Measured on c5d1301b: 10 scenes, none trashed; the flag adds 6 more.
+    if not isinstance(payload, list):
+        return f"expected a list, got {type(payload).__name__}"
+    if not _each_has(payload, "scene_id"):
+        return "a scene has no scene_id"
+    trashed = sum(1 for scene in payload if scene.get("trashed") is True)
+    return f"{trashed} trashed scene(s) in a listing that did not ask for them" if trashed else None
 
 
 def an_upload_count(payload):
@@ -133,7 +211,11 @@ async def run(findings):
                     }
                 )
 
-                expectations = {"flow_lane": a_dict, "flow_projects": a_list, "flow_credits": has_balance}
+                expectations = {
+                    "flow_lane": a_lane,
+                    "flow_projects": a_project_list,
+                    "flow_credits": a_balance,
+                }
                 projects = None
                 for name in READ_ONLY_NO_ARGS:
                     status, detail, payload = await call(session, name, {}, expectations[name])
@@ -158,11 +240,11 @@ async def run(findings):
                 )
 
                 per_project = {
-                    "flow_media": a_dict,
-                    "flow_characters": a_list,
-                    "flow_tools": a_list,
+                    "flow_media": media_of(project_id),
+                    "flow_characters": a_character_list,
+                    "flow_tools": a_tool_list,
                     "flow_uploads": an_upload_count,
-                    "scene_list": a_list,
+                    "scene_list": a_scene_list,
                 }
                 for name in READ_ONLY_PER_PROJECT:
                     status, detail, _ = await call(
@@ -171,7 +253,10 @@ async def run(findings):
                     findings.append({"name": name, "status": status, "detail": detail})
 
                 status, detail, _ = await call(
-                    session, "flow_media", {"project_id": project_id, "all_versions": True}, a_list
+                    session,
+                    "flow_media",
+                    {"project_id": project_id, "all_versions": True},
+                    versions_of(project_id),
                 )
                 findings.append({"name": "flow_media all", "status": status, "detail": detail})
         finally:
