@@ -116,10 +116,23 @@ mặt, tay và món đồ.
 
 ## MCP
 
-`.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`).
-26 tool: `flow_*`, `project_*`, `character_*`, `scene_*`, `agent_mode`, `clip_download` (miễn phí) và
-`gen_*`, `clip_extend`, `clip_edit`, `agent_send` (tốn credit, cùng ledger). Không có chế độ no-spend:
-chủ repo chốt agent được gọi mọi thứ.
+`.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`). Server
+đang chạy không tự nạp code mới: sửa code xong phải kết nối lại MCP hoặc mở phiên mới.
+
+28 tool, chia theo đúng mô tả chi phí của từng tool:
+
+- **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
+  `clip_edit`, `agent_send` (có thể tốn).
+- **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
+- **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media`, `flow_characters`,
+  `flow_tools`, `flow_uploads`, `scene_list`, `flow_download` (ghi file vào thư mục đích), `clip_reconcile`
+  (đọc listing và số dư, ghi ledger, không sinh gì).
+- **Miễn phí nhưng ĐỔI project thật**: `project_create`, `project_rename`, `project_delete`,
+  `character_create`, `character_delete`, `scene_create`, `scene_delete`, `agent_mode`, `flow_upload`.
+- **`clip_download`**: mô tả không ghi chi phí; bản 1080p đã đo là $0, bản `4k` do Flow upscale thì chưa đo giá.
+
+Không có chế độ no-spend: chủ repo chốt agent được gọi mọi thứ. Chuỗi `instructions` mà server gửi cho agent lúc
+`initialize` nêu đích danh nhóm tốn credit, và có test canh để nó không lệch khỏi mô tả của từng tool.
 
 ## Acceptance
 
