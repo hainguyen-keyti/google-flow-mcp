@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+from video.flow import reader
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "acceptance" / "ledger_integrity.py"
 
 
@@ -45,3 +47,15 @@ def test_exit_code_is_one_only_when_a_row_failed():
     assert gate.exit_code([{"name": "a", "status": "PASS", "detail": ""}]) == 0
     assert gate.exit_code([{"name": "a", "status": "FAIL", "detail": ""}]) == 1
     assert gate.exit_code([]) == 0
+
+
+def test_the_gate_puts_the_balance_reader_back(tmp_path):
+    # Measured 2026-09-14: the checks swapped a fake balance into reader.credits and never put it back, so
+    # every later test in the same pytest run read a fake balance. tests/test_reader.py failed only when it
+    # ran after this file, and after run_all reader.credits was _reads.<locals>.fake_credits.
+    before = reader.credits
+
+    load().run_all(tmp_path)
+
+    assert reader.credits is before, reader.credits
+    assert reader.credits.__qualname__ == "credits"

@@ -80,9 +80,19 @@ class _Session:
     page = _Page()
 
 
+_CREDITS = "reader.credits"
+
+
 def _patch(**fakes):
-    """Swap module attributes on clips, returning the originals so the check can put them back."""
+    """Swap module attributes on clips, returning the originals so the check can put them back.
+
+    The balance reader is saved too, because every check assigns clips.reader.credits by hand right after
+    calling this. That attribute lives on the shared video.flow.reader module, so leaving a fake behind fed
+    a fake balance to every later test in the same pytest run (measured 2026-09-14: it broke
+    tests/test_reader.py, which was the first test to read a real balance after this gate).
+    """
     original = {name: getattr(clips, name) for name in fakes}
+    original[_CREDITS] = clips.reader.credits
     for name, value in fakes.items():
         setattr(clips, name, value)
     return original
@@ -90,7 +100,10 @@ def _patch(**fakes):
 
 def _restore(original):
     for name, value in original.items():
-        setattr(clips, name, value)
+        if name == _CREDITS:
+            clips.reader.credits = value
+        else:
+            setattr(clips, name, value)
 
 
 async def _credits(balance):
