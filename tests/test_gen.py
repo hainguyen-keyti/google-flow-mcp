@@ -235,3 +235,38 @@ def test_run_job_records_failure_and_reraises(tmp_path):
             )
         )
     assert ledger.rows("job-f")[-1]["status"] == "failed"
+
+
+def test_run_job_stops_hard_when_google_flags_unusual_activity(tmp_path):
+    # gflow maps WafRejectionError to exit 10 and its default remediation says "Re-authenticate", which is
+    # the one thing this migrated account must never do (CLAUDE.md rule 1). Owner decision 2026-09-14:
+    # stop, never retry, tell the owner. The failed row still lands in the ledger before the error goes up.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    problem = {
+        "error_class": "WafRejectionError",
+        "problem": {"title": "WAF rejection (HTTP 403)", "detail": "Flow returned 403", "route": "t2v"},
+        "event": "error_raised",
+    }
+
+    class FlaggedRunner(FakeRunner):
+        async def __call__(self, argv):
+            self.calls.append(list(argv))
+            return 10, "", json.dumps(problem) + "\n"
+
+    runner = FlaggedRunner(ledger, "", "job-w")
+
+    async def read_credits():
+        return 5
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(
+            gen.run_job(
+                job(job_id="job-w"), tmp_path, ledger=ledger, runner=runner, read_credits=read_credits
+            )
+        )
+    message = str(excinfo.value)
+    assert "do not retry" in message
+    assert "auth login" in message
+    assert len(runner.calls) == 1
+    row = ledger.rows("job-w")[-1]
+    assert row["status"] == "failed" and row["exit_code"] == 10

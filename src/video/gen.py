@@ -192,6 +192,13 @@ async def run_job(
             **problem,
         )
         summary = problem.get("detail") or problem.get("title") or stderr.strip()[-300:]
+        # gflow gives WafRejectionError exit 10 (gflow_cli/errors.py) and wrongly advises re-authenticating.
+        if code == 10 or problem.get("error_class") == "WafRejectionError":
+            raise RuntimeError(
+                f"gflow {job.kind} exit {code} (WafRejectionError): Google Flow flagged this request as "
+                "unusual activity. Stop: do not retry, and do not re-run gflow auth login on this account, "
+                "whatever gflow suggests. Tell the owner; the browser profile must cool down before reuse."
+            )
         raise RuntimeError(f"gflow {job.kind} exit {code} ({problem.get('error_class', '?')}): {summary}")
     outputs = parse_result(job.kind, stdout)
     after = await read_credits()
