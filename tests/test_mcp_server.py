@@ -344,3 +344,27 @@ def test_gen_tool_forwards_job_parameters(monkeypatch):
     payload = json.loads("".join(getattr(c, "text", "") for c in result.content))
     assert payload["job_id"] == "job-1"
     assert called[0]["kind"] == "t2v" and called[0]["project"] == "P" and called[0]["aspect"] == "9:16"
+
+
+def test_the_instructions_name_every_tool_whose_description_says_it_spends_credits():
+    # Measured 2026-09-14: the instructions an agent reads at initialize said only "gen_* tools spend Flow
+    # credits". That named no tool, left out clip_extend (10), clip_edit (20) and agent_send, and swept in
+    # gen_t2i and gen_i2i, which are credit-free. Each tool's own description is the source here.
+    # Match the phrases, not the word: clip_reconcile says "spent credits" and "the spend" and is free.
+    async def fn(session):
+        return {tool.name: tool.description or "" for tool in (await session.list_tools()).tools}
+
+    descriptions = with_client(fn)
+    spenders = sorted(
+        name for name, text in descriptions.items() if "spends credits" in text or "may spend credits" in text
+    )
+
+    assert {"gen_t2v", "clip_extend", "clip_edit", "agent_send"} <= set(spenders), spenders
+    assert [name for name in spenders if name not in mcp_server.server.instructions] == []
+
+
+def test_the_instructions_do_not_tell_an_agent_it_cannot_create_projects():
+    # project_create is served and free; "cannot create projects through gflow" dates from the dead labs
+    # lane and would steer an agent away from a tool that works.
+    assert "project_create" in EXPECTED_TOOLS
+    assert "cannot create projects" not in mcp_server.server.instructions

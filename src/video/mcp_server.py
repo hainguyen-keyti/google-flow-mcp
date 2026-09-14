@@ -201,9 +201,11 @@ backend = Backend()
 server = MCPServer(
     "video",
     instructions=(
-        "Google Flow (flow.google.com) control for this account. flow_* and project_*/character_* tools "
-        "are free; gen_* tools spend Flow credits and are recorded in out/ledger.jsonl. Always pass an "
-        "existing project id: this account cannot create projects through gflow."
+        "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
+        "recorded in the ledger (out/ledger.jsonl by default): gen_t2v, gen_i2v, gen_r2v, clip_extend, "
+        "clip_edit, and agent_send (may spend). gen_t2i and gen_i2i are credit-free but draw on a daily "
+        "image quota. Check a tool's description for its cost before calling it. Pass an existing project "
+        "id from flow_projects, or make one with project_create."
     ),
 )
 
@@ -388,7 +390,7 @@ async def clip_reconcile(project_id: str, out_dir: str | None = None) -> str:
 
 @server.tool(
     name="flow_uploads",
-    description="The project's Uploads view: rpcids, item count and tiles. Free.",
+    description="How many items the project's Uploads view holds, as {count}. Free.",
 )
 async def flow_uploads(project_id: str) -> str:
     _require(project_id, "project_id")
