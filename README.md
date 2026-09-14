@@ -146,6 +146,9 @@ uv run python scripts/acceptance/ledger_integrity.py     # $0, offline, không c
 uv run pytest -q
 ```
 
+Test tay toàn bộ 28 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
+`docs/mcp-manual-test.md`.
+
 `ledger_integrity.py` canh đúng một luật: **không credit nào rời tài khoản qua clip editor mà không có
 dòng ledger trỏ tới nó**. Nó lái editor bằng stub hỏng đúng chỗ đã hỏng thật ngày 2026-09-13, lúc 20
 credit bay mất mà sổ rỗng nên phải đi truy listing của Flow bằng tay. Sáu hàng: hai hàng ghim dòng ý định
