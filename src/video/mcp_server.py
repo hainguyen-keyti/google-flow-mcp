@@ -203,9 +203,11 @@ server = MCPServer(
     instructions=(
         "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
         "recorded in the ledger (out/ledger.jsonl by default): gen_t2v, gen_i2v, gen_r2v, clip_extend, "
-        "clip_edit, and agent_send (may spend). gen_t2i and gen_i2i are credit-free but draw on a daily "
-        "image quota. Check a tool's description for its cost before calling it. Pass an existing project "
-        "id from flow_projects, or make one with project_create."
+        "clip_edit, and agent_send (may spend). clip_download at 4k is a Flow upscale whose cost is "
+        "unmeasured: ask the owner first. gen_t2i and gen_i2i are credit-free but draw on a daily image "
+        "quota. Check a tool's description for its cost before calling it. If a tool reports that Google "
+        "flagged unusual activity (WAF), stop: do not retry and do not re-authenticate; tell the owner. "
+        "Pass an existing project id from flow_projects, or make one with project_create."
     ),
 )
 
@@ -358,7 +360,9 @@ async def agent_send(project_id: str, message: str, wait: float = 60.0) -> str:
     description=(
         "Download a clip rendition from the editor: gif (270p), 720p, 1080p or 4k (upscaled by Flow). "
         "Defaults to the NEWEST finished version of the media; pass workflow_id (from flow_media with "
-        "all_versions=true) to fetch one specific version, such as the clip a particular edit produced."
+        "all_versions=true) to fetch one specific version, such as the clip a particular edit produced. "
+        "The 4k upscale's cost is unmeasured and it may spend credits (gflow reports 4K upscale as "
+        "tier-gated): ask the owner before choosing 4k."
     ),
 )
 async def clip_download(
