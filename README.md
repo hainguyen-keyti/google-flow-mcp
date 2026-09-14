@@ -129,10 +129,13 @@ mặt, tay và món đồ.
   (đọc listing và số dư, ghi ledger, không sinh gì).
 - **Miễn phí nhưng ĐỔI project thật**: `project_create`, `project_rename`, `project_delete`,
   `character_create`, `character_delete`, `scene_create`, `scene_delete`, `agent_mode`, `flow_upload`.
-- **`clip_download`**: mô tả không ghi chi phí; bản 1080p đã đo là $0, bản `4k` do Flow upscale thì chưa đo giá.
+- **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
+  hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
 
 Không có chế độ no-spend: chủ repo chốt agent được gọi mọi thứ. Chuỗi `instructions` mà server gửi cho agent lúc
-`initialize` nêu đích danh nhóm tốn credit, và có test canh để nó không lệch khỏi mô tả của từng tool.
+`initialize` nêu đích danh nhóm tốn credit, và có test canh để nó không lệch khỏi mô tả của từng tool. Mỗi lần
+đọc số dư (CLI, MCP, job sinh, clip editor) ghi thêm một dòng kèm giờ vào `out/credits.jsonl`. Bị Google gắn cờ
+hoạt động bất thường (WAF, gflow exit 10) thì dừng hẳn: không thử lại, không đăng nhập lại, báo chủ repo.
 
 ## Acceptance
 
