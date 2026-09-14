@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from gflow_cli.api.transports.batchexecute import parse_frames
@@ -12,6 +15,9 @@ from video.flow import parsers
 from video.session import GRID_READY, MIGRATED_ROOT, PROJECT_READY, FlowSession
 
 Frames = dict[str, list[Any]]
+
+# Every balance read lands here with its time: measured 2026-09-14, the balance moved 255, 240, 255, 195 with no spend.
+CREDITS_LOG = Path("out") / "credits.jsonl"
 
 
 async def capture(session: FlowSession, action: Callable[[], Awaitable[Any]], *, settle: float) -> Frames:
@@ -55,7 +61,11 @@ async def projects(session: FlowSession) -> list[dict[str, Any]]:
 
 
 async def credits(session: FlowSession) -> dict[str, Any]:
-    return parsers.credits(one(await grid(session), "nzlxg"))
+    info = parsers.credits(one(await grid(session), "nzlxg"))
+    CREDITS_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with CREDITS_LOG.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"ts": time.time(), "balance": info["balance"]}) + "\n")
+    return info
 
 
 async def project(session: FlowSession, project_id: str, settle: float = 10.0) -> dict[str, Any]:
