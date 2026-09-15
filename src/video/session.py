@@ -73,13 +73,17 @@ class FlowSession:
 
     async def _teardown(self) -> None:
         try:
-            if self.page is not None:
-                await self.page.close()
+            try:
+                if self.page is not None:
+                    await self.page.close()
+            finally:
+                # A failed or cancelled close must not skip the client's exit: that exit returns gflow's profile
+                # lease (and survives cancellation itself), without which every later session is locked out.
                 self.page = None
-            if self.client is not None and self._entered:
-                await self.client.__aexit__(None, None, None)
-            self.client = None
-            self._entered = False
+                if self.client is not None and self._entered:
+                    await self.client.__aexit__(None, None, None)
+                self.client = None
+                self._entered = False
         finally:
             _GUARD.release()
 

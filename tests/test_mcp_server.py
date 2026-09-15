@@ -1005,6 +1005,63 @@ def test_a_call_cancelled_while_it_waits_for_the_browser_does_not_wedge_later_ca
     assert later == [{"id": "P"}]
 
 
+def test_a_call_cancelled_while_it_holds_the_browser_still_gives_the_profile_back(monkeypatch, tmp_path):
+    # Review 2026-09-15: the SDK keeps cancelling a cancelled handler at every await, so page.close() raised inside
+    # teardown and client.__aexit__, which returns gflow's profile lease, never ran: later calls got
+    # ProfileLockedError until the server restarted.
+    guard = threading.Lock()
+    monkeypatch.setattr(session_mod, "_GUARD", guard)
+    lease = {"held": False}
+
+    class _Page:
+        async def close(self):
+            await asyncio.sleep(0.05)
+
+    class _LeasedClient:
+        def __init__(self, profile_dir, *, headless):
+            self._context = self
+
+        async def __aenter__(self):
+            if lease["held"]:
+                raise RuntimeError("ProfileLockedError: the profile lease is already held in this process")
+            lease["held"] = True
+            return self
+
+        async def __aexit__(self, *exc):
+            lease["held"] = False
+
+        async def new_page(self):
+            return _Page()
+
+    monkeypatch.setattr(
+        mcp_server,
+        "FlowSession",
+        lambda profile: FlowSession(profile_dir=tmp_path, client_factory=_LeasedClient),
+    )
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+
+    async def fn(s):
+        async def never_answers(session):
+            await asyncio.Event().wait()
+
+        async def quick_projects(session):
+            return [{"id": "P"}]
+
+        monkeypatch.setattr(mcp_server.reader, "credits", never_answers)
+        monkeypatch.setattr(mcp_server.reader, "projects", quick_projects)
+        with pytest.raises(MCPError, match="timed out"):
+            await s.call_tool("flow_credits", {}, read_timeout_seconds=0.3)
+        for _ in range(40):
+            if not guard.locked():
+                break
+            await asyncio.sleep(0.05)
+        return await asyncio.wait_for(s.call_tool("flow_projects", {}), 3)
+
+    later = with_client(fn)
+    assert not later.is_error, _texts([later])
+    assert _payload(later) == [{"id": "P"}]
+
+
 def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():
     # Measured 2026-09-15: a context-free agent pointed out that nothing warned a call blocks for tens of
     # seconds, which is exactly when an agent retries, and a retry under a fresh job id is a second charge.

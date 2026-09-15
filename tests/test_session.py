@@ -124,6 +124,61 @@ def test_a_session_cancelled_while_it_waits_never_keeps_the_guard(tmp_path, monk
     assert asyncio.run(run()) == "entered"
 
 
+class ClosedTargetPage(FakePage):
+    async def close(self):
+        self.log.append("page.close")
+        raise RuntimeError("Target page, context or browser has been closed")
+
+
+class LeasedClient(FakeClient):
+    """gflow's in-process profile lease: until a client exits, the next one cannot enter."""
+
+    def __init__(self, log, lease, page_cls):
+        super().__init__(log)
+        self.lease = lease
+        self.page_cls = page_cls
+        self._context = self
+
+    async def new_page(self):
+        self.log.append("new_page")
+        return self.page_cls(self.log)
+
+    async def __aenter__(self):
+        if self.lease["held"]:
+            raise ProfileLockedError("already held in this process")
+        self.lease["held"] = True
+        self.log.append("client.enter")
+        return self
+
+    async def __aexit__(self, *exc):
+        self.lease["held"] = False
+        self.log.append("client.exit")
+
+
+def leased(log, lease, page_cls):
+    def make(profile_dir, *, headless):
+        return LeasedClient(log, lease, page_cls)
+
+    return make
+
+
+def test_a_page_that_fails_to_close_still_gives_the_profile_back(tmp_path):
+    # Review 2026-09-15: a failed or cancelled page.close() skipped client.__aexit__, the step that returns gflow's
+    # profile lease, so every later session failed with ProfileLockedError until the server restarted.
+    log = []
+    lease = {"held": False}
+
+    async def run():
+        with pytest.raises(RuntimeError, match="Target page"):
+            async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, ClosedTargetPage)):
+                pass
+        async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, FakePage)):
+            pass
+
+    asyncio.run(run())
+    assert log.count("client.exit") == 2
+
+
 def test_locked_profile_error_propagates_and_guard_is_released(tmp_path):
     log = []
 
