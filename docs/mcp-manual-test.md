@@ -61,7 +61,7 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 |---|---|---|
 | `flow_download` | `project_id`, `media_id`, `out_dir` | trả đường dẫn file trong `out/`. `media_id` phải là `id` của listing (`flow_media`); workflow id sẽ bị từ chối |
 | `clip_download` | `project_id`, `media_id`, `quality="1080p"`, `out_dir`, `workflow_id` | mặc định lấy bản MỚI NHẤT đã xong; truyền `workflow_id` để chỉ đích danh một version. **`quality="4k"` là bản upscale của Flow, CHƯA ĐO GIÁ, có thể tốn credit: đừng gọi nếu chưa muốn trả tiền** |
-| `clip_reconcile` | `project_id`, `out_dir` | đóng sổ cho job editor mồ côi; trả `{"ledger": <đường dẫn tuyệt đối>, "ledger_exists", "ledger_rows", "jobs"}`. `jobs: []` chỉ nghĩa là sạch khi `ledger_exists` là `true` và đường dẫn đúng sổ bạn định đọc |
+| `clip_reconcile` | `project_id`, `out_dir` | đóng sổ cho job editor mồ côi; trả `{"ledger": <đường dẫn tuyệt đối>, "ledger_exists", "ledger_rows", "jobs"}`. `jobs: []` chỉ nghĩa là sạch khi `ledger_exists` là `true` và đường dẫn đúng sổ bạn định đọc. Verdict: `done` (clip nguồn có version mới), `failed` (số dư không đổi VÀ project không có record mới), `unknown` (để người quyết; luôn là `unknown` khi listing của project này không có clip nguồn của job), `skipped` (job gen hay agent, không bao giờ bị ghi) |
 
 ### C. Đổi dữ liệu Flow, $0, CHỈ làm trong project nháp
 

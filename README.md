@@ -50,6 +50,16 @@ uv run video flow clip reconcile <project> --out out                      # $0, 
 uv run video flow agent send <project> "<message>"   # agent có thể tự sinh nội dung
 ```
 
+Prompt của `clip extend|edit` và message của `agent send` phải một dòng: ô của Flow nhận ký tự xuống dòng như phím
+Enter, và việc gõ diễn ra trước khi sổ ghi `submitted`. Cả CLI (exit 2, chưa mở Chrome) lẫn driver đều từ chối.
+
+`clip reconcile` chỉ chấm job editor (hàng có `source_media_id`), và chỉ khi listing của project đang đọc có clip
+nguồn của job: dòng sổ không ghi project, nên thiếu clip đó thì có thể là job của project khác, ra `unknown`. `done`
+khi clip nguồn có version mới từ lúc job mở; `failed` khi số dư không đổi VÀ project không có record nào mới từ lúc
+job mở, trong đó record không có giờ hoặc tạo trong vòng 5 phút trước lúc job mở cũng tính là mới (số dư đã được đo
+là tự đổi mà không tiêu gì, và đồng hồ của Flow với máy này có thể lệch); còn lại `unknown`, để người quyết. Job gen
+và agent trả `skipped` và không bao giờ bị ghi.
+
 Sinh nội dung, tốn credit (video) hoặc quota (ảnh), luôn cần `--project`:
 
 ```
@@ -137,7 +147,7 @@ mặt, tay và món đồ.
   `all_versions=true` thêm khoá `versions`), `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
   tự mở project đầu tiên trên grid), `flow_uploads`, `scene_list`, `flow_download` (ghi file vào thư mục đích),
   `clip_reconcile` (đọc listing và số dư, ghi ledger, không sinh gì; trả kèm đường dẫn sổ đã đọc, sổ có tồn tại
-  không và số dòng, để `jobs: []` không bị hiểu nhầm là sạch khi đọc nhầm chỗ).
+  không và số dòng, để `jobs: []` không bị hiểu nhầm là sạch khi đọc nhầm chỗ; job gen và agent ra `skipped`).
 - **Miễn phí nhưng ĐỔI project thật**: `project_create`, `project_rename` (đọc lại tên trên grid rồi mới trả
   `{id, title}`), `project_delete`, `character_create`, `character_delete`, `scene_create`, `scene_delete`,
   `scene_restore` (lấy scene ra khỏi thùng rác, từ chối khi tên khớp hơn một tile), `agent_mode`, `flow_upload`.
@@ -154,6 +164,12 @@ mcp 2.2.0 giấu lời của mọi exception không phải `ToolError`, agent ch
 2026-09-15, cả lời dặn WAF lẫn lời từ chối `job_id`). Server của repo chuyển lỗi thành `ToolError` kèm lý do: cắt
 bỏ phần "Call log" của Playwright (nó liệt kê header, có cả cookie), rồi lọc bằng regex của ledger cộng
 `redact_error_detail` của gflow (SID, HSID, SSID, APISID, Bearer, URL có chữ ký, email), tối đa 500 ký tự.
+
+Mọi tool dùng trình duyệt xếp hàng qua một khoá phiên. Client hết giờ đọc thì gửi `notifications/cancelled` và SDK
+huỷ handler; lời gọi bị huỷ trong lúc chờ khoá trước đây vẫn lấy khoá rồi giữ luôn, làm treo mọi tool sau đó tới khi
+khởi động lại server (đo 2026-09-15). Giờ khoá được chờ bằng vòng hỏi không chặn, bị huỷ thì không cầm gì. Lời gọi
+bị huỷ khi ĐANG giữ trình duyệt cũng vẫn thoát client của gflow (chỗ trả khoá profile), kể cả khi đóng trang lỗi;
+trước đây mọi lời gọi sau nó lỗi `ProfileLockedError` tới khi khởi động lại.
 
 ## Acceptance
 
