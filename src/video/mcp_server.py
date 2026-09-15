@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from gflow_cli.api.video import VideoModel
 from mcp.server import MCPServer
 
 from video import gen as gen_mod
@@ -23,6 +24,17 @@ from video.flow import reader
 from video.flow import scenes as scenes_mod
 from video.flow import uploads as uploads_mod
 from video.session import FlowSession
+
+# Left empty, gflow lets Flow reuse the composer's last model (cli_video.py:185-196), so the price was unknowable.
+VIDEO_DEFAULT_MODEL = "omni-flash"
+OMNI_FLASH_SECONDS = 10
+
+
+def _is_omni_flash(model: str) -> bool:
+    try:
+        return VideoModel.from_cli(model) is VideoModel.OMNI_FLASH
+    except ValueError:
+        return False
 
 
 class Backend:
@@ -103,8 +115,12 @@ class Backend:
     async def agent_mode(self, project_id: str, enabled: bool) -> dict[str, Any]:
         return await self._with(lambda s: agent_mod.set_mode(s, project_id, enabled))
 
-    async def agent_send(self, project_id: str, message: str, wait: float = 60.0) -> dict[str, Any]:
-        return await self._with(lambda s: agent_mod.send(s, project_id, message, wait=wait))
+    async def agent_send(
+        self, project_id: str, message: str, wait: float = 60.0, job_id: str | None = None
+    ) -> dict[str, Any]:
+        return await self._with(
+            lambda s: agent_mod.send(s, project_id, message, wait=wait, out_dir=self.out_dir, job_id=job_id)
+        )
 
     async def clip_download(
         self,
@@ -178,6 +194,10 @@ class Backend:
         job_id: str | None = None,
         out_dir: str | None = None,
     ) -> dict[str, Any]:
+        if kind in gen_mod.VIDEO_KINDS:
+            model = model or VIDEO_DEFAULT_MODEL
+            if duration is None and _is_omni_flash(model):
+                duration = OMNI_FLASH_SECONDS
         job = gen_mod.Job(
             job_id=job_id or str(uuid.uuid4()),
             kind=kind,
@@ -205,10 +225,22 @@ server = MCPServer(
         "recorded in the ledger (out/ledger.jsonl by default): gen_t2v, gen_i2v, gen_r2v, clip_extend, "
         "clip_edit, and agent_send (may spend). clip_download at 4k is a Flow upscale whose cost is "
         "unmeasured: ask the owner first. gen_t2i and gen_i2i are credit-free but draw on a daily image "
-        "quota. Check a tool's description for its cost before calling it. If a tool reports that Google "
-        "flagged unusual activity (WAF), stop: do not retry and do not re-authenticate; tell the owner. "
-        "Pass an existing project id from flow_projects, or make one with project_create."
+        "quota. Check a tool's description for its cost before calling it. Every call drives a real Chrome "
+        "session and blocks until Flow answers: reads and edits take about 10-30 s, a generation 1-2 min, "
+        "clip_extend and clip_edit up to about 6 min, so a slow call is not a failed one. The credit-spending "
+        "tools require a job_id. Never call one again under a new job_id because it was slow, errored or timed "
+        "out: check flow_media and flow_credits first, and if you do call again keep the same job_id, which the "
+        "ledger refuses instead of charging twice. gen_t2v, gen_r2v and gen_i2v use omni-flash for 10 s when "
+        "model is omitted. If a tool reports that Google flagged unusual activity (WAF), stop: do not retry and "
+        "do not re-authenticate; tell the owner. Pass an existing project id from flow_projects, or make one "
+        "with project_create."
     ),
+)
+
+_JOB_ID_RULE = (
+    " job_id is required: use a new one for each new job, and keep the SAME one when calling again after an "
+    "error or a timeout. The ledger refuses a job_id it already holds, so a retry never pays twice; a refused "
+    "job_id means that job already ran, so check flow_media and flow_credits before starting it under a new one."
 )
 
 
@@ -239,9 +271,9 @@ async def flow_credits() -> str:
 @server.tool(
     name="flow_media",
     description=(
-        "A project's media (id, kind, model, size, url), meta and models. Free. Set all_versions=true "
+        "A project's media (id, kind, model, size, url), meta and models. Set all_versions=true "
         "for every generation record instead: each Omni edit or upscale stacks another version onto the "
-        "SAME media id, and only this view shows them, so it is how you find the clip an edit produced."
+        "SAME media id, and only this view shows them, so it is how you find the clip an edit produced. Free."
     ),
 )
 async def flow_media(project_id: str, all_versions: bool = False) -> str:
@@ -308,7 +340,7 @@ async def project_delete(project_id: str) -> str:
     description=(
         "Create a character from a face prompt (portrait via Nano Banana 2, credit-free), set name and "
         "personality. The reply's portrait.workflow_id is NOT a media id: call flow_characters for the "
-        "portrait's media id, which flow_download accepts."
+        "portrait's media id, which flow_download accepts. Free."
     ),
 )
 async def character_create(
@@ -357,12 +389,18 @@ async def agent_mode(project_id: str, enabled: bool) -> str:
 
 
 @server.tool(
-    name="agent_send", description="Send a message to Flow's agent in a project (may spend credits)."
+    name="agent_send",
+    description=(
+        "Send a message to Flow's agent in a project. It may spend credits: 0 credits in 3 measured sends where "
+        "the agent generated nothing, but a message that makes it generate media costs that generation's "
+        "price. Takes about 70-80 s." + _JOB_ID_RULE
+    ),
 )
-async def agent_send(project_id: str, message: str, wait: float = 60.0) -> str:
+async def agent_send(project_id: str, message: str, job_id: str, wait: float = 60.0) -> str:
     _require(project_id, "project_id")
     _require(message, "message")
-    return _json(await backend.agent_send(project_id, message, wait))
+    _require(job_id, "job_id")
+    return _json(await backend.agent_send(project_id, message, wait, job_id))
 
 
 @server.tool(
@@ -371,8 +409,8 @@ async def agent_send(project_id: str, message: str, wait: float = 60.0) -> str:
         "Download a clip rendition from the editor: gif (270p), 720p, 1080p or 4k (upscaled by Flow). "
         "Defaults to the NEWEST finished version of the media; pass workflow_id (from flow_media with "
         "all_versions=true) to fetch one specific version, such as the clip a particular edit produced. "
-        "The 4k upscale's cost is unmeasured and it may spend credits (gflow reports 4K upscale as "
-        "tier-gated): ask the owner before choosing 4k."
+        "1080p measured 0 credits. The 4k upscale's cost is unmeasured and it may spend credits (gflow reports "
+        "4K upscale as tier-gated): ask the owner before choosing 4k."
     ),
 )
 async def clip_download(
@@ -393,8 +431,8 @@ async def clip_download(
     name="clip_reconcile",
     description=(
         "Close out editor jobs that spent credits without recording an outcome, by checking the listing "
-        "and the balance. Free: it reads and writes the ledger, it never generates. Run this after a "
-        "clip_extend or clip_edit died mid-flight, otherwise the spend has no outcome against it."
+        "and the balance. It reads Flow and writes the ledger, it never generates. Run this after a "
+        "clip_extend or clip_edit died mid-flight, otherwise the spend has no outcome against it. Free."
     ),
 )
 async def clip_reconcile(project_id: str, out_dir: str | None = None) -> str:
@@ -411,44 +449,64 @@ async def flow_uploads(project_id: str) -> str:
     return _json(await backend.uploads(project_id))
 
 
-@server.tool(name="clip_extend", description="Extend a clip with Veo 3.1 Lite (spends credits, ledgered).")
+@server.tool(
+    name="clip_extend",
+    description=(
+        "Extend a clip with Veo 3.1 Lite. It spends credits and is ledgered: 10 credits per extend (measured). "
+        "Takes about 1.5-2 min, up to about 6 min when Flow is slow." + _JOB_ID_RULE
+    ),
+)
 async def clip_extend(
-    project_id: str, media_id: str, prompt: str, job_id: str | None = None, out_dir: str | None = None
+    project_id: str, media_id: str, prompt: str, job_id: str, out_dir: str | None = None
 ) -> str:
     _require(project_id, "project_id")
     _require(media_id, "media_id")
     _require(prompt, "prompt")
+    _require(job_id, "job_id")
     return _json(await backend.clip_extend(project_id, media_id, prompt, job_id, out_dir))
 
 
 @server.tool(
     name="clip_edit",
-    description="Video-to-video edit of a clip with Omni 1.1 Flash (spends credits, ledgered).",
+    description=(
+        "Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledgered: 20 credits per "
+        "edit (measured). Takes about 1.5-2 min, up to about 6 min when Flow is slow." + _JOB_ID_RULE
+    ),
 )
 async def clip_edit(
-    project_id: str, media_id: str, prompt: str, job_id: str | None = None, out_dir: str | None = None
+    project_id: str, media_id: str, prompt: str, job_id: str, out_dir: str | None = None
 ) -> str:
     _require(project_id, "project_id")
     _require(media_id, "media_id")
     _require(prompt, "prompt")
+    _require(job_id, "job_id")
     return _json(await backend.clip_edit(project_id, media_id, prompt, job_id, out_dir))
 
 
 async def _gen(kind: str, **kwargs: Any) -> str:
     _require(kwargs.get("project", ""), "project")
     _require(kwargs.get("prompt", ""), "prompt")
+    if kind in gen_mod.VIDEO_KINDS:
+        _require(kwargs.get("job_id") or "", "job_id")
     return _json(await backend.generate(kind=kind, **kwargs))
 
 
-@server.tool(name="gen_t2v", description="Text to video via gflow (spends credits; veo-lite 720p 8s = 10).")
+@server.tool(
+    name="gen_t2v",
+    description=(
+        "Text to video via gflow. It spends credits and is ledgered, measured on the PRO plan: omni-flash 10 s "
+        "x1 = 15 credits (the default when model is omitted), veo-lite 8 s x1 = 10 credits, and count "
+        "multiplies it (veo-lite x2 = 20 credits). Takes about 75-85 s." + _JOB_ID_RULE
+    ),
+)
 async def gen_t2v(
     prompt: str,
     project: str,
-    model: str | None = None,
+    job_id: str,
+    model: str | None = VIDEO_DEFAULT_MODEL,
     aspect: str | None = None,
     count: int = 1,
     duration: int | None = None,
-    job_id: str | None = None,
 ) -> str:
     return await _gen(
         "t2v",
@@ -463,17 +521,23 @@ async def gen_t2v(
 
 
 @server.tool(
-    name="gen_i2v", description="Image (first frame, optional last frame) to video (spends credits)."
+    name="gen_i2v",
+    description=(
+        "Image (first frame, optional last frame) to video via gflow. It spends credits and is ledgered; the "
+        "price is unmeasured, because every attempt so far failed at Flow's frame picker and spent nothing, so "
+        "prefer gen_r2v with the frame as a reference. Uses omni-flash for 10 s when model is omitted."
+        + _JOB_ID_RULE
+    ),
 )
 async def gen_i2v(
     initial_frame: str,
     prompt: str,
     project: str,
+    job_id: str,
     end_frame: str | None = None,
-    model: str | None = None,
+    model: str | None = VIDEO_DEFAULT_MODEL,
     aspect: str | None = None,
     duration: int | None = None,
-    job_id: str | None = None,
 ) -> str:
     _require(initial_frame, "initial_frame")
     return await _gen(
@@ -489,15 +553,22 @@ async def gen_i2v(
     )
 
 
-@server.tool(name="gen_r2v", description="Reference images (ingredients) to video (spends credits).")
+@server.tool(
+    name="gen_r2v",
+    description=(
+        "Reference images (ingredients) to video via gflow. It spends credits and is ledgered: veo-lite x1 = 10 "
+        "credits (measured); omni-flash for 10 s, the default when model is omitted, is unmeasured. Takes about "
+        "100-120 s." + _JOB_ID_RULE
+    ),
+)
 async def gen_r2v(
     refs: list[str],
     prompt: str,
     project: str,
-    model: str | None = None,
+    job_id: str,
+    model: str | None = VIDEO_DEFAULT_MODEL,
     aspect: str | None = None,
     duration: int | None = None,
-    job_id: str | None = None,
 ) -> str:
     if not refs:
         raise ValueError("refs is required")
@@ -513,7 +584,10 @@ async def gen_r2v(
     )
 
 
-@server.tool(name="gen_t2i", description="Text to image via gflow (credit-free, daily quota).")
+@server.tool(
+    name="gen_t2i",
+    description="Text to image via gflow: 0 credits with the default nano2 model, but it draws on a daily image quota.",
+)
 async def gen_t2i(
     prompt: str,
     project: str,
@@ -527,7 +601,13 @@ async def gen_t2i(
     )
 
 
-@server.tool(name="gen_i2i", description="Reference images to image via gflow (credit-free, daily quota).")
+@server.tool(
+    name="gen_i2i",
+    description=(
+        "Reference images to image via gflow: 0 credits with the default nano2 model, but it draws on a daily "
+        "image quota."
+    ),
+)
 async def gen_i2i(
     refs: list[str],
     prompt: str,

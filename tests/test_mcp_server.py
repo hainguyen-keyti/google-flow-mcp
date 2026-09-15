@@ -1,5 +1,7 @@
 import asyncio
 import json
+import re
+from pathlib import Path
 
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
@@ -80,14 +82,14 @@ TOOL_CALLS: dict[str, dict] = {
     "scene_create": {"project_id": "P"},
     "scene_delete": {"project_id": "P", "scene_id": "S"},
     "agent_mode": {"project_id": "P", "enabled": True},
-    "agent_send": {"project_id": "P", "message": "hello"},
+    "agent_send": {"project_id": "P", "message": "hello", "job_id": "job-agent"},
     "clip_download": {"project_id": "P", "media_id": "M"},
-    "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going"},
-    "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt"},
+    "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going", "job_id": "job-extend"},
+    "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt", "job_id": "job-edit"},
     "clip_reconcile": {"project_id": "P"},
-    "gen_t2v": {"prompt": "a boat", "project": "P"},
-    "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P"},
-    "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P"},
+    "gen_t2v": {"prompt": "a boat", "project": "P", "job_id": "job-t2v"},
+    "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P", "job_id": "job-i2v"},
+    "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"},
     "gen_t2i": {"prompt": "a boat", "project": "P"},
     "gen_i2i": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P"},
 }
@@ -301,7 +303,7 @@ def test_gen_tool_refuses_a_missing_project(monkeypatch):
     monkeypatch.setattr(mcp_server.backend, "generate", fake_generate)
 
     async def fn(session):
-        return await session.call_tool("gen_t2v", {"prompt": "a boat", "project": ""})
+        return await session.call_tool("gen_t2v", {"prompt": "a boat", "project": "", "job_id": "job-1"})
 
     result = with_client(fn)
     assert result.is_error
@@ -336,7 +338,8 @@ def test_gen_tool_forwards_job_parameters(monkeypatch):
 
     async def fn(session):
         return await session.call_tool(
-            "gen_t2v", {"prompt": "a boat", "project": "P", "model": "veo-lite", "aspect": "9:16"}
+            "gen_t2v",
+            {"prompt": "a boat", "project": "P", "model": "veo-lite", "aspect": "9:16", "job_id": "job-1"},
         )
 
     result = with_client(fn)
@@ -368,3 +371,110 @@ def test_the_instructions_do_not_tell_an_agent_it_cannot_create_projects():
     # lane and would steer an agent away from a tool that works.
     assert "project_create" in EXPECTED_TOOLS
     assert "cannot create projects" not in mcp_server.server.instructions
+
+
+# The owner's roster of tools that move money (DECISIONS 2026-09-15). gen_t2i and gen_i2i are credit-free.
+SPENDING_TOOLS = {"gen_t2v", "gen_i2v", "gen_r2v", "clip_extend", "clip_edit", "agent_send"}
+
+
+def served_tool_objects():
+    async def fn(session):
+        return {tool.name: tool for tool in (await session.list_tools()).tools}
+
+    return with_client(fn)
+
+
+def test_every_tool_description_states_its_cost():
+    # Measured 2026-09-15: an agent holding nothing but this MCP could not tell what a call costs. Only gen_t2v
+    # carried a figure; clip_extend, clip_edit, gen_r2v and agent_send said "spends credits" with no number, and
+    # character_create was the one free write tool whose description did not end in "Free.".
+    unpriced = []
+    for name, tool in served_tool_objects().items():
+        text = (tool.description or "").strip()
+        if not (text.endswith("Free.") or re.search(r"\b\d+ credits?\b", text) or "unmeasured" in text):
+            unpriced.append(name)
+        elif text.endswith("Free.") and "spends credits" in text:
+            unpriced.append(f"{name} ends in Free. but says it spends credits")
+    assert unpriced == []
+
+
+def test_every_credit_spending_tool_requires_a_job_id():
+    # The ledger refuses a job id it already holds (gen.py), but the server minted a fresh uuid whenever the
+    # agent left job_id out, so a retry after a slow call (61 to 119 s per generation) paid a second time.
+    tools = served_tool_objects()
+    required = {name for name, tool in tools.items() if "job_id" in tool.input_schema.get("required", [])}
+    optional_on_a_paid_tool = sorted(
+        name
+        for name, tool in tools.items()
+        if "job_id" in tool.input_schema.get("properties", {})
+        and name not in required
+        and "0 credits" not in (tool.description or "")
+    )
+    assert sorted(SPENDING_TOOLS - required) == []
+    assert optional_on_a_paid_tool == []
+
+
+def _flag(argv, name):
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def _argv_sent_by(monkeypatch, tool, arguments):
+    """Run a generate tool through the real Backend up to the gflow argv, with run_job stubbed out."""
+    jobs = []
+
+    async def fake_run_job(job, out_dir, **kwargs):
+        jobs.append(job)
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+
+    async def fn(session):
+        return await session.call_tool(tool, arguments)
+
+    result = with_client(fn)
+    assert not result.is_error, [getattr(c, "text", "") for c in result.content]
+    return mcp_server.gen_mod.build_argv(jobs[0], Path("out"))
+
+
+def test_a_video_generation_without_a_model_goes_out_as_omni_flash_for_ten_seconds(monkeypatch):
+    # Left empty, gflow lets Flow reuse whatever model the composer used last (cli_video.py:185-196), so what
+    # a call costs could not be known before paying. The owner chose omni-flash for 10 s (2026-09-15).
+    calls = {
+        "gen_t2v": {"prompt": "a boat", "project": "P", "job_id": "job-t2v"},
+        "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"},
+        "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P", "job_id": "job-i2v"},
+    }
+    for tool, arguments in calls.items():
+        argv = _argv_sent_by(monkeypatch, tool, arguments)
+        assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "10"), (tool, argv)
+
+
+def test_a_null_model_is_treated_as_an_omitted_one(monkeypatch):
+    argv = _argv_sent_by(
+        monkeypatch, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "model": None}
+    )
+    assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "10")
+
+
+def test_a_veo_model_keeps_flows_own_length_because_veo_stops_at_eight_seconds(monkeypatch):
+    arguments = {"prompt": "a boat", "project": "P", "job_id": "j", "model": "veo-lite"}
+    argv = _argv_sent_by(monkeypatch, "gen_t2v", arguments)
+    assert _flag(argv, "--model") == "veo-lite"
+    assert "--duration" not in argv
+
+
+def test_an_explicit_duration_is_sent_as_given(monkeypatch):
+    argv = _argv_sent_by(
+        monkeypatch, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "duration": 8}
+    )
+    assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "8")
+
+
+def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():
+    # Measured 2026-09-15: a context-free agent pointed out that nothing warned a call blocks for tens of
+    # seconds, which is exactly when an agent retries, and a retry under a fresh job id is a second charge.
+    text = mcp_server.server.instructions
+    assert re.search(r"\b\d+\s*(?:s|seconds|min|minutes)\b", text), text
+    assert "job_id" in text
+    assert "omni-flash" in text
