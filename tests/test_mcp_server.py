@@ -3,6 +3,7 @@ import json
 import re
 from pathlib import Path
 
+from gflow_cli.api.transports.migrated_composer import R2V_DURATION_S
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 
@@ -425,7 +426,7 @@ def _flag(argv, name):
     return argv[argv.index(name) + 1] if name in argv else None
 
 
-def _argv_sent_by(monkeypatch, tool, arguments):
+def _argv_sent_by(monkeypatch, tmp_path, tool, arguments):
     """Run a generate tool through the real Backend up to the gflow argv, with run_job stubbed out."""
     jobs = []
 
@@ -433,7 +434,7 @@ def _argv_sent_by(monkeypatch, tool, arguments):
         jobs.append(job)
         return {"job_id": job.job_id, "outputs": []}
 
-    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
     monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
 
     async def fn(session):
@@ -444,17 +445,66 @@ def _argv_sent_by(monkeypatch, tool, arguments):
     return mcp_server.gen_mod.build_argv(jobs[0], Path("out"))
 
 
-def test_a_video_generation_without_a_model_goes_out_as_omni_flash_for_ten_seconds(monkeypatch):
+def test_t2v_and_i2v_without_a_model_go_out_as_omni_flash_for_ten_seconds(monkeypatch, tmp_path):
     # Left empty, gflow lets Flow reuse whatever model the composer used last (cli_video.py:185-196), so what
     # a call costs could not be known before paying. The owner chose omni-flash for 10 s (2026-09-15).
     calls = {
         "gen_t2v": {"prompt": "a boat", "project": "P", "job_id": "job-t2v"},
-        "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"},
         "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P", "job_id": "job-i2v"},
     }
     for tool, arguments in calls.items():
-        argv = _argv_sent_by(monkeypatch, tool, arguments)
+        argv = _argv_sent_by(monkeypatch, tmp_path, tool, arguments)
         assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "10"), (tool, argv)
+
+
+def test_r2v_without_a_model_goes_out_as_omni_flash_and_leaves_its_only_length_to_gflow(
+    monkeypatch, tmp_path
+):
+    # gflow refuses r2v on this host at any length but R2V_DURATION_S (migrated_composer.py:201, 968-983) and pins
+    # that length itself when none is sent, even on a cohort with no duration row (DECISIONS 2026-09-15).
+    r2v = {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"}
+    argv = _argv_sent_by(monkeypatch, tmp_path, "gen_r2v", r2v)
+    assert _flag(argv, "--model") == "omni-flash"
+    assert "--duration" not in argv
+    argv = _argv_sent_by(monkeypatch, tmp_path, "gen_r2v", r2v | {"duration": R2V_DURATION_S})
+    assert _flag(argv, "--duration") == str(R2V_DURATION_S)
+
+
+def _refused_before_the_ledger(monkeypatch, tmp_path, tool, arguments):
+    ran = []
+
+    async def fake_run_job(job, out_dir, **kwargs):
+        ran.append(job)
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+
+    async def fn(session):
+        return await session.call_tool(tool, arguments)
+
+    result = with_client(fn)
+    assert result.is_error
+    assert ran == []
+    return "".join(getattr(c, "text", "") for c in result.content)
+
+
+def test_a_model_or_length_gflow_would_refuse_is_refused_before_the_ledger_is_touched(monkeypatch, tmp_path):
+    # Review 2026-09-15: gflow's --model is an exact click.Choice and it checks lengths only after run_job has
+    # written `submitted`, so "omni" burned the job_id for 0 credits, and duration 0 sent no --duration at all,
+    # which let Flow fall back on the composer's remembered length.
+    t2v = {"prompt": "a boat", "project": "P", "job_id": "job-1"}
+    assert "model must be one of" in _refused_before_the_ledger(
+        monkeypatch, tmp_path, "gen_t2v", t2v | {"model": "omni"}
+    )
+    assert "4/6/8/10" in _refused_before_the_ledger(monkeypatch, tmp_path, "gen_t2v", t2v | {"duration": 0})
+    veo_ten = t2v | {"model": "veo-lite", "duration": 10}
+    assert "caps at 8s" in _refused_before_the_ledger(monkeypatch, tmp_path, "gen_t2v", veo_ten)
+    r2v_ten = {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-2", "duration": 10}
+    assert f"only at {R2V_DURATION_S} s" in _refused_before_the_ledger(
+        monkeypatch, tmp_path, "gen_r2v", r2v_ten
+    )
+    assert not (tmp_path / "ledger.jsonl").exists()
 
 
 def test_the_video_tools_show_the_agent_that_the_model_defaults_to_omni_flash():
@@ -467,25 +517,149 @@ def test_the_video_tools_show_the_agent_that_the_model_defaults_to_omni_flash():
     assert defaults == {"gen_t2v": "omni-flash", "gen_r2v": "omni-flash", "gen_i2v": "omni-flash"}
 
 
-def test_a_null_model_is_treated_as_an_omitted_one(monkeypatch):
+def test_a_null_model_is_treated_as_an_omitted_one(monkeypatch, tmp_path):
     argv = _argv_sent_by(
-        monkeypatch, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "model": None}
+        monkeypatch, tmp_path, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "model": None}
     )
     assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "10")
 
 
-def test_a_veo_model_keeps_flows_own_length_because_veo_stops_at_eight_seconds(monkeypatch):
+def test_a_veo_model_keeps_flows_own_length_because_veo_stops_at_eight_seconds(monkeypatch, tmp_path):
     arguments = {"prompt": "a boat", "project": "P", "job_id": "j", "model": "veo-lite"}
-    argv = _argv_sent_by(monkeypatch, "gen_t2v", arguments)
+    argv = _argv_sent_by(monkeypatch, tmp_path, "gen_t2v", arguments)
     assert _flag(argv, "--model") == "veo-lite"
     assert "--duration" not in argv
 
 
-def test_an_explicit_duration_is_sent_as_given(monkeypatch):
+def test_an_explicit_duration_is_sent_as_given(monkeypatch, tmp_path):
     argv = _argv_sent_by(
-        monkeypatch, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "duration": 8}
+        monkeypatch, tmp_path, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "duration": 8}
     )
     assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "8")
+
+
+SPEND_CALLS = {
+    "gen_t2v": {"prompt": "a boat", "project": "P", "job_id": "job-t2v"},
+    "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P", "job_id": "job-i2v"},
+    "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"},
+    "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going", "job_id": "job-extend"},
+    "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt", "job_id": "job-edit"},
+    "agent_send": {"project_id": "P", "message": "hello", "job_id": "job-agent"},
+}
+
+
+def _spending_backend(monkeypatch, tmp_path):
+    """The real Backend with every spending driver stubbed: records what got past it, opens no browser."""
+    reached = []
+
+    async def fake_with(self, fn):
+        reached.append("browser")
+        return await fn(object())
+
+    async def fake_extend(session, project_id, media_id, prompt, *, out_dir, job_id=None, wait=240.0):
+        reached.append(("clip_extend", job_id))
+        return {"job_id": job_id}
+
+    async def fake_edit(session, project_id, media_id, prompt, *, out_dir, job_id=None, wait=240.0):
+        reached.append(("clip_edit", job_id))
+        return {"job_id": job_id}
+
+    async def fake_send(session, project_id, message, wait=60.0, *, out_dir=None, job_id=None):
+        reached.append(("agent_send", job_id))
+        return {"job_id": job_id}
+
+    async def fake_run_job(job, out_dir, **kwargs):
+        reached.append((f"gen_{job.kind}", job.job_id))
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.clips_mod, "extend", fake_extend)
+    monkeypatch.setattr(mcp_server.clips_mod, "edit", fake_edit)
+    monkeypatch.setattr(mcp_server.agent_mod, "send", fake_send)
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    return reached
+
+
+def _texts(results):
+    return ["".join(getattr(c, "text", "") for c in result.content) for result in results]
+
+
+def test_every_spending_call_reaches_its_driver_with_the_agents_own_job_id(monkeypatch, tmp_path):
+    # Review 2026-09-15: with Backend dropping job_id on its way to the drivers, which then mint a uuid, the suite
+    # stayed green. The schema requiring job_id means nothing if the id never reaches the ledger check.
+    reached = _spending_backend(monkeypatch, tmp_path)
+
+    async def fn(s):
+        return [await s.call_tool(name, dict(arguments)) for name, arguments in SPEND_CALLS.items()]
+
+    results = with_client(fn)
+    assert [result.is_error for result in results] == [False] * len(SPEND_CALLS), _texts(results)
+    assert sorted(step for step in reached if step != "browser") == sorted(
+        (name, arguments["job_id"]) for name, arguments in SPEND_CALLS.items()
+    )
+
+
+def test_a_job_id_already_in_a_ledger_is_refused_before_a_browser_opens(monkeypatch, tmp_path):
+    # Any row counts, `opening` included: the clip editor can spend 20 credits before it writes `submitted`
+    # (DECISIONS 2026-09-13 and 2026-09-15). Both the default ledger and the one named by out_dir are checked.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    gen.Ledger(tmp_path / "ledger.jsonl").append("job-extend", "opening", kind="extend", credits_before=245)
+    other = tmp_path / "other"
+    gen.Ledger(other / "ledger.jsonl").append("job-edit", "submitted", kind="edit")
+
+    async def fn(s):
+        return [
+            await s.call_tool("clip_extend", dict(SPEND_CALLS["clip_extend"])),
+            await s.call_tool("clip_extend", SPEND_CALLS["clip_extend"] | {"out_dir": str(other)}),
+            await s.call_tool("clip_edit", SPEND_CALLS["clip_edit"] | {"out_dir": str(other)}),
+        ]
+
+    results = with_client(fn)
+    assert [result.is_error for result in results] == [True, True, True]
+    for text in _texts(results):
+        assert "may already have spent credits" in text and "flow_credits" in text, text
+        assert "use a new job id" not in text
+    assert reached == []
+
+
+def test_a_refusal_from_inside_a_driver_says_check_the_money_rather_than_pay_again(monkeypatch, tmp_path):
+    # The drivers' own refusal ends "use a new job id"; passed on verbatim it told the agent to pay a second time.
+    refused = gen.AlreadySubmitted("job job-1 already has a submitted row; use a new job id")
+    text = _error_text_of_a_failing_generation(monkeypatch, tmp_path, refused)
+    assert "already has a submitted row" in text
+    assert "may already have spent credits" in text
+    assert "use a new job id" not in text
+
+
+def test_an_empty_job_id_is_refused_with_the_reason(monkeypatch, tmp_path):
+    reached = _spending_backend(monkeypatch, tmp_path)
+
+    async def fn(s):
+        return await s.call_tool("gen_t2v", SPEND_CALLS["gen_t2v"] | {"job_id": ""})
+
+    result = with_client(fn)
+    assert result.is_error
+    assert "job_id is required" in _texts([result])[0]
+    assert reached == []
+
+
+def test_a_multiline_prompt_is_refused_before_it_can_be_typed_as_enter(monkeypatch, tmp_path):
+    # Review 2026-09-15: keyboard.type presses Enter for a newline, and the clip editor and the agent box are typed
+    # into before the `submitted` row is written.
+    reached = _spending_backend(monkeypatch, tmp_path)
+
+    async def fn(s):
+        return [
+            await s.call_tool("clip_edit", SPEND_CALLS["clip_edit"] | {"prompt": "red shirt\nstill camera"}),
+            await s.call_tool("clip_extend", SPEND_CALLS["clip_extend"] | {"prompt": "keep going\r"}),
+            await s.call_tool("agent_send", SPEND_CALLS["agent_send"] | {"message": "hi\nthere"}),
+        ]
+
+    results = with_client(fn)
+    assert [result.is_error for result in results] == [True, True, True]
+    assert all("one line" in text for text in _texts(results)), _texts(results)
+    assert reached == []
 
 
 def _fixture(rpcid):
@@ -640,11 +814,11 @@ def test_project_rename_replies_with_the_project_id_and_the_title_the_grid_lists
     assert with_client(fn) == {"id": "P", "title": "as listed"}
 
 
-def _error_text_of_a_failing_generation(monkeypatch, exc):
+def _error_text_of_a_failing_generation(monkeypatch, tmp_path, exc):
     async def fake_run_job(job, out_dir, **kwargs):
         raise exc
 
-    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
     monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
 
     async def fn(session):
@@ -655,13 +829,15 @@ def _error_text_of_a_failing_generation(monkeypatch, exc):
     return "".join(getattr(c, "text", "") for c in result.content)
 
 
-def test_an_agent_reads_why_a_tool_failed(monkeypatch):
+def test_an_agent_reads_why_a_tool_failed(monkeypatch, tmp_path):
     # Measured 2026-09-15: mcp 2.2.0 shows only "Error executing tool <name>" for any exception that is not a
     # ToolError, so a WAF stop and a refused job_id reached the agent as the very same bare line.
     refused = gen.AlreadySubmitted("job job-1 already has a submitted row; use a new job id")
-    assert "already has a submitted row" in _error_text_of_a_failing_generation(monkeypatch, refused)
+    assert "already has a submitted row" in _error_text_of_a_failing_generation(
+        monkeypatch, tmp_path, refused
+    )
     waf = RuntimeError("Google Flow flagged this request as unusual activity. Stop: do not retry")
-    assert "Stop: do not retry" in _error_text_of_a_failing_generation(monkeypatch, waf)
+    assert "Stop: do not retry" in _error_text_of_a_failing_generation(monkeypatch, tmp_path, waf)
 
 
 def test_a_missing_argument_is_named_to_the_agent(monkeypatch):
@@ -675,11 +851,17 @@ def test_a_missing_argument_is_named_to_the_agent(monkeypatch):
     assert "project is required" in "".join(getattr(c, "text", "") for c in result.content)
 
 
-def test_an_error_shown_to_the_agent_never_carries_a_cookie(monkeypatch):
-    leaked = RuntimeError("request failed with SAPISID=abc123secret in the header")
-    text = _error_text_of_a_failing_generation(monkeypatch, leaked)
-    assert "abc123secret" not in text
-    assert "[redacted]" in text
+def test_an_error_shown_to_the_agent_never_carries_a_cookie(monkeypatch, tmp_path):
+    # Review 2026-09-15: the ledger's regex covers SAPISID, __Secure- and "Authorization:" only, while a Playwright
+    # request error appends a call log listing request headers, cookies included.
+    leaked = RuntimeError(
+        "request failed with SAPISID=abc123secret in the header; cookie: SID=sid-secret; HSID=hsid-secret; "
+        "authorization: Bearer ya29.bearer-secret\nCall log:\n  - cookie: SSID=ssid-secret"
+    )
+    text = _error_text_of_a_failing_generation(monkeypatch, tmp_path, leaked)
+    for secret in ("abc123secret", "sid-secret", "hsid-secret", "bearer-secret", "ssid-secret", "Call log"):
+        assert secret not in text, text
+    assert "request failed" in text
 
 
 def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():

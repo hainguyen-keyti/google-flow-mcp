@@ -11,7 +11,10 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from gflow_cli.api.video import VideoModel
+from gflow_cli import cli_video
+from gflow_cli.api.transports.migrated_composer import R2V_DURATION_S
+from gflow_cli.api.video import VideoModel, validate_duration_for_model
+from gflow_cli.data.redaction import redact_error_detail
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 
@@ -32,11 +35,29 @@ VIDEO_DEFAULT_MODEL = "omni-flash"
 OMNI_FLASH_SECONDS = 10
 
 
-def _is_omni_flash(model: str) -> bool:
-    try:
-        return VideoModel.from_cli(model) is VideoModel.OMNI_FLASH
-    except ValueError:
-        return False
+def _video_settings(kind: str, model: str | None, duration: int | None) -> tuple[str, int | None]:
+    """Refuse up front what gflow's CLI refuses only after run_job has written `submitted`, burning the job_id."""
+    model = model or VIDEO_DEFAULT_MODEL
+    models = next(p.type.choices for p in cli_video.video.commands[kind].params if p.name == "model")
+    if model not in models:
+        raise ValueError(f"model must be one of {list(models)}, got {model!r}")
+    if kind == "r2v":
+        # gflow pins r2v to its only length on this host when none is sent (migrated_composer.py:968-986).
+        if duration not in (None, R2V_DURATION_S):
+            raise ValueError(f"gen_r2v runs only at {R2V_DURATION_S} s on this host; omit duration")
+        return model, duration
+    if duration is None:
+        is_omni = VideoModel.from_cli(model) is VideoModel.OMNI_FLASH
+        return model, OMNI_FLASH_SECONDS if is_omni else None
+    validate_duration_for_model(VideoModel.from_cli(model), duration)
+    return model, duration
+
+
+def _job_refused(job_id: str | None, seen: str) -> str:
+    return (
+        f"job_id {job_id} already has {seen}, so that job may already have spent credits. Check flow_media and "
+        "flow_credits, and start it again under a new job_id only if it did not run."
+    )
 
 
 class Backend:
@@ -47,6 +68,21 @@ class Backend:
     async def _with(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
         async with FlowSession(self.profile) as session:
             return await fn(session)
+
+    async def _spend_once(self, job_id: str | None, out_dir: Path, run: Callable[[], Awaitable[Any]]) -> Any:
+        """One job per job_id through MCP (DECISIONS 2026-09-15): any ledger row refuses the id, `opening` included,
+        in the default ledger and in the one out_dir names, before a browser opens."""
+        ledgers = dict.fromkeys((self.out_dir / "ledger.jsonl", out_dir / "ledger.jsonl")) if job_id else {}
+        for ledger in ledgers:
+            statuses = sorted({str(row.get("status")) for row in gen_mod.Ledger(ledger).rows(job_id)})
+            if statuses:
+                seen = f"ledger rows ({', '.join(statuses)}) in {ledger}"
+                raise gen_mod.AlreadySubmitted(_job_refused(job_id, seen))
+        try:
+            return await run()
+        except gen_mod.AlreadySubmitted as exc:
+            # The drivers' own message ends "use a new job id", which invites paying twice.
+            raise gen_mod.AlreadySubmitted(_job_refused(job_id, "a submitted row")) from exc
 
     async def lane(self) -> dict[str, Any]:
         return await self._with(lane_mod.run)
@@ -121,8 +157,14 @@ class Backend:
     async def agent_send(
         self, project_id: str, message: str, wait: float = 60.0, job_id: str | None = None
     ) -> dict[str, Any]:
-        return await self._with(
-            lambda s: agent_mod.send(s, project_id, message, wait=wait, out_dir=self.out_dir, job_id=job_id)
+        return await self._spend_once(
+            job_id,
+            self.out_dir,
+            lambda: self._with(
+                lambda s: agent_mod.send(
+                    s, project_id, message, wait=wait, out_dir=self.out_dir, job_id=job_id
+                )
+            ),
         )
 
     async def clip_download(
@@ -164,10 +206,14 @@ class Backend:
         wait: float = 240.0,
     ) -> dict[str, Any]:
         target = Path(out_dir) if out_dir else self.out_dir
-        return await self._with(
-            lambda s: clips_mod.extend(
-                s, project_id, media_id, prompt, out_dir=target, job_id=job_id, wait=wait
-            )
+        return await self._spend_once(
+            job_id,
+            target,
+            lambda: self._with(
+                lambda s: clips_mod.extend(
+                    s, project_id, media_id, prompt, out_dir=target, job_id=job_id, wait=wait
+                )
+            ),
         )
 
     async def clip_edit(
@@ -180,10 +226,14 @@ class Backend:
         wait: float = 240.0,
     ) -> dict[str, Any]:
         target = Path(out_dir) if out_dir else self.out_dir
-        return await self._with(
-            lambda s: clips_mod.edit(
-                s, project_id, media_id, prompt, out_dir=target, job_id=job_id, wait=wait
-            )
+        return await self._spend_once(
+            job_id,
+            target,
+            lambda: self._with(
+                lambda s: clips_mod.edit(
+                    s, project_id, media_id, prompt, out_dir=target, job_id=job_id, wait=wait
+                )
+            ),
         )
 
     async def generate(
@@ -203,9 +253,7 @@ class Backend:
         out_dir: str | None = None,
     ) -> dict[str, Any]:
         if kind in gen_mod.VIDEO_KINDS:
-            model = model or VIDEO_DEFAULT_MODEL
-            if duration is None and _is_omni_flash(model):
-                duration = OMNI_FLASH_SECONDS
+            model, duration = _video_settings(kind, model, duration)
         job = gen_mod.Job(
             job_id=job_id or str(uuid.uuid4()),
             kind=kind,
@@ -220,8 +268,12 @@ class Backend:
             refs=[Path(r) for r in refs or []],
         )
         target = Path(out_dir) if out_dir else self.out_dir
-        return await gen_mod.run_job(
-            job, target, read_credits=lambda: gen_mod.read_credits_live(self.profile)
+        return await self._spend_once(
+            job_id,
+            target,
+            lambda: gen_mod.run_job(
+                job, target, read_credits=lambda: gen_mod.read_credits_live(self.profile)
+            ),
         )
 
 
@@ -236,7 +288,9 @@ class TellingServer(MCPServer):
         except UnexpectedToolError as exc:
             cause = exc.__cause__ or exc
             logging.getLogger(__name__).exception("tool %s failed", name)
-            detail = gen_mod._scrub(f"{type(cause).__name__}: {cause}")
+            # A Playwright error appends a call log listing request headers, cookies included: drop it whole.
+            text = str(cause).split("\nCall log:")[0]
+            detail = redact_error_detail(gen_mod._scrub(f"{type(cause).__name__}: {text}"))
             raise ToolError(f"Error executing tool {name}: {detail}") from cause
 
 
@@ -249,12 +303,13 @@ server = TellingServer(
         "clip_edit, and agent_send (may spend). clip_download at 4k is a Flow upscale whose cost is "
         "unmeasured: ask the owner first. gen_t2i and gen_i2i are credit-free but draw on a daily image "
         "quota. Check a tool's description for its cost before calling it. Every call drives a real Chrome "
-        "session and blocks until Flow answers: reads and edits take about 10-30 s, a generation 1-2 min, "
-        "clip_extend and clip_edit up to about 6 min, so a slow call is not a failed one. The credit-spending "
-        "tools require a job_id. Never call one again under a new job_id because it was slow, errored or timed "
-        "out: check flow_media and flow_credits first, and if you do call again keep the same job_id, which the "
-        "ledger refuses instead of charging twice. gen_t2v, gen_r2v and gen_i2v use omni-flash for 10 s when "
-        "model is omitted. If a tool reports that Google flagged unusual activity (WAF), stop: do not retry and "
+        "session and blocks until Flow answers: a read takes about 15-50 s and a change about 50 s, a generation "
+        "1.5-2 min, clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. The "
+        "credit-spending tools require a job_id. Never call one again under a new job_id because it was slow, "
+        "errored or timed out: check flow_media and flow_credits first, and if you do call again keep the same "
+        "job_id, which the ledger refuses instead of charging twice. When model is omitted gen_t2v and gen_i2v "
+        "use omni-flash for 10 s, and gen_r2v uses omni-flash at 8 s, the only length this host offers it. "
+        "If a tool reports that Google flagged unusual activity (WAF), stop: do not retry and "
         "do not re-authenticate; tell the owner. Pass an existing project id from flow_projects, or make one "
         "with project_create."
     ),
@@ -262,8 +317,9 @@ server = TellingServer(
 
 _JOB_ID_RULE = (
     " job_id is required: use a new one for each new job, and keep the SAME one when calling again after an "
-    "error or a timeout. The ledger refuses a job_id it already holds, so a retry never pays twice; a refused "
-    "job_id means that job already ran, so check flow_media and flow_credits before starting it under a new one."
+    "error or a timeout. Any job_id already in the ledger is refused before a browser opens, so a retry never "
+    "pays twice; a refused job_id means that job may already have spent credits, so check flow_media and "
+    "flow_credits before starting it under a new one."
 )
 
 
@@ -274,6 +330,14 @@ def _json(data: Any) -> str:
 def _require(value: str, name: str) -> None:
     if not value:
         raise ValueError(f"{name} is required")
+
+
+def _one_line(value: str, name: str) -> None:
+    # The clip editor and the agent box are typed into with keyboard.type, which presses Enter for a newline.
+    if "\n" in value or "\r" in value:
+        raise ValueError(
+            f"{name} must be one line: Flow's box takes a newline as Enter, which may submit early"
+        )
 
 
 @server.tool(name="flow_lane", description="Which lane the profile is on (LABS, MIGRATED, SIGNED_OUT). Free.")
@@ -451,6 +515,7 @@ async def agent_mode(project_id: str, enabled: bool) -> str:
 async def agent_send(project_id: str, message: str, job_id: str, wait: float = 60.0) -> str:
     _require(project_id, "project_id")
     _require(message, "message")
+    _one_line(message, "message")
     _require(job_id, "job_id")
     return _json(await backend.agent_send(project_id, message, wait, job_id))
 
@@ -517,6 +582,7 @@ async def clip_extend(
     _require(project_id, "project_id")
     _require(media_id, "media_id")
     _require(prompt, "prompt")
+    _one_line(prompt, "prompt")
     _require(job_id, "job_id")
     return _json(await backend.clip_extend(project_id, media_id, prompt, job_id, out_dir))
 
@@ -534,6 +600,7 @@ async def clip_edit(
     _require(project_id, "project_id")
     _require(media_id, "media_id")
     _require(prompt, "prompt")
+    _one_line(prompt, "prompt")
     _require(job_id, "job_id")
     return _json(await backend.clip_edit(project_id, media_id, prompt, job_id, out_dir))
 
@@ -612,8 +679,9 @@ async def gen_i2v(
     name="gen_r2v",
     description=(
         "Reference images (ingredients) to video via gflow. It spends credits and is ledgered: veo-lite x1 = 10 "
-        "credits (measured); omni-flash for 10 s, the default when model is omitted, is unmeasured. Takes about "
-        "100-120 s." + _JOB_ID_RULE
+        "credits (measured); omni-flash, the default when model is omitted, is unmeasured. It always runs 8 s, "
+        "the only length this host offers references, so leave duration out. Takes about 100-120 s."
+        + _JOB_ID_RULE
     ),
 )
 async def gen_r2v(
