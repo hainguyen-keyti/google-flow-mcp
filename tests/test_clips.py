@@ -561,12 +561,16 @@ def test_reconcile_never_gives_an_edit_a_record_that_is_not_on_its_own_clip(monk
     assert [r["status"] for r in ledger.rows("a")] == ["opening"]
 
 
-def test_reconcile_leaves_two_open_edits_of_the_same_clip_and_prompt_to_a_person(monkeypatch, tmp_path):
+@pytest.mark.parametrize("second_prompt", [JOB_PROMPT, f"  {JOB_PROMPT} "])
+def test_reconcile_leaves_two_open_edits_of_the_same_clip_and_prompt_to_a_person(
+    monkeypatch, tmp_path, second_prompt
+):
     # Review of plan C (2026-09-15): with two open jobs that could both own the new version, ledger order picked the
-    # winner, and it could be the job that never submitted.
+    # winner, and it could be the job that never submitted. Prompts compare as the driver does, or both jobs take the
+    # one version in a single pass.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     _opening(ledger, "never-submitted", "src-21")
-    _opening(ledger, "submitted", "src-21")
+    _opening(ledger, "submitted", "src-21", prompt=second_prompt)
     _reconcile_world(monkeypatch, [_record("src-21", 100), _record("src-21", 200, JOB_PROMPT)], balance=275)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
@@ -576,6 +580,37 @@ def test_reconcile_leaves_two_open_edits_of_the_same_clip_and_prompt_to_a_person
         ("submitted", "unknown"),
     ]
     assert [r["status"] for r in ledger.rows()] == ["opening", "opening"]
+
+
+@pytest.mark.parametrize(
+    ("clip", "prompt"),
+    [
+        # Story sends one prompt to every shot's edit, each shot on its own clip.
+        ("src-31", JOB_PROMPT),
+        # Two edits of one clip that typed different prompts.
+        ("src-30", "make it rain"),
+    ],
+)
+def test_reconcile_closes_two_open_edits_that_differ_in_clip_or_prompt(monkeypatch, tmp_path, clip, prompt):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "a", "src-30", workflows_before=["w-100", "w-101"])
+    _opening(ledger, "b", clip, prompt=prompt, workflows_before=["w-100", "w-101"])
+    listing = [
+        _record("src-30", 100),
+        _record("src-31", 101),
+        _record("src-30", 200, JOB_PROMPT),
+        _record(clip, 300, prompt),
+    ]
+    _reconcile_world(monkeypatch, listing, balance=255)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [(r["job_id"], r["verdict"]) for r in out] == [("a", "done"), ("b", "done")]
+    closed = [row for row in ledger.rows() if row["status"] == "done"]
+    assert [(row["job_id"], row["outputs"][0]["workflow_id"]) for row in closed] == [
+        ("a", "w-200"),
+        ("b", "w-300"),
+    ]
 
 
 def test_reconcile_leaves_an_edit_open_when_two_new_versions_carry_its_prompt(monkeypatch, tmp_path):
@@ -854,10 +889,12 @@ def test_reconcile_never_calls_a_job_done_when_its_opening_row_never_saw_the_cli
     monkeypatch, tmp_path, listed
 ):
     # Review 2026-09-15: a set missing the source clip (a partial first listing frame, say) made every record of the
-    # clip look new, so a job that spent nothing was written `done, spent: 0`; the old clock rule said failed.
+    # clip look new, so a job that spent nothing was written `done, spent: 0`; the old clock rule said failed. The clip
+    # already holds a finished version with the job's prompt (story sends one prompt to every edit), so only the set
+    # check keeps it from being taken as new.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     _opening(ledger, "j", "src-13", workflows_before=listed)
-    _reconcile_world(monkeypatch, [_record("src-13", 100), _record("other", 50)], balance=295)
+    _reconcile_world(monkeypatch, [_record("src-13", 100, JOB_PROMPT), _record("other", 50)], balance=295)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
