@@ -270,10 +270,15 @@ def check_reconcile_done(tmp: Path) -> tuple[str, str]:
 
 
 def check_reconcile_failed(tmp: Path) -> tuple[str, str]:
-    """Nothing new on that media and a balance that never moved means nothing was bought."""
+    """The job's clip is in this project, nothing is new there, and the balance never moved: nothing was bought.
+
+    The clip's own older record has to be in the listing (DECISIONS 2026-09-15): editor rows name no project, so a
+    listing without it may be another project's, and reconcile answers `unknown` there.
+    """
     ledger = gen.Ledger(tmp / "ledger.jsonl")
     ledger.append("e", "opening", kind="edit", source_media_id="src-5", credits_before=START_BALANCE)
-    snapshot, credits = _reads(balance=START_BALANCE, records=[])
+    stamp = ledger.rows("e")[0]["ts"]
+    snapshot, credits = _reads(balance=START_BALANCE, records=[_record("src-5", stamp - 3_600)])
     original = _patch(_snapshot=snapshot)
     clips.reader.credits = credits
     try:

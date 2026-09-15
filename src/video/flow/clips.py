@@ -299,6 +299,8 @@ async def _generate_from_editor(
 
 
 STUCK_STATUSES = ("opening", "submitted")
+# Flow stamps records in whole seconds on its own clock; this Mac's clock can be ahead of it.
+CLOCK_MARGIN_S = 300
 
 
 def _stuck_editor_jobs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -322,14 +324,17 @@ def _editor_verdict(row: dict[str, Any], records: list[dict[str, Any]], credits_
 
     Stricter than `story.pipeline.reconcile_decision` on `failed` (DECISIONS 2026-09-15): the balance has been
     measured moving with no spend (195 to 245 overnight), so an equal one proves nothing alone, while a job that
-    spent has always left a record in the listing. `failed` needs both an equal balance and a project that gained
-    no record since the job opened.
+    spent has always left a record in the listing. `failed` needs an equal balance and a project that gained no
+    record since the job opened, counting a record with no time or inside CLOCK_MARGIN_S as gained. Editor rows
+    name no project, so a listing without the job's own clip may belong to another project: that is `unknown`.
     """
     media_id = row.get("source_media_id")
     stamp = row.get("ts") or 0
+    if not any(r.get("id") == media_id for r in records):
+        return "unknown"
     if any(r.get("id") == media_id and (r.get("created") or 0) >= stamp for r in records):
         return "done"
-    project_changed = any((r.get("created") or 0) >= stamp for r in records)
+    project_changed = any(r.get("created") is None or r["created"] >= stamp - CLOCK_MARGIN_S for r in records)
     if credits_now == row.get("credits_before") and not project_changed:
         return "failed"
     return "unknown"

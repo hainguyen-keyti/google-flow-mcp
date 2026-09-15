@@ -539,7 +539,43 @@ def test_reconcile_leaves_an_editor_job_open_when_the_balance_matches_but_the_pr
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     ledger.append("j", "opening", kind="edit", source_media_id="src-7", credits_before=295)
     stamp = ledger.rows("j")[0]["ts"]
-    _reconcile_world(monkeypatch, [_record("another-media", stamp + 10)], balance=295)
+    records = [_record("src-7", stamp - 3_600), _record("another-media", stamp + 10)]
+    _reconcile_world(monkeypatch, records, balance=295)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
+def test_reconcile_never_judges_a_job_whose_clip_is_not_in_the_listing_it_read(monkeypatch, tmp_path):
+    # Review 2026-09-15: editor rows name no project, so reconciling project A judged project B's job against A's
+    # listing, found nothing new there and wrote `failed, spent: 0`, which the story pipeline reads as retryable.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("b-job", "opening", kind="edit", source_media_id="clip-in-project-b", credits_before=295)
+    stamp = ledger.rows("b-job")[0]["ts"]
+    _reconcile_world(monkeypatch, [_record("clip-in-project-a", stamp - 3_600)], balance=295)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "a", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("b-job")] == ["opening"]
+
+
+@pytest.mark.parametrize("created_offset", [None, -60])
+def test_a_record_with_no_time_or_inside_the_clock_margin_counts_as_a_change(
+    monkeypatch, tmp_path, created_offset
+):
+    # Review 2026-09-15: Flow's clock (whole seconds) and this Mac's can disagree, and a record whose time did not
+    # parse counted as old, so the job's own record could be missed and an equal balance written as `failed`.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("j", "opening", kind="extend", source_media_id="src-9", credits_before=295)
+    stamp = ledger.rows("j")[0]["ts"]
+    recent = {
+        **_record("fresh", stamp),
+        "created": None if created_offset is None else stamp + created_offset,
+    }
+    _reconcile_world(monkeypatch, [_record("src-9", stamp - 3_600), recent], balance=295)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
