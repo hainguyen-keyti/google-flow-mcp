@@ -629,6 +629,8 @@ RECONCILED = "checked the listing and the credit balance"
         [("submitted", {}), ("failed", {"outputs": [{"media_id": "src-40", "role": "copy"}], "spent": 20})],
         # Closed failed by story's reconcile, whose rule for failed is looser than clip_reconcile's.
         [("failed", {"media_id": None, "spent": 0, "reconciled": RECONCILED})],
+        # Closed failed by hand, naming the clip: only clip_reconcile's own verdict shows the job made nothing.
+        [("failed", {"source_media_id": "src-40", "spent": 0})],
         # Closed failed by clip_reconcile, then run again on this clip under the same job_id.
         [
             ("failed", {"source_media_id": "src-40", "outputs": [], "spent": 0, "reconciled": RECONCILED}),
@@ -674,15 +676,17 @@ def test_reconcile_closes_an_edit_whose_rival_clip_reconcile_already_found_made_
     assert ledger.rows("retry")[-1]["outputs"][0]["workflow_id"] == "w-200"
 
 
+@pytest.mark.parametrize("listed", [["w-100", "w-200"], []])
 def test_reconcile_leaves_an_orphan_open_while_an_open_job_of_its_clip_and_prompt_holds_a_version(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, listed
 ):
     # Re-review of plan C (2026-09-16, F1): an open job stays a rival even when its pending row holds a version on the
-    # clip, as decided first (DECISIONS 2026-09-15); only a closed job is cleared by the version it holds.
+    # clip, as decided first (DECISIONS 2026-09-15); only a closed job is cleared by the version it holds. A job whose
+    # opening row lists no workflows is never judged, yet it is still open.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     _opening(ledger, "a", "src-60")
     ledger.append("a", "submitted", kind="edit", source_media_id="src-60", prompt=JOB_PROMPT)
-    _opening(ledger, "b", "src-60", workflows_before=["w-100", "w-200"])
+    _opening(ledger, "b", "src-60", workflows_before=listed)
     ledger.append("b", "submitted", kind="edit", source_media_id="src-60", prompt=JOB_PROMPT)
     held = [{"media_id": "src-60", "workflow_id": "w-300", "role": "generated"}]
     ledger.append("b", "pending", outputs=held)
