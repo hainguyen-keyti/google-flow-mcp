@@ -266,9 +266,12 @@ def check_retry_not_blocked(tmp: Path) -> tuple[str, str]:
 
 
 def check_reconcile_done(tmp: Path) -> tuple[str, str]:
-    """A record on the clip that the opening row did not list, plus a balance that fell, means the job really ran."""
+    """A record on the clip that the opening row did not list, plus a balance that fell, means the job really ran.
+
+    An edit, because only an edit puts its version on the source clip; an extend's clip gets a new media id.
+    """
     ledger = gen.Ledger(tmp / "ledger.jsonl")
-    _opening(ledger, "d", "src-4", kind="extend")
+    _opening(ledger, "d", "src-4")
     snapshot, credits = _reads(balance=AFTER_BALANCE, records=[_record("src-4", 1), _record("src-4", 2)])
     original = _patch(_snapshot=snapshot)
     clips.reader.credits = credits
@@ -311,19 +314,21 @@ def check_reconcile_failed(tmp: Path) -> tuple[str, str]:
 
 def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
     """Either sign alone is no proof, so nothing may be written: a record the job did not list while the balance
-    never moved, or a balance that moved while nothing is new (the balance moves with no spend, 195 to 245).
+    never moved, or a balance that moved while nothing is new (the balance moves with no spend, 195 to 245). Nor
+    may a job whose opening row never saw its clip be judged: every record of that clip would look new.
 
     Each case gets its own ledger, since one reconcile reads one balance for every job.
     """
     cases = {
-        "new_record": (START_BALANCE, [_record("src-6", 1), _record("elsewhere", 2)]),
-        "balance_moved": (AFTER_BALANCE, [_record("src-6", 1)]),
+        "new_record": (START_BALANCE, [_record("src-6", 1), _record("elsewhere", 2)], ["w-1"]),
+        "balance_moved": (AFTER_BALANCE, [_record("src-6", 1)], ["w-1"]),
+        "clip_unseen_at_open": (START_BALANCE, [_record("src-6", 1)], []),
     }
     seen = {}
-    for name, (balance, records) in cases.items():
+    for name, (balance, records, listed) in cases.items():
         room = tmp / name
         room.mkdir(parents=True, exist_ok=True)
-        _opening(gen.Ledger(room / "ledger.jsonl"), "u", "src-6")
+        _opening(gen.Ledger(room / "ledger.jsonl"), "u", "src-6", workflows_before=listed)
         snapshot, credits = _reads(balance=balance, records=records)
         original = _patch(_snapshot=snapshot)
         clips.reader.credits = credits

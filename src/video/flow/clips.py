@@ -334,12 +334,14 @@ def _editor_verdict(row: dict[str, Any], records: list[dict[str, Any]], credits_
     spent has always left a record in the listing. A record is new when its workflow is missing from the
     `workflows_before` the job wrote as it opened, whatever its time: Flow's clock and this Mac's disagree, and a
     clip's `created` is stamped at submit. `failed` needs an equal balance and no new record at all. A listing
-    without the job's own clip holds no evidence about the job: that is `unknown`.
+    without the job's own clip holds no evidence about the job, and a clip the row never saw would make every one
+    of its records look new: both are `unknown`.
     """
     media_id = row.get("source_media_id")
-    if not any(r.get("id") == media_id for r in records):
+    before = set(row["workflows_before"])
+    if not any(r.get("id") == media_id and r.get("workflow_id") in before for r in records):
         return "unknown"
-    fresh = new_records(set(row["workflows_before"]), records)
+    fresh = new_records(before, records)
     if any(r.get("id") == media_id for r in fresh):
         return "done"
     if credits_now == row.get("credits_before") and not fresh:

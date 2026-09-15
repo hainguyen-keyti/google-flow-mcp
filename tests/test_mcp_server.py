@@ -859,6 +859,11 @@ def test_clip_reconcile_opens_no_browser_when_no_job_can_be_judged_here(monkeypa
         "b", "opening", kind="edit", source_media_id="m", credits_before=295, project="Q", workflows_before=[]
     )
     ledger.append("old", "opening", kind="extend", source_media_id="m", credits_before=295)
+    # A settled job of this project is not open, so it is no reason to read the listing either.
+    ledger.append(
+        "s", "opening", kind="edit", source_media_id="m", credits_before=295, project="P", workflows_before=[]
+    )
+    ledger.append("s", "done", spent=20)
 
     async def no_browser(self, fn):
         raise AssertionError("clip_reconcile opened a browser with nothing to judge")

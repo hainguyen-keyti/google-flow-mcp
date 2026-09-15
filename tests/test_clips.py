@@ -471,9 +471,10 @@ def _opening(ledger: gen.Ledger, job_id: str, media_id: str, **fields) -> float:
 
 def test_reconcile_closes_an_orphan_as_done_when_the_media_gained_a_record(monkeypatch, tmp_path):
     # This is the case that cost 20 credits: the editor spent, the driver died before its submitted row,
-    # and only Flow's listing knew the job existed.
+    # and only Flow's listing knew the job existed. An edit, because only an edit puts its version on the source
+    # clip: every extend on record got a new media id (review 2026-09-15).
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    _opening(ledger, "j", "src-1", kind="extend")
+    _opening(ledger, "j", "src-1")
     _reconcile_world(monkeypatch, [_record("src-1", 100), _record("src-1", 200)], balance=275)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
@@ -539,6 +540,23 @@ def test_reconcile_ignores_jobs_that_already_have_an_outcome(monkeypatch, tmp_pa
     assert len(ledger.rows("settled")) == 3
 
 
+def test_reconcile_judges_a_reused_job_id_by_its_first_opening_row(monkeypatch, tmp_path):
+    # Review 2026-09-15: story and the CLI may run a job id again after an orphaned opening row. Only the first row
+    # holds the balance and workflows from before any attempt spent; judging the last one would call a 20-credit
+    # spend `failed, spent: 0`, which story reads as free to run again.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-12", credits_before=295, workflows_before=["w-100"])
+    _opening(ledger, "j", "src-12", credits_before=275, workflows_before=["w-100", "w-200"])
+    _reconcile_world(monkeypatch, [_record("src-12", 100), _record("src-12", 200)], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["done"]
+    rows = ledger.rows("j")
+    assert [r["status"] for r in rows] == ["opening", "opening", "done"]
+    assert rows[-1]["spent"] == 20
+
+
 def _no_flow_reads(monkeypatch):
     async def must_not_read(*args, **kwargs):
         raise AssertionError("reconcile read Flow with nothing it can judge")
@@ -566,7 +584,7 @@ def test_reconcile_reports_gen_and_agent_jobs_as_skipped_and_never_writes_them(m
 
 def test_reconcile_judges_editor_rows_and_skips_the_rest_in_one_pass(monkeypatch, tmp_path):
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    _opening(ledger, "e", "src-6", kind="extend")
+    _opening(ledger, "e", "src-6")
     ledger.append("g", "submitted", kind="r2v", argv=["video", "r2v"], credits_before=295)
     _reconcile_world(monkeypatch, [_record("src-6", 100), _record("src-6", 200)], balance=285)
 
@@ -602,6 +620,22 @@ def test_reconcile_never_judges_a_job_whose_clip_is_not_in_the_listing_it_read(m
     _reconcile_world(monkeypatch, [_record("still-listed", 100)], balance=295)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "a", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
+@pytest.mark.parametrize("listed", [[], ["w-other"]])
+def test_reconcile_never_calls_a_job_done_when_its_opening_row_never_saw_the_clip(
+    monkeypatch, tmp_path, listed
+):
+    # Review 2026-09-15: a set missing the source clip (a partial first listing frame, say) made every record of the
+    # clip look new, so a job that spent nothing was written `done, spent: 0`; the old clock rule said failed.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-13", workflows_before=listed)
+    _reconcile_world(monkeypatch, [_record("src-13", 100), _record("other", 50)], balance=295)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
     assert [r["verdict"] for r in out] == ["unknown"]
     assert [r["status"] for r in ledger.rows("j")] == ["opening"]
