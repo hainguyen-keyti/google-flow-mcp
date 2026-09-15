@@ -179,6 +179,32 @@ def test_a_page_that_fails_to_close_still_gives_the_profile_back(tmp_path):
     assert log.count("client.exit") == 2
 
 
+class HangingPage(FakePage):
+    async def close(self):
+        self.log.append("page.close")
+        await asyncio.Event().wait()
+
+
+def test_a_page_close_that_never_returns_still_gives_the_profile_and_the_guard_back(tmp_path, monkeypatch):
+    # Review 2026-09-15 risk: teardown awaited page.close() with no bound, so a close that never returned kept gflow's
+    # profile lease and the session guard, and every later browser tool waited forever.
+    # raising=False so the old code fails by hanging, not by lacking the name; a renamed bound still hangs past 5 s.
+    monkeypatch.setattr(session_mod, "PAGE_CLOSE_TIMEOUT_S", 0.2, raising=False)
+    log = []
+    lease = {"held": False}
+
+    async def run():
+        with pytest.raises(TimeoutError):
+            async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, HangingPage)):
+                pass
+        async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, FakePage)):
+            pass
+
+    asyncio.run(asyncio.wait_for(run(), 5))
+    assert log.count("client.exit") == 2
+    assert not session_mod._GUARD.locked()
+
+
 def test_locked_profile_error_propagates_and_guard_is_released(tmp_path):
     log = []
 

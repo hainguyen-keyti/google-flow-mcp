@@ -19,6 +19,7 @@ import video  # noqa: F401
 
 _GUARD = threading.Lock()
 _GUARD_POLL_S = 0.05
+PAGE_CLOSE_TIMEOUT_S = 10.0
 
 MIGRATED_ROOT = "https://flow.google.com/"
 GRID_READY = 'a[href*="/project/"]'
@@ -75,7 +76,8 @@ class FlowSession:
         try:
             try:
                 if self.page is not None:
-                    await self.page.close()
+                    # Bounded: a close that never returns would keep the lease and the guard below forever.
+                    await asyncio.wait_for(self.page.close(), PAGE_CLOSE_TIMEOUT_S)
             finally:
                 # A failed or cancelled close must not skip the client's exit: that exit returns gflow's profile
                 # lease (and survives cancellation itself), without which every later session is locked out.
