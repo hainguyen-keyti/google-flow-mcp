@@ -167,6 +167,17 @@ def test_restore_gives_up_when_the_trash_never_shows_every_trashed_scene(monkeyp
     assert session.page.restored == []
 
 
+def test_restore_refuses_when_the_trash_shows_more_scene_tiles_than_trashed_scenes(monkeypatch):
+    # Re-review 2026-09-15: the wait ended once the tiles reached the trashed count, so with a tile the listing does not
+    # know ("Scene 1 draft") the loop stopped before "Scene 1" rendered and the draft was the only match, and restored.
+    _flow_answers(monkeypatch, _listing(_entry(SCENE, "Scene 1", True)))
+    session = _Session({"Scene 1 draft": 0, "bravo": 0, "Scene 1": 2_000})
+
+    with pytest.raises(LookupError, match="shows 2 scene tiles for 1 trashed scenes"):
+        asyncio.run(scenes.restore(session, PROJECT, SCENE))
+    assert session.page.restored == []
+
+
 def test_restore_counts_a_tile_that_appears_during_the_last_wait(monkeypatch):
     # Scoped re-review 2026-09-15: the loop gave up right after its last wait without looking again.
     _flow_answers(

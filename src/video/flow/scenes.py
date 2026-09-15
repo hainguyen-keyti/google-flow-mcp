@@ -150,6 +150,9 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
             )
         await page.wait_for_timeout(1_000)
         waited_ms += 1_000
+    if shown > trashed:
+        # A tile the listing does not know ends the wait early and can be the only title match before the right one renders.
+        raise LookupError(f"the trash shows {shown} scene tiles for {trashed} trashed scenes; not guessing")
     tiles = scene_tiles.filter(has_text=re.compile(re.escape(title)))
     matching = await tiles.count()
     if matching != 1:
