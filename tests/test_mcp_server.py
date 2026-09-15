@@ -588,6 +588,43 @@ def test_flow_tools_on_an_account_without_projects_says_how_to_get_one(monkeypat
     assert "project_create" in "".join(getattr(c, "text", "") for c in result.content)
 
 
+def test_clip_reconcile_names_the_ledger_it_read_so_an_empty_answer_is_not_ambiguous(monkeypatch, tmp_path):
+    # Measured 2026-09-15: clip_reconcile answered [] both for a clean ledger and for an out_dir holding no ledger
+    # at all (Ledger.rows() is [] for a missing file), so "nothing left open" and "looked in the wrong place"
+    # were the same reply.
+    ledger = gen.Ledger(tmp_path / "kept" / "ledger.jsonl")
+    ledger.append("j", "submitted", kind="t2v")
+    ledger.append("j", "done", spent=10)
+    seen = []
+
+    async def fake_reconcile(session, project_id, *, out_dir):
+        seen.append(out_dir)
+        return []
+
+    _offline_backend(monkeypatch, lambda url: {})
+    monkeypatch.setattr(mcp_server.clips_mod, "reconcile_editor", fake_reconcile)
+
+    async def fn(s):
+        kept = await s.call_tool("clip_reconcile", {"project_id": "P", "out_dir": str(tmp_path / "kept")})
+        typo = await s.call_tool("clip_reconcile", {"project_id": "P", "out_dir": str(tmp_path / "typo")})
+        return _payload(kept), _payload(typo)
+
+    kept, typo = with_client(fn)
+    assert kept == {
+        "ledger": str((tmp_path / "kept" / "ledger.jsonl").resolve()),
+        "ledger_exists": True,
+        "ledger_rows": 2,
+        "jobs": [],
+    }
+    assert typo == {
+        "ledger": str((tmp_path / "typo" / "ledger.jsonl").resolve()),
+        "ledger_exists": False,
+        "ledger_rows": 0,
+        "jobs": [],
+    }
+    assert seen == [tmp_path / "kept", tmp_path / "typo"]
+
+
 def _error_text_of_a_failing_generation(monkeypatch, exc):
     async def fake_run_job(job, out_dir, **kwargs):
         raise exc

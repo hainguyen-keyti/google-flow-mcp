@@ -139,9 +139,14 @@ class Backend:
             )
         )
 
-    async def clip_reconcile(self, project_id: str, out_dir: str | None = None) -> list[dict[str, Any]]:
+    async def clip_reconcile(self, project_id: str, out_dir: str | None = None) -> dict[str, Any]:
         target = Path(out_dir) if out_dir else self.out_dir
-        return await self._with(lambda s: clips_mod.reconcile_editor(s, project_id, out_dir=target))
+        ledger = target / "ledger.jsonl"
+        # jobs [] reads as "clean" only next to the ledger it came from: a missing file also yields [].
+        found = {"ledger": str(ledger.resolve()), "ledger_exists": ledger.exists()}
+        found["ledger_rows"] = len(gen_mod.Ledger(ledger).rows())
+        jobs = await self._with(lambda s: clips_mod.reconcile_editor(s, project_id, out_dir=target))
+        return {**found, "jobs": jobs}
 
     async def uploads(self, project_id: str) -> dict[str, Any]:
         return await self._with(lambda s: uploads_mod.list_uploads(s, project_id))
@@ -454,7 +459,10 @@ async def clip_download(
     description=(
         "Close out editor jobs that spent credits without recording an outcome, by checking the listing "
         "and the balance. It reads Flow and writes the ledger, it never generates. Run this after a "
-        "clip_extend or clip_edit died mid-flight, otherwise the spend has no outcome against it. Free."
+        "clip_extend or clip_edit died mid-flight, otherwise the spend has no outcome against it. Replies with "
+        "the ledger it read (absolute path), ledger_exists, ledger_rows and one verdict per open job in jobs: "
+        "jobs [] means nothing is left open in THAT ledger, so check that it exists; an error means the check "
+        "itself failed. Free."
     ),
 )
 async def clip_reconcile(project_id: str, out_dir: str | None = None) -> str:
