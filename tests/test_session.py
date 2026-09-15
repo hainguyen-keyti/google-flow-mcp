@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 
 import pytest
@@ -130,6 +131,13 @@ class ClosedTargetPage(FakePage):
         raise RuntimeError("Target page, context or browser has been closed")
 
 
+class DriverGonePage(FakePage):
+    async def close(self):
+        self.log.append("page.close")
+        # Playwright raises a bare Exception once its driver connection is gone.
+        raise Exception("Connection closed while reading from the driver")  # noqa: TRY002
+
+
 class LeasedClient(FakeClient):
     """gflow's in-process profile lease: until a client exits, the next one cannot enter."""
 
@@ -162,21 +170,44 @@ def leased(log, lease, page_cls):
     return make
 
 
-def test_a_page_that_fails_to_close_still_gives_the_profile_back(tmp_path):
+def test_a_page_that_fails_to_close_still_gives_the_profile_back_and_raises_nothing(tmp_path, caplog):
     # Review 2026-09-15: a failed or cancelled page.close() skipped client.__aexit__, the step that returns gflow's
-    # profile lease, so every later session failed with ProfileLockedError until the server restarted.
+    # profile lease, so every later session failed with ProfileLockedError until the server restarted. Plan D (DECISIONS
+    # 2026-09-15): the close error is logged, never raised, since the client exit closes the browser anyway.
     log = []
     lease = {"held": False}
 
     async def run():
-        with pytest.raises(RuntimeError, match="Target page"):
-            async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, ClosedTargetPage)):
-                pass
+        async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, ClosedTargetPage)):
+            pass
         async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, FakePage)):
             pass
 
-    asyncio.run(run())
+    with caplog.at_level(logging.WARNING, logger="video.session"):
+        asyncio.run(run())
     assert log.count("client.exit") == 2
+    assert "Target page, context or browser has been closed" in caplog.text
+    assert not session_mod._GUARD.locked()
+
+
+def test_a_call_that_failed_keeps_its_own_error_when_the_page_fails_to_close_too(tmp_path, caplog):
+    # Review of plan B (HANDOFF ngã rẽ 4): a dead driver makes page.close() raise as well, and that error replaced the
+    # call's own one, such as a driver error saying credits were spent.
+    log = []
+    lease = {"held": False}
+
+    async def run():
+        with pytest.raises(ValueError, match="spent 20 credits"):
+            async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, DriverGonePage)):
+                raise ValueError("edit: nothing was generated within 240s, spent 20 credits")
+        async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, FakePage)):
+            pass
+
+    with caplog.at_level(logging.WARNING, logger="video.session"):
+        asyncio.run(run())
+    assert log.count("client.exit") == 2
+    assert "Connection closed while reading from the driver" in caplog.text
+    assert not session_mod._GUARD.locked()
 
 
 class HangingPage(FakePage):

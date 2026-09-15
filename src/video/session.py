@@ -77,14 +77,20 @@ class FlowSession:
         try:
             try:
                 if self.page is not None:
-                    # Bounded: a close that never returns would keep the lease and the guard below forever. Its timeout
-                    # is not raised, since it would replace the call's own result or error; the client exit closes it.
+                    # Bounded, and never raised: a close that never returns would keep the lease and the guard below
+                    # forever, and a close error would replace the call's own result or error; the client exit closes it.
                     try:
                         await asyncio.wait_for(self.page.close(), PAGE_CLOSE_TIMEOUT_S)
                     except TimeoutError:
                         logging.getLogger(__name__).warning(
                             "page.close() did not return within %s s; leaving it to the client exit",
                             PAGE_CLOSE_TIMEOUT_S,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logging.getLogger(__name__).warning(
+                            "page.close() failed (%s: %s); leaving it to the client exit",
+                            type(exc).__name__,
+                            exc,
                         )
             finally:
                 # A failed or cancelled close must not skip the client's exit: that exit returns gflow's profile
