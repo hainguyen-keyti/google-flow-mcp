@@ -310,20 +310,31 @@ def check_reconcile_failed(tmp: Path) -> tuple[str, str]:
 
 
 def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
-    """The balance never moved but the project holds a record the job did not list: a guess would be a lie."""
-    ledger = gen.Ledger(tmp / "ledger.jsonl")
-    _opening(ledger, "u", "src-6")
-    snapshot, credits = _reads(balance=START_BALANCE, records=[_record("src-6", 1), _record("elsewhere", 2)])
-    original = _patch(_snapshot=snapshot)
-    clips.reader.credits = credits
-    try:
-        out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp))
-    finally:
-        _restore(original)
-    rows = gen.Ledger(tmp / "ledger.jsonl").rows("u")
-    ok = [r["verdict"] for r in out] == ["unknown"] and [r["status"] for r in rows] == ["opening"]
-    detail = f"verdicts={[r['verdict'] for r in out]} rows={[r['status'] for r in rows]}"
-    return ("PASS" if ok else "FAIL"), detail
+    """Either sign alone is no proof, so nothing may be written: a record the job did not list while the balance
+    never moved, or a balance that moved while nothing is new (the balance moves with no spend, 195 to 245).
+
+    Each case gets its own ledger, since one reconcile reads one balance for every job.
+    """
+    cases = {
+        "new_record": (START_BALANCE, [_record("src-6", 1), _record("elsewhere", 2)]),
+        "balance_moved": (AFTER_BALANCE, [_record("src-6", 1)]),
+    }
+    seen = {}
+    for name, (balance, records) in cases.items():
+        room = tmp / name
+        room.mkdir(parents=True, exist_ok=True)
+        _opening(gen.Ledger(room / "ledger.jsonl"), "u", "src-6")
+        snapshot, credits = _reads(balance=balance, records=records)
+        original = _patch(_snapshot=snapshot)
+        clips.reader.credits = credits
+        try:
+            out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=room))
+        finally:
+            _restore(original)
+        rows = gen.Ledger(room / "ledger.jsonl").rows("u")
+        seen[name] = ([r["verdict"] for r in out], [r["status"] for r in rows])
+    ok = all(verdicts == ["unknown"] and statuses == ["opening"] for verdicts, statuses in seen.values())
+    return ("PASS" if ok else "FAIL"), str(seen)
 
 
 def check_reconcile_other_project(tmp: Path) -> tuple[str, str]:
