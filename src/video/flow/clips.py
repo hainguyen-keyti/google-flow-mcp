@@ -201,6 +201,9 @@ async def _generate_from_editor(
     job_id: str | None,
     wait: float,
 ) -> dict[str, Any]:
+    # _prompt_ready types with keyboard.type, which presses Enter for a newline before any `submitted` row exists.
+    if "\n" in prompt or "\r" in prompt:
+        raise ValueError(f"{kind}: the prompt must be one line; the editor box takes a newline as Enter")
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
     job_id = job_id or str(uuid.uuid4())
     if ledger.has_submitted(job_id):

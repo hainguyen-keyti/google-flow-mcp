@@ -46,6 +46,15 @@ def _read(profile: str, fn):
     return asyncio.run(run())
 
 
+def _one_line(ctx: click.Context, param: click.Parameter, value: str) -> str:
+    # Flow's editor and agent box take a newline as Enter, typed before the ledger's `submitted` row.
+    if "\n" in value or "\r" in value:
+        raise click.BadParameter(
+            "must be one line: Flow's box takes a newline as Enter, which may submit early"
+        )
+    return value
+
+
 @flow.command()
 @click.option("--profile", default="default", show_default=True)
 @click.option("--json", "as_json", is_flag=True)
@@ -335,7 +344,7 @@ def clip_download(project_id: str, media_id: str, quality: str, out_dir: str, pr
 @clip.command("extend")
 @click.argument("project_id")
 @click.argument("media_id")
-@click.argument("prompt")
+@click.argument("prompt", callback=_one_line)
 @click.option("--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False))
 @click.option("--job", "job_id", default=None)
 @click.option("--wait", default=240.0, show_default=True, type=float)
@@ -360,7 +369,7 @@ def clip_extend(
 @clip.command("edit")
 @click.argument("project_id")
 @click.argument("media_id")
-@click.argument("prompt")
+@click.argument("prompt", callback=_one_line)
 @click.option("--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False))
 @click.option("--job", "job_id", default=None)
 @click.option("--wait", default=240.0, show_default=True, type=float)
@@ -413,7 +422,7 @@ def agent_mode(project_id: str, state: str, profile: str) -> None:
 
 @agent.command("send")
 @click.argument("project_id")
-@click.argument("message")
+@click.argument("message", callback=_one_line)
 @click.option("--wait", default=60.0, show_default=True, type=float)
 @click.option("--profile", default="default", show_default=True)
 def agent_send(project_id: str, message: str, wait: float, profile: str) -> None:

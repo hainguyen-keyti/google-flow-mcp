@@ -74,6 +74,9 @@ async def send(
     out_dir: Path = Path("out"),
     job_id: str | None = None,
 ) -> dict[str, Any]:
+    # The message is typed with keyboard.type, which presses Enter for a newline before the `submitted` row.
+    if "\n" in message or "\r" in message:
+        raise ValueError("agent send: the message must be one line; the agent box takes a newline as Enter")
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
     job_id = job_id or str(uuid.uuid4())
     if ledger.has_submitted(job_id):

@@ -27,6 +27,26 @@ def test_editor_jobs_refuse_a_job_id_that_already_has_a_submitted_row(tmp_path: 
         )
 
 
+@pytest.mark.parametrize("kind", ["extend", "edit"])
+def test_editor_jobs_refuse_a_multiline_prompt_before_the_ledger_or_the_page(tmp_path: Path, kind: str):
+    # Review 2026-09-15: _prompt_ready types with keyboard.type, which presses Enter for a newline, before the
+    # `submitted` row exists; measured offline, 5 Enter presses in 4.5 s for a two-line prompt.
+    with pytest.raises(ValueError, match="one line"):
+        asyncio.run(
+            clips._generate_from_editor(
+                _NoSession(),
+                "p",
+                "m",
+                "red shirt\nstill camera",
+                kind=kind,
+                out_dir=tmp_path,
+                job_id="j",
+                wait=1.0,
+            )
+        )
+    assert not (tmp_path / "ledger.jsonl").exists()
+
+
 def test_new_records_are_the_unseen_workflows_oldest_first():
     rows = [
         {"id": "m", "workflow_id": "old", "created": 1, "status": 3, "url": "https://x/old"},
