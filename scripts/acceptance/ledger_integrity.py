@@ -322,7 +322,7 @@ def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
     cases = {
         "new_record": (START_BALANCE, [_record("src-6", 1), _record("elsewhere", 2)], ["w-1"]),
         "balance_moved": (AFTER_BALANCE, [_record("src-6", 1)], ["w-1"]),
-        "clip_unseen_at_open": (START_BALANCE, [_record("src-6", 1)], []),
+        "clip_unseen_at_open": (START_BALANCE, [_record("src-6", 1), _record("elsewhere", 2)], ["w-2"]),
     }
     seen = {}
     for name, (balance, records, listed) in cases.items():

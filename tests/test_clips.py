@@ -625,7 +625,7 @@ def test_reconcile_never_judges_a_job_whose_clip_is_not_in_the_listing_it_read(m
     assert [r["status"] for r in ledger.rows("j")] == ["opening"]
 
 
-@pytest.mark.parametrize("listed", [[], ["w-other"]])
+@pytest.mark.parametrize("listed", [[], ["w-50"]])
 def test_reconcile_never_calls_a_job_done_when_its_opening_row_never_saw_the_clip(
     monkeypatch, tmp_path, listed
 ):
