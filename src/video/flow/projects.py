@@ -56,7 +56,14 @@ async def rename(session: FlowSession, project_id: str, title: str, *, navigate:
     frames = await capture(session, edit, settle=5.0)
     if "o8DA4" not in frames:
         raise RuntimeError(f"rename did not fire o8DA4; saw {sorted(frames)}")
-    return title
+    # A fired rpc is not a landed rename: confirm on the grid, whose first read already shows it (2026-09-15).
+    grid = await capture(session, lambda: session.goto(MIGRATED_ROOT, ready=GRID_READY), settle=6.0)
+    listed = {p["id"]: p["title"] for p in parsers.projects(one(grid, "UpteDb"))}
+    if project_id not in listed:
+        raise LookupError(f"rename: project {project_id} is not on the grid")
+    if listed[project_id] != title:
+        raise RuntimeError(f"rename fired o8DA4 but the grid lists {listed[project_id]!r}, not {title!r}")
+    return listed[project_id]
 
 
 async def delete(session: FlowSession, project_id: str) -> dict[str, Any]:

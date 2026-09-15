@@ -625,6 +625,19 @@ def test_clip_reconcile_names_the_ledger_it_read_so_an_empty_answer_is_not_ambig
     assert seen == [tmp_path / "kept", tmp_path / "typo"]
 
 
+def test_project_rename_replies_with_the_project_id_and_the_title_the_grid_lists(monkeypatch):
+    # Measured 2026-09-15: the reply was only {title}, the very string the agent had just sent.
+    async def fake_rename(project_id, title):
+        return "as listed"
+
+    monkeypatch.setattr(mcp_server.backend, "project_rename", fake_rename)
+
+    async def fn(s):
+        return _payload(await s.call_tool("project_rename", {"project_id": "P", "title": "new title"}))
+
+    assert with_client(fn) == {"id": "P", "title": "as listed"}
+
+
 def _error_text_of_a_failing_generation(monkeypatch, exc):
     async def fake_run_job(job, out_dir, **kwargs):
         raise exc

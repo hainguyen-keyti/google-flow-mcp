@@ -347,11 +347,17 @@ async def project_create(title: str | None = None) -> str:
     return _json(await backend.project_create(title))
 
 
-@server.tool(name="project_rename", description="Rename a project. Free.")
+@server.tool(
+    name="project_rename",
+    description=(
+        "Rename a project, then confirm the new title on the project grid (the listing flow_projects reads). "
+        "Replies {id, title} with the title as the grid lists it, and fails if the grid shows another. Free."
+    ),
+)
 async def project_rename(project_id: str, title: str) -> str:
     _require(project_id, "project_id")
     _require(title, "title")
-    return _json({"title": await backend.project_rename(project_id, title)})
+    return _json({"id": project_id, "title": await backend.project_rename(project_id, title)})
 
 
 @server.tool(
