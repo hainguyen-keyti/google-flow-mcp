@@ -53,18 +53,36 @@ uv run video flow agent send <project> "<message>"   # agent có thể tự sinh
 Prompt của `clip extend|edit` và message của `agent send` phải một dòng: ô của Flow nhận ký tự xuống dòng như phím
 Enter, và việc gõ diễn ra trước khi sổ ghi `submitted`. Cả CLI (exit 2, chưa mở Chrome) lẫn driver đều từ chối.
 
-`clip reconcile` chỉ chấm job editor của đúng project đang đọc. Dòng `opening` của job ghi `project` và
-`workflows_before` (mọi workflow id listing có ngay trước khi job mở); "record mới" là record có workflow id ngoài tập
-đó, không so giờ, vì đồng hồ của Flow với máy này lệch nhau và `created` của clip đóng dấu lúc submit.
-- `done` khi clip nguồn có version mới. Edit tạo version như vậy, nhưng upscale 1080p (0 credit) cũng tạo, nên xem
-  `spent` và đúng version trước khi coi là output của edit. Extend tạo clip với media id mới, nên extend đã tiêu vẫn
-  ra `unknown`.
-- `failed` khi số dư không đổi VÀ project không có record mới (số dư đã được đo là tự đổi mà không tiêu gì).
-- `unknown` cho mọi ca còn lại, để người quyết; kể cả khi listing không còn record nào của clip nguồn mà job đã thấy,
-  và với dòng `opening` ghi trước khi có `workflows_before`.
+`clip reconcile` chỉ chấm job editor của đúng project đang đọc. Dòng `opening` của job ghi `project`,
+`workflows_before` (mọi workflow id listing có ngay trước khi job mở) và `prompt` đã gõ; "record mới" là record có
+workflow id ngoài tập đó, không so giờ, vì đồng hồ của Flow với máy này lệch nhau và `created` của clip đóng dấu lúc
+submit.
+- `done` chỉ cho job edit, khi đủ cả ba điều:
+  - trên chính clip nguồn có đúng một version mới mang đúng prompt của job (so như driver, sau khi bỏ khoảng trắng hai
+    đầu) mà chưa job nào khác trong CÙNG sổ giữ làm output `generated`; version còn đang sinh cũng được đếm;
+  - version đó đã xong;
+  - trong cùng sổ không còn job đối thủ, tức job khác từng ghi cùng clip cùng prompt mà vẫn còn mở (kể cả khi dòng
+    `pending` của nó đã giữ một version), hoặc đã đóng mà không giữ output `generated` nào trên clip đó. Lý do: driver
+    đóng một lần retry là `failed` khi version của nó hiện ra sau hạn chờ, nên version mới có thể là của lần retry ấy.
+    Ngoại lệ: job có dòng cuối là `failed` do chính `clip_reconcile` ghi (số dư bằng, không record mới) không phải đối
+    thủ, vì verdict đó đã cho thấy nó không làm ra gì.
+
+  Record đó được ghi vào `outputs` của dòng `done`, nên không job nào nhận lại được. Bản upscale 1080p (workflow
+  `..._upsampled`, prompt rỗng, đo 2026-09-15) và bản chép do extend tạo (media id mới) không bao giờ bị nhận.
+- Job extend không bao giờ ra `done`: clip mới nằm trên media id mới, cạnh bản chép của mọi version clip nguồn, không có
+  gì buộc nó vào job. Nó vẫn ra `failed` theo luật dưới đây; các ca còn lại để người đóng sổ.
+- `failed` khi số dư không đổi VÀ project không có record mới nào, kể cả record đã bị job khác nhận (số dư đã được đo là
+  tự đổi mà không tiêu gì).
+- `unknown` cho mọi ca còn lại, để người quyết; kể cả khi version của job còn đang sinh, khi có hai version, khi còn job
+  đối thủ như trên, khi listing không còn record nào của clip nguồn mà job đã thấy, và với dòng `opening` ghi trước khi
+  có `workflows_before` hay `prompt`, hoặc có tập workflow rỗng.
 - `skipped` cho job gen và agent, và cho job editor của project khác (kèm `project`). Hai loại này không bao giờ bị ghi.
 
 Sổ không có job nào chấm được thì lệnh trả lời ngay, không mở Chrome.
+
+`spent` trên dòng do reconcile ghi là độ lệch số dư từ lúc job mở tới lúc reconcile, không phải giá của job: mọi khoản
+chi khác trong khoảng đó, và cả những lần số dư tự đổi mà không tiêu, đều bị tính vào, nên hai job đóng cùng một lượt
+đều ghi trọn độ lệch. Đừng cộng các dòng đó làm tổng chi (DECISIONS 2026-09-16).
 
 Sinh nội dung, tốn credit (video) hoặc quota (ảnh), luôn cần `--project`:
 

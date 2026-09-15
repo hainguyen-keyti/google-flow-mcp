@@ -617,7 +617,8 @@ async def clip_download(
         "written: a gen_* or agent_send job, which names no clip, so check it with flow_media and flow_credits; or "
         "another project's editor job, whose project is given, so run clip_reconcile on that project). It opens "
         "the browser only when the ledger holds a job of this project it can judge, otherwise it answers at once. "
-        "Free."
+        "The spent it writes is the balance change since the job opened, which can include other spends and the "
+        "balance moving on its own, so never add those rows up as a total. Free."
     ),
 )
 async def clip_reconcile(project_id: str, out_dir: str | None = None) -> str:
