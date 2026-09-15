@@ -87,7 +87,8 @@ def test_rename_fails_when_the_grid_still_lists_another_title(monkeypatch):
 def test_rename_fails_when_the_project_is_not_on_the_grid(monkeypatch):
     _flow_answers(monkeypatch, RENAMED, _grid_listing("OTHER", "new title"))
 
-    with pytest.raises(LookupError, match="P"):
+    # Match the message, not the type alone: a KeyError from reading the missing project is a LookupError too.
+    with pytest.raises(LookupError, match="project P is not on the grid"):
         asyncio.run(projects.rename(_Session(), "P", "new title"))
 
 
