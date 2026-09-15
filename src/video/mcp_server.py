@@ -607,7 +607,7 @@ async def clip_download(
         "itself failed. Verdicts: done (clip_edit only: exactly one new version on the source clip carries "
         "the job's own prompt and is held by no other job's generated outputs in that ledger, counting one still "
         "rendering; that version is finished; and no rival is left in that ledger, a job that named that clip and "
-        "prompt and is still open, or is closed holding no version there, unless clip_reconcile closed it failed; "
+        "prompt and is open, or closed holding no version there, unless its last row is clip_reconcile's failed; "
         "it is written into outputs), failed (balance unchanged AND no record in the project that the job had not "
         "already seen when it opened; clip_extend can end here too), unknown (left open for a person: every "
         "clip_extend that is not failed, since nothing ties its new clip to the job; also while the version is "

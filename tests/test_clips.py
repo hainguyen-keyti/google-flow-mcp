@@ -636,6 +636,8 @@ RECONCILED = "checked the listing and the credit balance"
             ("failed", {"source_media_id": "src-40", "outputs": [], "spent": 0, "reconciled": RECONCILED}),
             ("opening", {"kind": "edit", "source_media_id": "src-40", "prompt": JOB_PROMPT}),
         ],
+        # Its driver saw neither a charge nor a version before the deadline, which does not show it made nothing.
+        [("submitted", {}), ("failed", {"outputs": [], "spent": 0})],
     ],
 )
 def test_reconcile_leaves_an_orphan_open_when_a_closed_job_of_its_clip_and_prompt_holds_no_version(
@@ -653,6 +655,54 @@ def test_reconcile_leaves_an_orphan_open_when_a_closed_job_of_its_clip_and_promp
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
     assert out == [{"job_id": "dead", "verdict": "unknown", "credits_now": 275}]
+    assert [r["status"] for r in ledger.rows("dead")] == ["opening"]
+
+
+def test_reconcile_counts_a_job_that_clip_reconcile_closed_as_done_on_another_clip_as_a_rival(
+    monkeypatch, tmp_path
+):
+    # Re-review of plan C (2026-09-16, G2): only a failed verdict shows a job made nothing. Job k was judged done on its
+    # first clip, while its later attempt on this clip with this prompt holds no version here.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "k", "old-clip", workflows_before=["w-99", "w-100"])
+    _opening(ledger, "k", "src-65", workflows_before=["w-99", "w-100"])
+    _opening(ledger, "dead", "src-65", workflows_before=["w-99", "w-100"])
+    elsewhere = [{"media_id": "old-clip", "workflow_id": "w-150", "role": "generated"}]
+    ledger.append("k", "done", source_media_id="old-clip", outputs=elsewhere, spent=20, reconciled=RECONCILED)
+    listing = [
+        _record("old-clip", 99),
+        _record("src-65", 100),
+        _record("old-clip", 150, JOB_PROMPT),
+        _record("src-65", 200, JOB_PROMPT),
+    ]
+    _reconcile_world(monkeypatch, listing, balance=255)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "dead", "verdict": "unknown", "credits_now": 255}]
+    assert [r["status"] for r in ledger.rows("dead")] == ["opening"]
+
+
+def test_reconcile_counts_an_open_job_as_a_rival_through_a_later_attempt_on_this_clip(monkeypatch, tmp_path):
+    # Re-review of plan C (2026-09-16, G2): an open job is a rival whatever it holds (DECISIONS 2026-09-16), and it may
+    # name this clip only in a later attempt under the same job_id.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "k", "old-clip", workflows_before=["w-99", "w-100"])
+    _opening(ledger, "dead", "src-66", workflows_before=["w-99", "w-100"])
+    _opening(ledger, "k", "src-66", workflows_before=["w-99", "w-100", "w-200"])
+    held = [{"media_id": "src-66", "workflow_id": "w-300", "role": "generated"}]
+    ledger.append("k", "pending", outputs=held)
+    listing = [
+        _record("old-clip", 99),
+        _record("src-66", 100),
+        _record("src-66", 200, JOB_PROMPT),
+        _record("src-66", 300, JOB_PROMPT),
+    ]
+    _reconcile_world(monkeypatch, listing, balance=255)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [(r["job_id"], r["verdict"]) for r in out] == [("k", "unknown"), ("dead", "unknown")]
     assert [r["status"] for r in ledger.rows("dead")] == ["opening"]
 
 
