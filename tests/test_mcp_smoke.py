@@ -93,7 +93,8 @@ class _Account:
     async def characters(self, project_id):
         return self.replies["characters"]
 
-    async def tools(self, project_id):
+    async def tools(self, project_id=None):
+        self.replies.setdefault("tools_asked_for", []).append(project_id)
         return self.replies["tools"]
 
     async def uploads(self, project_id):
@@ -119,6 +120,16 @@ def test_a_healthy_account_passes_every_row(monkeypatch):
 
     assert len(rows) == 12
     assert _failing(rows) == {}
+
+
+def test_the_smoke_asks_for_the_tools_gallery_without_a_project(monkeypatch):
+    # Since 2026-09-15 flow_tools opens the first project itself when given none; the live gate has to walk
+    # that path, or it keeps proving only the branch that already worked.
+    replies = _replies()
+
+    _rows(monkeypatch, replies)
+
+    assert replies["tools_asked_for"] == [None]
 
 
 def test_an_empty_project_passes_every_row(monkeypatch):

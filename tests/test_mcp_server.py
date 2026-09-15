@@ -6,9 +6,9 @@ from pathlib import Path
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 
-from video import cli, mcp_server
+from video import cli, gen, mcp_server
 from video.flow import parsers, reader
-from video.session import FlowSession
+from video.session import MIGRATED_ROOT, FlowSession
 
 FIXTURES = Path(__file__).parent / "fixtures" / "rpc"
 
@@ -73,7 +73,7 @@ TOOL_CALLS: dict[str, dict] = {
     "flow_credits": {},
     "flow_media": {"project_id": "P"},
     "flow_characters": {"project_id": "P"},
-    "flow_tools": {"project_id": "P"},
+    "flow_tools": {},
     "flow_download": {"project_id": "P", "media_id": "M"},
     "flow_upload": {"project_id": "P", "path": "/tmp/a.png"},
     "flow_uploads": {"project_id": "P"},
@@ -542,6 +542,92 @@ def test_flow_media_answers_one_object_whether_or_not_all_versions_is_set(monkey
     assert every["media"] == plain["media"]
     assert every["versions"] == json.loads(json.dumps(parsers.records(listing), default=str))
     assert session.urls == [FlowSession.project_url("P")] * 2
+
+
+def _gallery_account(grid_payload):
+    def frames_for(url):
+        if url == MIGRATED_ROOT:
+            return {"UpteDb": [grid_payload]}
+        return {"tRARke": [_fixture("tRARke")]}
+
+    return frames_for
+
+
+def test_flow_tools_needs_no_project_and_opens_the_first_project_on_the_grid(monkeypatch):
+    # Measured 2026-09-15: the grid never fires tRARke and /tools, /applets are 404s; only an open project loads
+    # the gallery, and it is the same gallery in every project. An agent should not need an id just for that.
+    grid = _fixture("UpteDb")
+    session = _offline_backend(monkeypatch, _gallery_account(grid))
+
+    async def fn(s):
+        return _payload(await s.call_tool("flow_tools", {}))
+
+    tools = with_client(fn)
+    assert [t["id"] for t in tools] == [t["id"] for t in parsers.tools(_fixture("tRARke"))]
+    assert session.urls == [MIGRATED_ROOT, FlowSession.project_url(parsers.projects(grid)[0]["id"])]
+
+
+def test_flow_tools_with_a_project_goes_straight_to_it(monkeypatch):
+    session = _offline_backend(monkeypatch, _gallery_account(_fixture("UpteDb")))
+
+    async def fn(s):
+        return _payload(await s.call_tool("flow_tools", {"project_id": "P"}))
+
+    assert len(with_client(fn)) == len(parsers.tools(_fixture("tRARke")))
+    assert session.urls == [FlowSession.project_url("P")]
+
+
+def test_flow_tools_on_an_account_without_projects_says_how_to_get_one(monkeypatch):
+    _offline_backend(monkeypatch, _gallery_account([[]]))
+
+    async def fn(s):
+        return await s.call_tool("flow_tools", {})
+
+    result = with_client(fn)
+    assert result.is_error
+    assert "project_create" in "".join(getattr(c, "text", "") for c in result.content)
+
+
+def _error_text_of_a_failing_generation(monkeypatch, exc):
+    async def fake_run_job(job, out_dir, **kwargs):
+        raise exc
+
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+
+    async def fn(session):
+        return await session.call_tool("gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "job-1"})
+
+    result = with_client(fn)
+    assert result.is_error
+    return "".join(getattr(c, "text", "") for c in result.content)
+
+
+def test_an_agent_reads_why_a_tool_failed(monkeypatch):
+    # Measured 2026-09-15: mcp 2.2.0 shows only "Error executing tool <name>" for any exception that is not a
+    # ToolError, so a WAF stop and a refused job_id reached the agent as the very same bare line.
+    refused = gen.AlreadySubmitted("job job-1 already has a submitted row; use a new job id")
+    assert "already has a submitted row" in _error_text_of_a_failing_generation(monkeypatch, refused)
+    waf = RuntimeError("Google Flow flagged this request as unusual activity. Stop: do not retry")
+    assert "Stop: do not retry" in _error_text_of_a_failing_generation(monkeypatch, waf)
+
+
+def test_a_missing_argument_is_named_to_the_agent(monkeypatch):
+    monkeypatch.setattr(mcp_server, "backend", _Recorder())
+
+    async def fn(session):
+        return await session.call_tool("gen_t2v", {"prompt": "a boat", "project": "", "job_id": "job-1"})
+
+    result = with_client(fn)
+    assert result.is_error
+    assert "project is required" in "".join(getattr(c, "text", "") for c in result.content)
+
+
+def test_an_error_shown_to_the_agent_never_carries_a_cookie(monkeypatch):
+    leaked = RuntimeError("request failed with SAPISID=abc123secret in the header")
+    text = _error_text_of_a_failing_generation(monkeypatch, leaked)
+    assert "abc123secret" not in text
+    assert "[redacted]" in text
 
 
 def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():

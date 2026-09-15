@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any
 
 from gflow_cli.api.video import VideoModel
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 
 from video import gen as gen_mod
 from video.flow import agent as agent_mod
@@ -63,7 +65,7 @@ class Backend:
     async def characters(self, project_id: str) -> list[dict[str, Any]]:
         return await self._with(lambda s: characters_mod.list_characters(s, project_id))
 
-    async def tools(self, project_id: str) -> list[dict[str, Any]]:
+    async def tools(self, project_id: str | None = None) -> list[dict[str, Any]]:
         return await self._with(lambda s: reader.tools(s, project_id))
 
     async def download(self, project_id: str, media_id: str, out_dir: str | None = None) -> str:
@@ -215,8 +217,23 @@ class Backend:
         )
 
 
+class TellingServer(MCPServer):
+    """mcp shows the agent only "Error executing tool <name>" for any exception that is not a ToolError
+    (mcp/server/mcpserver/exceptions.py:61-73). Measured 2026-09-15: a WAF stop, a refused job_id and a missing
+    project all reached the agent as that same bare line, so the reason is passed on here, scrubbed of secrets."""
+
+    async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        try:
+            return await super().call_tool(name, arguments, context)
+        except UnexpectedToolError as exc:
+            cause = exc.__cause__ or exc
+            logging.getLogger(__name__).exception("tool %s failed", name)
+            detail = gen_mod._scrub(f"{type(cause).__name__}: {cause}")
+            raise ToolError(f"Error executing tool {name}: {detail}") from cause
+
+
 backend = Backend()
-server = MCPServer(
+server = TellingServer(
     "video",
     instructions=(
         "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
@@ -292,10 +309,16 @@ async def flow_characters(project_id: str) -> str:
     return _json(await backend.characters(project_id))
 
 
-@server.tool(name="flow_tools", description="The community Tools gallery (id, name, author, tags). Free.")
-async def flow_tools(project_id: str) -> str:
-    _require(project_id, "project_id")
-    return _json(await backend.tools(project_id))
+@server.tool(
+    name="flow_tools",
+    description=(
+        "The community Tools gallery (id, name, author, tags), the same in every project. project_id is "
+        "optional: Flow only loads the gallery inside a project, so without one the first project on the grid "
+        "is opened, which costs one extra page load. Free."
+    ),
+)
+async def flow_tools(project_id: str | None = None) -> str:
+    return _json(await backend.tools(project_id or None))
 
 
 @server.tool(

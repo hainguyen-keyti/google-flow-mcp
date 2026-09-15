@@ -38,8 +38,8 @@ SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 EXPECTED_TOOL_COUNT = 28
 
 # Free AND side-effect free: safe to call on the owner's live account on every run.
-READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits")
-READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_tools", "flow_uploads", "scene_list")
+READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits", "flow_tools")
+READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_uploads", "scene_list")
 
 # Free but they CHANGE things. Never called here; see I4 in the plan.
 MUTATING = ("agent_mode", "scene_create", "scene_delete", "project_create", "project_delete", "flow_upload")
@@ -219,6 +219,8 @@ async def run(findings):
                     "flow_lane": a_lane,
                     "flow_projects": a_project_list,
                     "flow_credits": a_balance,
+                    # Called with no project on purpose: that is the path that opens the first project itself.
+                    "flow_tools": a_tool_list,
                 }
                 projects = None
                 for name in READ_ONLY_NO_ARGS:
@@ -246,7 +248,6 @@ async def run(findings):
                 per_project = {
                     "flow_media": media_of(project_id),
                     "flow_characters": a_character_list,
-                    "flow_tools": a_tool_list,
                     "flow_uploads": an_upload_count,
                     "scene_list": a_scene_list,
                 }

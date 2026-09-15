@@ -99,7 +99,13 @@ async def characters(session: FlowSession, project_id: str) -> list[dict[str, An
     return parsers.characters_from_listing(one(frames, "Zzl0ze"))
 
 
-async def tools(session: FlowSession, project_id: str) -> list[dict[str, Any]]:
+async def tools(session: FlowSession, project_id: str | None = None) -> list[dict[str, Any]]:
+    # Only an open project loads the gallery, the same one everywhere (2026-09-15: not the grid, /tools is a 404).
+    if project_id is None:
+        listed = await projects(session)
+        if not listed:
+            raise LookupError("no project to load the Tools gallery from; create one with project_create")
+        project_id = listed[0]["id"]
     frames = await capture(
         session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=8.0
     )
