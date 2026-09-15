@@ -282,11 +282,11 @@ def test_download_rendition_refuses_rather_than_fetching_whatever_is_on_screen(m
         asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path, workflow_id="nope"))
 
 
-def _editor_reads(monkeypatch, balance: int = 295):
+def _editor_reads(monkeypatch, balance: int = 295, records: list | None = None):
     """The two reads that run before anything can spend: the listing and the balance."""
 
     async def fake_snapshot(session, project_id):
-        return ([], set())
+        return (list(records or []), set())
 
     async def fake_credits(session):
         return {"balance": balance}
@@ -346,6 +346,30 @@ def test_an_edit_that_dies_opening_the_editor_still_leaves_the_spend_written_dow
     assert rows[0]["kind"] == "edit"
     assert rows[0]["source_media_id"] == "src-2"
     assert rows[0]["credits_before"] == 295
+
+
+@pytest.mark.parametrize("kind", ["extend", "edit"])
+def test_the_opening_row_names_the_project_and_every_workflow_the_listing_held(monkeypatch, tmp_path, kind):
+    # Re-review 2026-09-15 (finding 3): reconcile guessed "new since the job opened" from two clocks, so a job opened
+    # right after its clip was made stayed unknown forever. The row now carries what the driver itself read.
+    _editor_reads(monkeypatch, records=[_record("src-1", 100), _record("other", 200)])
+
+    async def dying_open(session, project_id, media_id):
+        raise RuntimeError("editor never rendered")
+
+    monkeypatch.setattr(clips, "_open", dying_open)
+
+    with pytest.raises(RuntimeError, match="editor never rendered"):
+        asyncio.run(
+            clips._generate_from_editor(
+                _Session(), "p", "src-1", "keep going", kind=kind, out_dir=tmp_path, job_id="j", wait=1.0
+            )
+        )
+
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")
+    assert [r["status"] for r in rows] == ["opening"], rows
+    assert rows[0]["project"] == "p"
+    assert rows[0]["workflows_before"] == ["w-100", "w-200"]
 
 
 def test_an_orphaned_opening_row_does_not_block_the_same_job_from_running_again(monkeypatch, tmp_path):

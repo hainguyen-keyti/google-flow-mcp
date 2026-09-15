@@ -215,8 +215,17 @@ async def _generate_from_editor(
     # their own to create a paid job (measured 2026-09-13: 20 credits left the account while the driver
     # died before its `submitted` row, so nothing in the ledger pointed at them). The two calls above are
     # reads that cannot spend, and this row needs their numbers. The status stays outside the set
-    # `has_submitted` blocks on, so an orphaned row never stops a legitimate retry.
-    ledger.append(job_id, "opening", kind=kind, source_media_id=media_id, credits_before=credits_before)
+    # `has_submitted` blocks on, so an orphaned row never stops a legitimate retry. The project and the
+    # workflows already listed let reconcile tell what this job added without comparing two clocks.
+    ledger.append(
+        job_id,
+        "opening",
+        kind=kind,
+        source_media_id=media_id,
+        credits_before=credits_before,
+        project=project_id,
+        workflows_before=sorted(before),
+    )
     await _open(session, project_id, media_id)
     page = session.page
     if kind == "extend":

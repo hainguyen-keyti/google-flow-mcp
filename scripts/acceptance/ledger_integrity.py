@@ -135,8 +135,11 @@ def _record(media_id: str, created: float) -> dict:
 
 
 def check_intent_extend(tmp: Path) -> tuple[str, str]:
-    """Extend dies choosing the menu item, which is itself enough to create a paid job."""
-    snapshot, credits = _reads()
+    """Extend dies choosing the menu item, which is itself enough to create a paid job.
+
+    The row must also name the project and every workflow the listing held, or reconcile can never judge the job.
+    """
+    snapshot, credits = _reads(records=[_record("src-1", 1), _record("other", 2)])
 
     async def dying_menu_item(session, button, item):
         raise LookupError("menu gone")
@@ -162,13 +165,15 @@ def check_intent_extend(tmp: Path) -> tuple[str, str]:
         [r["status"] for r in rows] == ["opening"]
         and rows[0].get("source_media_id") == "src-1"
         and rows[0].get("credits_before") == START_BALANCE
+        and rows[0].get("project") == "p"
+        and rows[0].get("workflows_before") == ["w-1", "w-2"]
     )
     return ("PASS" if ok else "FAIL"), f"rows={[r['status'] for r in rows]} first={rows[0] if rows else None}"
 
 
 def check_intent_edit(tmp: Path) -> tuple[str, str]:
     """The edit path has the same stretch between opening the editor and the submit row."""
-    snapshot, credits = _reads()
+    snapshot, credits = _reads(records=[_record("src-2", 1)])
 
     async def dying_open(session, project_id, media_id):
         raise RuntimeError("editor never rendered")
@@ -187,8 +192,13 @@ def check_intent_edit(tmp: Path) -> tuple[str, str]:
     finally:
         _restore(original)
     rows = gen.Ledger(tmp / "ledger.jsonl").rows("b")
-    ok = [r["status"] for r in rows] == ["opening"] and rows[0].get("source_media_id") == "src-2"
-    return ("PASS" if ok else "FAIL"), f"rows={[r['status'] for r in rows]}"
+    ok = (
+        [r["status"] for r in rows] == ["opening"]
+        and rows[0].get("source_media_id") == "src-2"
+        and rows[0].get("project") == "p"
+        and rows[0].get("workflows_before") == ["w-1"]
+    )
+    return ("PASS" if ok else "FAIL"), f"rows={[r['status'] for r in rows]} first={rows[0] if rows else None}"
 
 
 def check_retry_not_blocked(tmp: Path) -> tuple[str, str]:
