@@ -308,8 +308,6 @@ async def _generate_from_editor(
 
 
 STUCK_STATUSES = ("opening", "submitted")
-# Flow stamps records in whole seconds on its own clock; this Mac's clock can be ahead of it.
-CLOCK_MARGIN_S = 300
 
 
 def _stuck_editor_jobs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -333,20 +331,29 @@ def _editor_verdict(row: dict[str, Any], records: list[dict[str, Any]], credits_
 
     Stricter than `story.pipeline.reconcile_decision` on `failed` (DECISIONS 2026-09-15): the balance has been
     measured moving with no spend (195 to 245 overnight), so an equal one proves nothing alone, while a job that
-    spent has always left a record in the listing. `failed` needs an equal balance and a project that gained no
-    record since the job opened, counting a record with no time or inside CLOCK_MARGIN_S as gained. Editor rows
-    name no project, so a listing without the job's own clip may belong to another project: that is `unknown`.
+    spent has always left a record in the listing. A record is new when its workflow is missing from the
+    `workflows_before` the job wrote as it opened, whatever its time: Flow's clock and this Mac's disagree, and a
+    clip's `created` is stamped at submit. `failed` needs an equal balance and no new record at all. A listing
+    without the job's own clip holds no evidence about the job: that is `unknown`.
     """
     media_id = row.get("source_media_id")
-    stamp = row.get("ts") or 0
     if not any(r.get("id") == media_id for r in records):
         return "unknown"
-    if any(r.get("id") == media_id and (r.get("created") or 0) >= stamp for r in records):
+    fresh = new_records(set(row["workflows_before"]), records)
+    if any(r.get("id") == media_id for r in fresh):
         return "done"
-    project_changed = any(r.get("created") is None or r["created"] >= stamp - CLOCK_MARGIN_S for r in records)
-    if credits_now == row.get("credits_before") and not project_changed:
+    if credits_now == row.get("credits_before") and not fresh:
         return "failed"
     return "unknown"
+
+
+def _judgeable(row: dict[str, Any], project_id: str) -> bool:
+    """An editor job of this project whose opening row lists the workflows it saw: the only kind reconcile judges."""
+    return (
+        bool(row.get("source_media_id"))
+        and row.get("project") == project_id
+        and row.get("workflows_before") is not None
+    )
 
 
 async def reconcile_editor(session: FlowSession, project_id: str, *, out_dir: Path) -> list[dict[str, Any]]:
@@ -361,7 +368,7 @@ async def reconcile_editor(session: FlowSession, project_id: str, *, out_dir: Pa
         return []
     records: list[dict[str, Any]] = []
     credits_now = None
-    if any(row.get("source_media_id") for row in stuck):
+    if any(_judgeable(row, project_id) for row in stuck):
         records, _ = await _snapshot(session, project_id)
         credits_now = (await reader.credits(session))["balance"]
     out: list[dict[str, Any]] = []
@@ -369,6 +376,21 @@ async def reconcile_editor(session: FlowSession, project_id: str, *, out_dir: Pa
         if not row.get("source_media_id"):
             # A gen or agent job names no clip, so nothing here can judge it: report it, never write it.
             out.append({"job_id": row["job_id"], "kind": row.get("kind"), "verdict": "skipped"})
+            continue
+        if row.get("project") not in (None, project_id):
+            # Its clip and workflows live in that project's listing: say where to reconcile it, never judge it here.
+            out.append(
+                {
+                    "job_id": row["job_id"],
+                    "kind": row.get("kind"),
+                    "verdict": "skipped",
+                    "project": row["project"],
+                }
+            )
+            continue
+        if not _judgeable(row, project_id):
+            # Written before opening rows listed their workflows (DECISIONS 2026-09-15): left for a person.
+            out.append({"job_id": row["job_id"], "verdict": "unknown", "credits_now": credits_now})
             continue
         verdict = _editor_verdict(row, records, credits_now)
         before = row.get("credits_before")

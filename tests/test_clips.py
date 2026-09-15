@@ -462,13 +462,19 @@ def _record(media_id: str, created: float) -> dict:
     }
 
 
+def _opening(ledger: gen.Ledger, job_id: str, media_id: str, **fields) -> float:
+    """An editor job's opening row as the driver writes it (project "p", one workflow listed); returns its time."""
+    row = {"kind": "edit", "credits_before": 295, "project": "p", "workflows_before": ["w-100"], **fields}
+    ledger.append(job_id, "opening", source_media_id=media_id, **row)
+    return ledger.rows(job_id)[0]["ts"]
+
+
 def test_reconcile_closes_an_orphan_as_done_when_the_media_gained_a_record(monkeypatch, tmp_path):
     # This is the case that cost 20 credits: the editor spent, the driver died before its submitted row,
     # and only Flow's listing knew the job existed.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append("j", "opening", kind="extend", source_media_id="src-1", credits_before=295)
-    stamp = ledger.rows("j")[0]["ts"]
-    _reconcile_world(monkeypatch, [_record("src-1", stamp + 10)], balance=275)
+    _opening(ledger, "j", "src-1", kind="extend")
+    _reconcile_world(monkeypatch, [_record("src-1", 100), _record("src-1", 200)], balance=275)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
@@ -481,9 +487,25 @@ def test_reconcile_closes_an_orphan_as_done_when_the_media_gained_a_record(monke
 
 def test_reconcile_closes_an_orphan_as_failed_when_the_balance_never_moved(monkeypatch, tmp_path):
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append("j", "opening", kind="edit", source_media_id="src-2", credits_before=295)
-    stamp = ledger.rows("j")[0]["ts"]
-    _reconcile_world(monkeypatch, [_record("src-2", stamp - 500)], balance=295)
+    _opening(ledger, "j", "src-2")
+    _reconcile_world(monkeypatch, [_record("src-2", 100)], balance=295)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["failed"]
+    rows = ledger.rows("j")
+    assert [r["status"] for r in rows] == ["opening", "failed"]
+    assert rows[-1]["spent"] == 0
+
+
+def test_reconcile_fails_a_job_opened_right_after_its_clip_was_made_when_nothing_new_appeared(
+    monkeypatch, tmp_path
+):
+    # Re-review 2026-09-15 (finding 3): a clip's `created` is stamped at submit, so an edit opened right after the clip
+    # finished fell inside the old 300 s clock margin, and a job that died before submitting stayed unknown forever.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    stamp = _opening(ledger, "j", "src-10", workflows_before=["w-src"])
+    _reconcile_world(monkeypatch, [{**_record("src-10", stamp - 30), "workflow_id": "w-src"}], balance=295)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
@@ -497,9 +519,8 @@ def test_reconcile_leaves_a_job_alone_when_the_evidence_does_not_agree(monkeypat
     # Money moved but nothing new is on that media: guessing either way would put a lie in the ledger.
     # The listing must hold the clip's older record, or the verdict stops at "clip not listed" before the balance.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append("j", "opening", kind="edit", source_media_id="src-3", credits_before=295)
-    stamp = ledger.rows("j")[0]["ts"]
-    _reconcile_world(monkeypatch, [_record("src-3", stamp - 3_600)], balance=275)
+    _opening(ledger, "j", "src-3")
+    _reconcile_world(monkeypatch, [_record("src-3", 100)], balance=275)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
@@ -545,10 +566,9 @@ def test_reconcile_reports_gen_and_agent_jobs_as_skipped_and_never_writes_them(m
 
 def test_reconcile_judges_editor_rows_and_skips_the_rest_in_one_pass(monkeypatch, tmp_path):
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append("e", "opening", kind="extend", source_media_id="src-6", credits_before=295)
+    _opening(ledger, "e", "src-6", kind="extend")
     ledger.append("g", "submitted", kind="r2v", argv=["video", "r2v"], credits_before=295)
-    stamp = ledger.rows("e")[0]["ts"]
-    _reconcile_world(monkeypatch, [_record("src-6", stamp + 10)], balance=285)
+    _reconcile_world(monkeypatch, [_record("src-6", 100), _record("src-6", 200)], balance=285)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
@@ -561,11 +581,10 @@ def test_reconcile_leaves_an_editor_job_open_when_the_balance_matches_but_the_pr
     monkeypatch, tmp_path
 ):
     # An equal balance is not proof on its own that nothing was bought: failed also needs a project with no record
-    # made since the job opened (DECISIONS 2026-09-15).
+    # the job's opening row did not already list (DECISIONS 2026-09-15).
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append("j", "opening", kind="edit", source_media_id="src-7", credits_before=295)
-    stamp = ledger.rows("j")[0]["ts"]
-    records = [_record("src-7", stamp - 3_600), _record("another-media", stamp + 10)]
+    _opening(ledger, "j", "src-7")
+    records = [_record("src-7", 100), _record("another-media", 200)]
     _reconcile_world(monkeypatch, records, balance=295)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
@@ -575,33 +594,56 @@ def test_reconcile_leaves_an_editor_job_open_when_the_balance_matches_but_the_pr
 
 
 def test_reconcile_never_judges_a_job_whose_clip_is_not_in_the_listing_it_read(monkeypatch, tmp_path):
-    # Review 2026-09-15: editor rows name no project, so reconciling project A judged project B's job against A's
-    # listing, found nothing new there and wrote `failed, spent: 0`, which the story pipeline reads as retryable.
+    # Review 2026-09-15: a listing without the job's own clip (deleted, or never this project's) holds no evidence
+    # about the job, yet nothing new there and an unchanged balance once wrote `failed, spent: 0`, which story reads
+    # as retryable.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append("b-job", "opening", kind="edit", source_media_id="clip-in-project-b", credits_before=295)
-    stamp = ledger.rows("b-job")[0]["ts"]
-    _reconcile_world(monkeypatch, [_record("clip-in-project-a", stamp - 3_600)], balance=295)
+    _opening(ledger, "j", "gone-clip", project="a")
+    _reconcile_world(monkeypatch, [_record("still-listed", 100)], balance=295)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "a", out_dir=tmp_path))
 
     assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
+def test_reconcile_skips_another_projects_job_and_names_that_project(monkeypatch, tmp_path):
+    # Review 2026-09-15: reconciling project A judged project B's job against A's listing and wrote `failed, spent:
+    # 0`, which story reads as retryable. The row names its project now: reported, never judged or written here.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "b-job", "clip-b", project="b")
+    _no_flow_reads(monkeypatch)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "a", out_dir=tmp_path))
+
+    assert out == [{"job_id": "b-job", "kind": "edit", "verdict": "skipped", "project": "b"}]
     assert [r["status"] for r in ledger.rows("b-job")] == ["opening"]
 
 
-@pytest.mark.parametrize("created_offset", [None, -60])
-def test_a_record_with_no_time_or_inside_the_clock_margin_counts_as_a_change(
-    monkeypatch, tmp_path, created_offset
-):
-    # Review 2026-09-15: Flow's clock (whole seconds) and this Mac's can disagree, and a record whose time did not
-    # parse counted as old, so the job's own record could be missed and an equal balance written as `failed`.
+@pytest.mark.parametrize("named", [{}, {"project": "p"}])
+def test_reconcile_never_judges_an_opening_row_that_lists_no_workflows(monkeypatch, tmp_path, named):
+    # Rows written before opening rows listed their workflows cannot tell a new record from an old one (DECISIONS
+    # 2026-09-15): they stay unknown for a person, and Flow is not even read for them.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append("j", "opening", kind="extend", source_media_id="src-9", credits_before=295)
-    stamp = ledger.rows("j")[0]["ts"]
-    recent = {
-        **_record("fresh", stamp),
-        "created": None if created_offset is None else stamp + created_offset,
-    }
-    _reconcile_world(monkeypatch, [_record("src-9", stamp - 3_600), recent], balance=295)
+    ledger.append("old", "opening", kind="extend", source_media_id="src-11", credits_before=295, **named)
+    _no_flow_reads(monkeypatch)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "old", "verdict": "unknown", "credits_now": None}]
+    assert [r["status"] for r in ledger.rows("old")] == ["opening"]
+
+
+@pytest.mark.parametrize("created", [None, 1])
+def test_a_record_the_opening_row_did_not_list_counts_as_new_whatever_its_time(
+    monkeypatch, tmp_path, created
+):
+    # Flow's clock and this Mac's can disagree and a time may not parse (review 2026-09-15), so "new since the job
+    # opened" is decided by the workflows the row listed, never by comparing times.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-9", kind="extend")
+    unlisted = {**_record("fresh", 200), "created": created}
+    _reconcile_world(monkeypatch, [_record("src-9", 100), unlisted], balance=295)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 

@@ -6,9 +6,10 @@ Exit code is 1 when any row is FAIL. Runs entirely offline: no browser, no Flow,
 is driven against stubs that fail exactly where the real one failed on 2026-09-13, when 20 credits were
 spent and the ledger held nothing, so the job had to be found by hand in Flow's listing.
 
-Every check is a callable so a mutation can be pointed at it. The three mutations this gate must catch:
-drop the `opening` row, teach `has_submitted` to block on `opening`, or let reconcile call a job done
-while the balance never moved.
+Every check is a callable so a mutation can be pointed at it. The mutations this gate must catch: drop the
+`opening` row or the project and workflows it lists, teach `has_submitted` to block on `opening`, let reconcile
+call a job done while the balance never moved, write a guess while the project holds a record the job did not
+list, or judge another project's job against this listing.
 """
 
 from __future__ import annotations
@@ -132,6 +133,12 @@ def _record(media_id: str, created: float) -> dict:
         "url": "https://example/n",
         "prompt": PROMPT,
     }
+
+
+def _opening(ledger: gen.Ledger, job_id: str, media_id: str, **fields) -> None:
+    """An editor job's opening row as the driver writes it: project "p", the one workflow `_record(_, 1)` makes."""
+    row = {"kind": "edit", "credits_before": START_BALANCE, "project": "p", "workflows_before": ["w-1"]}
+    ledger.append(job_id, "opening", source_media_id=media_id, **{**row, **fields})
 
 
 def check_intent_extend(tmp: Path) -> tuple[str, str]:
@@ -259,11 +266,10 @@ def check_retry_not_blocked(tmp: Path) -> tuple[str, str]:
 
 
 def check_reconcile_done(tmp: Path) -> tuple[str, str]:
-    """A record newer than the row plus a balance that fell means the job really ran."""
+    """A record on the clip that the opening row did not list, plus a balance that fell, means the job really ran."""
     ledger = gen.Ledger(tmp / "ledger.jsonl")
-    ledger.append("d", "opening", kind="extend", source_media_id="src-4", credits_before=START_BALANCE)
-    stamp = ledger.rows("d")[0]["ts"]
-    snapshot, credits = _reads(balance=AFTER_BALANCE, records=[_record("src-4", stamp + 10)])
+    _opening(ledger, "d", "src-4", kind="extend")
+    snapshot, credits = _reads(balance=AFTER_BALANCE, records=[_record("src-4", 1), _record("src-4", 2)])
     original = _patch(_snapshot=snapshot)
     clips.reader.credits = credits
     try:
@@ -280,15 +286,14 @@ def check_reconcile_done(tmp: Path) -> tuple[str, str]:
 
 
 def check_reconcile_failed(tmp: Path) -> tuple[str, str]:
-    """The job's clip is in this project, nothing is new there, and the balance never moved: nothing was bought.
+    """The job's clip is listed, every record was already in its opening row, and the balance never moved.
 
-    The clip's own older record has to be in the listing (DECISIONS 2026-09-15): editor rows name no project, so a
-    listing without it may be another project's, and reconcile answers `unknown` there.
+    That is the only case where nothing was bought (DECISIONS 2026-09-15): a listing without the clip holds no
+    evidence about the job, and a record the row did not list may be what the job bought.
     """
     ledger = gen.Ledger(tmp / "ledger.jsonl")
-    ledger.append("e", "opening", kind="edit", source_media_id="src-5", credits_before=START_BALANCE)
-    stamp = ledger.rows("e")[0]["ts"]
-    snapshot, credits = _reads(balance=START_BALANCE, records=[_record("src-5", stamp - 3_600)])
+    _opening(ledger, "e", "src-5")
+    snapshot, credits = _reads(balance=START_BALANCE, records=[_record("src-5", 1)])
     original = _patch(_snapshot=snapshot)
     clips.reader.credits = credits
     try:
@@ -304,6 +309,53 @@ def check_reconcile_failed(tmp: Path) -> tuple[str, str]:
     return ("PASS" if ok else "FAIL"), f"verdicts={[r['verdict'] for r in out]} spent={rows[-1].get('spent')}"
 
 
+def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
+    """The balance never moved but the project holds a record the job did not list: a guess would be a lie."""
+    ledger = gen.Ledger(tmp / "ledger.jsonl")
+    _opening(ledger, "u", "src-6")
+    snapshot, credits = _reads(balance=START_BALANCE, records=[_record("src-6", 1), _record("elsewhere", 2)])
+    original = _patch(_snapshot=snapshot)
+    clips.reader.credits = credits
+    try:
+        out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp))
+    finally:
+        _restore(original)
+    rows = gen.Ledger(tmp / "ledger.jsonl").rows("u")
+    ok = [r["verdict"] for r in out] == ["unknown"] and [r["status"] for r in rows] == ["opening"]
+    detail = f"verdicts={[r['verdict'] for r in out]} rows={[r['status'] for r in rows]}"
+    return ("PASS" if ok else "FAIL"), detail
+
+
+def check_reconcile_other_project(tmp: Path) -> tuple[str, str]:
+    """Another project's job is reported, never judged against this listing and never written.
+
+    Review 2026-09-15: judging it here wrote `failed, spent: 0`, which story reads as free to run again.
+    """
+    ledger = gen.Ledger(tmp / "ledger.jsonl")
+    _opening(ledger, "o", "src-7", project="q")
+    reads = []
+    snapshot, credits = _reads(balance=START_BALANCE, records=[_record("src-7", 1)])
+
+    async def counted_snapshot(session, project_id):
+        reads.append(project_id)
+        return await snapshot(session, project_id)
+
+    original = _patch(_snapshot=counted_snapshot)
+    clips.reader.credits = credits
+    try:
+        out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp))
+    finally:
+        _restore(original)
+    rows = gen.Ledger(tmp / "ledger.jsonl").rows("o")
+    ok = (
+        [(r["verdict"], r.get("project")) for r in out] == [("skipped", "q")]
+        and [r["status"] for r in rows] == ["opening"]
+        and reads == []
+    )
+    detail = f"jobs={out} rows={[r['status'] for r in rows]} listing_reads={len(reads)}"
+    return ("PASS" if ok else "FAIL"), detail
+
+
 def check_no_leak(tmp: Path) -> tuple[str, str]:
     """Nothing this run wrote may carry session material."""
     leaked = [p.name for p in tmp.rglob("*") if p.is_file() and SECRET.search(p.read_text(errors="ignore"))]
@@ -316,6 +368,8 @@ CHECKS = (
     ("retry", check_retry_not_blocked),
     ("reconcile done", check_reconcile_done),
     ("reconcile failed", check_reconcile_failed),
+    ("reconcile unknown", check_reconcile_unknown),
+    ("reconcile other project", check_reconcile_other_project),
     ("I2 no leak", check_no_leak),
 )
 
