@@ -450,6 +450,16 @@ def test_a_video_generation_without_a_model_goes_out_as_omni_flash_for_ten_secon
         assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "10"), (tool, argv)
 
 
+def test_the_video_tools_show_the_agent_that_the_model_defaults_to_omni_flash():
+    # The backend fills the model in either way; the schema default is what an agent reads before it pays.
+    tools = served_tool_objects()
+    defaults = {
+        name: tools[name].input_schema["properties"]["model"].get("default")
+        for name in ("gen_t2v", "gen_r2v", "gen_i2v")
+    }
+    assert defaults == {"gen_t2v": "omni-flash", "gen_r2v": "omni-flash", "gen_i2v": "omni-flash"}
+
+
 def test_a_null_model_is_treated_as_an_omitted_one(monkeypatch):
     argv = _argv_sent_by(
         monkeypatch, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "model": None}
