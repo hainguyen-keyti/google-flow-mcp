@@ -13,7 +13,7 @@ from typing import Any
 
 from gflow_cli import cli_video
 from gflow_cli.api.transports.migrated_composer import R2V_DURATION_S
-from gflow_cli.api.video import VideoModel, validate_duration_for_model
+from gflow_cli.api.video import VideoModel, reference_cap_for, validate_duration_for_model
 from gflow_cli.data.redaction import redact_error_detail
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
@@ -36,7 +36,12 @@ OMNI_FLASH_SECONDS = 10
 
 
 def _video_settings(
-    kind: str, model: str | None, duration: int | None, aspect: str | None = None, count: int = 1
+    kind: str,
+    model: str | None,
+    duration: int | None,
+    aspect: str | None = None,
+    count: int = 1,
+    refs: int = 0,
 ) -> tuple[str, int | None]:
     """Refuse up front what gflow's CLI refuses only after run_job has written `submitted`, burning the job_id."""
     model = model or VIDEO_DEFAULT_MODEL
@@ -49,10 +54,14 @@ def _video_settings(
     if not params["count"].min <= count <= params["count"].max:
         raise ValueError(f"count must be {params['count'].min}-{params['count'].max}, got {count}")
     if kind == "r2v":
-        # gflow pins r2v to its only length on this host when none is sent (migrated_composer.py:968-986).
+        cap = reference_cap_for(VideoModel.from_cli(model))
+        if refs > cap:
+            raise ValueError(f"{model} takes at most {cap} reference images for gen_r2v, got {refs}")
         if duration not in (None, R2V_DURATION_S):
             raise ValueError(f"gen_r2v runs only at {R2V_DURATION_S} s on this host; omit duration")
-        return model, duration
+        # Never sent: gflow pins r2v to that length itself, while an explicit one raises exit 11 on a cohort with no
+        # duration row (migrated_composer.py:968-986, 1162-1180).
+        return model, None
     if duration is None:
         is_omni = VideoModel.from_cli(model) is VideoModel.OMNI_FLASH
         return model, OMNI_FLASH_SECONDS if is_omni else None
@@ -265,7 +274,7 @@ class Backend:
         out_dir: str | None = None,
     ) -> dict[str, Any]:
         if kind in gen_mod.VIDEO_KINDS:
-            model, duration = _video_settings(kind, model, duration, aspect, count)
+            model, duration = _video_settings(kind, model, duration, aspect, count, len(refs or []))
         job = gen_mod.Job(
             job_id=job_id or str(uuid.uuid4()),
             kind=kind,
@@ -705,6 +714,8 @@ async def gen_i2v(
         "Reference images (ingredients) to video via gflow. It spends credits and is ledgered: omni-flash x1 = 12 "
         "credits (the default when model is omitted, measured 2026-09-15) and veo-lite x1 = 10 credits "
         "(measured). It always runs 8 s, the only length this host offers references, so leave duration out. "
+        "omni-flash takes up to 7 reference images, veo-lite, veo-fast and veo-lite-lp up to 3, veo-quality none; "
+        "more is refused before anything is spent. "
         "Allow 2-5 min: that omni-flash run took 292 s end to end." + _JOB_ID_RULE
     ),
 )

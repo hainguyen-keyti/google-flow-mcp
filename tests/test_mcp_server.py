@@ -470,8 +470,27 @@ def test_r2v_without_a_model_goes_out_as_omni_flash_and_leaves_its_only_length_t
     argv = _argv_sent_by(monkeypatch, tmp_path, "gen_r2v", r2v)
     assert _flag(argv, "--model") == "omni-flash"
     assert "--duration" not in argv
+    # Sent explicitly, the length goes through gflow's duration click, which raises exit 11 on a cohort with no
+    # duration row (migrated_composer.py:1171-1173) after the ledger holds `submitted`: an 8 from the agent is dropped.
     argv = _argv_sent_by(monkeypatch, tmp_path, "gen_r2v", r2v | {"duration": R2V_DURATION_S})
-    assert _flag(argv, "--duration") == str(R2V_DURATION_S)
+    assert "--duration" not in argv
+
+
+@pytest.mark.parametrize(("model", "refs"), [("omni-flash", 8), ("veo-lite", 4), ("veo-quality", 1)])
+def test_r2v_with_more_references_than_the_model_takes_is_refused_before_the_ledger(
+    monkeypatch, tmp_path, model, refs
+):
+    # Re-review 2026-09-15: gflow checks reference_cap_for only after run_job has written `submitted`, so one image
+    # too many burned the job_id; Flow itself keeps only the first images of a larger set.
+    arguments = SPEND_CALLS["gen_r2v"] | {"model": model, "refs": [f"/tmp/{i}.png" for i in range(refs)]}
+    text = _refused_before_the_ledger(monkeypatch, tmp_path, "gen_r2v", arguments)
+    assert "reference images" in text, text
+
+
+def test_r2v_at_exactly_the_models_reference_cap_still_runs(monkeypatch, tmp_path):
+    arguments = SPEND_CALLS["gen_r2v"] | {"refs": [f"/tmp/{i}.png" for i in range(7)]}
+    argv = _argv_sent_by(monkeypatch, tmp_path, "gen_r2v", arguments)
+    assert argv.count("--ref") == 7
 
 
 def _refused_before_the_ledger(monkeypatch, tmp_path, tool, arguments):
