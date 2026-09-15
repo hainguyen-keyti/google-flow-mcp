@@ -373,6 +373,12 @@ def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
             ["w-1"],
             [],
         ),
+        "open_rival_holding_a_version": (
+            AFTER_BALANCE,
+            [_record("src-6", 1), _record("src-6", 2, JOB_PROMPT), _record("src-6", 3, JOB_PROMPT)],
+            ["w-1"],
+            [],
+        ),
     }
     seen = {}
     for name, (balance, records, listed, taken) in cases.items():
@@ -383,6 +389,10 @@ def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
         if name.startswith("rival"):
             _opening(gen.Ledger(room / "ledger.jsonl"), "retry", "src-6", workflows_before=listed)
             gen.Ledger(room / "ledger.jsonl").append("retry", "failed", outputs=[], spent=20)
+        if name.startswith("open_rival"):
+            _opening(gen.Ledger(room / "ledger.jsonl"), "b", "src-6", workflows_before=["w-1", "w-2"])
+            held = [{"media_id": "src-6", "workflow_id": "w-3", "role": "generated"}]
+            gen.Ledger(room / "ledger.jsonl").append("b", "pending", outputs=held)
         if taken:
             outputs = [
                 {"media_id": "src-6", "workflow_id": workflow, "role": "generated"} for workflow in taken
@@ -396,7 +406,7 @@ def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
         finally:
             _restore(original)
         rows = gen.Ledger(room / "ledger.jsonl").rows("u")
-        seen[name] = ([r["verdict"] for r in out], [r["status"] for r in rows])
+        seen[name] = ([r["verdict"] for r in out if r["job_id"] == "u"], [r["status"] for r in rows])
     ok = all(verdicts == ["unknown"] and statuses == ["opening"] for verdicts, statuses in seen.values())
     return ("PASS" if ok else "FAIL"), str(seen)
 

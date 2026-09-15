@@ -350,9 +350,10 @@ def _editor_verdict(
     `workflows_before` the job wrote as it opened, whatever its time: Flow's clock and this Mac's disagree, and a
     clip's `created` is stamped at submit. `done` is for an edit only: exactly one new version on its own clip
     carries its prompt (compared as the driver does) and is held by no other job's outputs, counting one still
-    rendering; that version is finished; and no rival is left, another job open or closed that named this clip and
-    prompt yet holds no version on it, since a driver closes a job `failed` when its version shows up after the
-    deadline (DECISIONS 2026-09-15). Every measured edit put its version on its clip, while an extend's clip lands on
+    rendering; that version is finished; and no rival is left, another job that named this clip and prompt and is
+    still open, or closed holding no version on the clip, since a driver closes a job `failed` when its version shows
+    up after the deadline, unless clip_reconcile itself closed it `failed` (DECISIONS 2026-09-15, 2026-09-16). Every
+    measured edit put its version on its clip, while an extend's clip lands on
     a new media id beside copies of each source version that keep their prompts, and a free upscale adds a promptless
     version, so an extend is never `done`. `failed` needs an equal balance and no new record at all, taken or not. A
     listing without the job's own clip holds no evidence about the job, and a clip the row never saw would make every
@@ -420,6 +421,14 @@ async def reconcile_editor(
         for output in other.get("outputs") or []
         if output.get("role") == "generated"
     }
+    open_jobs = {r["job_id"] for r in stuck}
+    last_rows = {other.get("job_id"): other for other in rows}
+    # Only clip_reconcile writes failed with a source_media_id, and only on an equal balance and no new record.
+    made_nothing = {
+        job_id
+        for job_id, last in last_rows.items()
+        if last.get("status") == "failed" and last.get("reconciled") and last.get("source_media_id")
+    }
     out: list[dict[str, Any]] = []
     for row in stuck:
         if not row.get("source_media_id"):
@@ -441,13 +450,19 @@ async def reconcile_editor(
             # Nothing to judge by: no workflows listed, or no prompt (DECISIONS 2026-09-15). Left for a person.
             out.append({"job_id": row["job_id"], "verdict": "unknown", "credits_now": credits_now})
             continue
-        # Another job that named this clip and prompt, open or closed, may own the new version unless it holds one
-        # there already: a driver closes a job `failed` when its version shows up after the deadline.
+        # Another job that named this clip and prompt may own the new version: always while it is open, and once closed
+        # unless it holds a version on the clip or clip_reconcile found it made nothing (DECISIONS 2026-09-16).
         contested = any(
             other.get("job_id") != row["job_id"]
             and other.get("source_media_id") == row["source_media_id"]
             and (other.get("prompt") or "").strip() == row["prompt"].strip()
-            and (other.get("job_id"), row["source_media_id"]) not in held_on_clip
+            and (
+                other.get("job_id") in open_jobs
+                or (
+                    (other.get("job_id"), row["source_media_id"]) not in held_on_clip
+                    and other.get("job_id") not in made_nothing
+                )
+            )
             for other in rows
         )
         taken = _taken_elsewhere(rows, row["job_id"])

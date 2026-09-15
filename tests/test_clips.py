@@ -613,6 +613,9 @@ def test_reconcile_closes_two_open_edits_that_differ_in_clip_or_prompt(monkeypat
     ]
 
 
+RECONCILED = "checked the listing and the credit balance"
+
+
 @pytest.mark.parametrize(
     "closing",
     [
@@ -624,6 +627,13 @@ def test_reconcile_closes_two_open_edits_that_differ_in_clip_or_prompt(monkeypat
         [("done", {"media_id": "src-40", "spent": 20})],
         # Its driver listed only a free upscale of the clip, which carries no prompt and so went in as a copy.
         [("submitted", {}), ("failed", {"outputs": [{"media_id": "src-40", "role": "copy"}], "spent": 20})],
+        # Closed failed by story's reconcile, whose rule for failed is looser than clip_reconcile's.
+        [("failed", {"media_id": None, "spent": 0, "reconciled": RECONCILED})],
+        # Closed failed by clip_reconcile, then run again on this clip under the same job_id.
+        [
+            ("failed", {"source_media_id": "src-40", "outputs": [], "spent": 0, "reconciled": RECONCILED}),
+            ("opening", {"kind": "edit", "source_media_id": "src-40", "prompt": JOB_PROMPT}),
+        ],
     ],
 )
 def test_reconcile_leaves_an_orphan_open_when_a_closed_job_of_its_clip_and_prompt_holds_no_version(
@@ -642,6 +652,71 @@ def test_reconcile_leaves_an_orphan_open_when_a_closed_job_of_its_clip_and_promp
 
     assert out == [{"job_id": "dead", "verdict": "unknown", "credits_now": 275}]
     assert [r["status"] for r in ledger.rows("dead")] == ["opening"]
+
+
+def test_reconcile_closes_an_edit_whose_rival_clip_reconcile_already_found_made_nothing(
+    monkeypatch, tmp_path
+):
+    # Re-review of plan C (2026-09-16, F2): the first call died before submitting, clip_reconcile closed it failed on an
+    # equal balance and no new record, and the retry the refusal advises died too; that rival made nothing.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "first", "src-61")
+    ledger.append(
+        "first", "failed", kind="edit", source_media_id="src-61", outputs=[], spent=0, reconciled=RECONCILED
+    )
+    _opening(ledger, "retry", "src-61")
+    ledger.append("retry", "submitted", kind="edit", source_media_id="src-61", prompt=JOB_PROMPT)
+    _reconcile_world(monkeypatch, [_record("src-61", 100), _record("src-61", 200, JOB_PROMPT)], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "retry", "verdict": "done", "credits_now": 275}]
+    assert ledger.rows("retry")[-1]["outputs"][0]["workflow_id"] == "w-200"
+
+
+def test_reconcile_leaves_an_orphan_open_while_an_open_job_of_its_clip_and_prompt_holds_a_version(
+    monkeypatch, tmp_path
+):
+    # Re-review of plan C (2026-09-16, F1): an open job stays a rival even when its pending row holds a version on the
+    # clip, as decided first (DECISIONS 2026-09-15); only a closed job is cleared by the version it holds.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "a", "src-60")
+    ledger.append("a", "submitted", kind="edit", source_media_id="src-60", prompt=JOB_PROMPT)
+    _opening(ledger, "b", "src-60", workflows_before=["w-100", "w-200"])
+    ledger.append("b", "submitted", kind="edit", source_media_id="src-60", prompt=JOB_PROMPT)
+    held = [{"media_id": "src-60", "workflow_id": "w-300", "role": "generated"}]
+    ledger.append("b", "pending", outputs=held)
+    listing = [_record("src-60", 100), _record("src-60", 200, JOB_PROMPT), _record("src-60", 300, JOB_PROMPT)]
+    _reconcile_world(monkeypatch, listing, balance=255)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [(r["job_id"], r["verdict"]) for r in out] == [("a", "unknown"), ("b", "unknown")]
+    assert [r["status"] for r in ledger.rows()] == ["opening", "submitted", "opening", "submitted", "pending"]
+
+
+def test_reconcile_never_gives_one_version_to_two_open_jobs_that_each_hold_another(monkeypatch, tmp_path):
+    # Re-review of plan C (2026-09-16, F1): x and y each ran again on the clip with another prompt and hold that
+    # version, but their first attempts typed this prompt, so each is an open rival for the one version nobody holds.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    for job in ("x", "y"):
+        _opening(ledger, job, "src-63")
+    for job, version in (("x", "w-300"), ("y", "w-400")):
+        _opening(ledger, job, "src-63", prompt="make it rain", workflows_before=["w-100", "w-200"])
+        held = [{"media_id": "src-63", "workflow_id": version, "role": "generated"}]
+        ledger.append(job, "pending", outputs=held)
+    listing = [
+        _record("src-63", 100),
+        _record("src-63", 200, JOB_PROMPT),
+        _record("src-63", 300, "make it rain"),
+        _record("src-63", 400, "make it rain"),
+    ]
+    _reconcile_world(monkeypatch, listing, balance=235)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [(r["job_id"], r["verdict"]) for r in out] == [("x", "unknown"), ("y", "unknown")]
+    assert [r["status"] for r in ledger.rows() if r["status"] == "done"] == []
 
 
 def test_reconcile_leaves_an_edit_open_while_a_second_version_with_its_prompt_is_still_rendering(
@@ -699,15 +774,19 @@ def test_reconcile_counts_a_job_holding_versions_only_on_other_clips_as_a_rival(
     assert [r["status"] for r in ledger.rows("dead")] == ["opening"]
 
 
+@pytest.mark.parametrize("holding_row", ["done", "pending"])
 def test_reconcile_still_closes_an_edit_beside_a_job_of_its_clip_and_prompt_holding_its_own_version(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, holding_row
 ):
-    # A job that holds its version on the clip already has what it made, so the other new version is this job's.
+    # A job that holds its version on the clip already has what it made, so the other new version is this job's. The
+    # version may sit in a pending row its driver wrote before a person closed the job.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     _opening(ledger, "j", "src-48")
     _opening(ledger, "x", "src-48")
     held = [{"media_id": "src-48", "workflow_id": "w-200", "role": "generated"}]
-    ledger.append("x", "done", outputs=held, spent=20)
+    ledger.append("x", holding_row, outputs=held, spent=20)
+    if holding_row == "pending":
+        ledger.append("x", "done", spent=20)
     listing = [_record("src-48", 100), _record("src-48", 200, JOB_PROMPT), _record("src-48", 300, JOB_PROMPT)]
     _reconcile_world(monkeypatch, listing, balance=255)
 
@@ -715,6 +794,27 @@ def test_reconcile_still_closes_an_edit_beside_a_job_of_its_clip_and_prompt_hold
 
     assert [r["verdict"] for r in out] == ["done"]
     assert ledger.rows("j")[-1]["outputs"][0]["workflow_id"] == "w-300"
+
+
+def test_reconcile_never_lets_a_version_one_job_holds_clear_another_job_that_holds_none(
+    monkeypatch, tmp_path
+):
+    # Re-review of plan C (2026-09-15, F3): holding is per job, so a third job's version on the clip says nothing about
+    # a retry its driver closed failed before its own version showed up.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "dead", "src-49")
+    _opening(ledger, "retry", "src-49")
+    ledger.append("retry", "failed", outputs=[], spent=20)
+    _opening(ledger, "third", "src-49")
+    held = [{"media_id": "src-49", "workflow_id": "w-200", "role": "generated"}]
+    ledger.append("third", "done", outputs=held, spent=20)
+    listing = [_record("src-49", 100), _record("src-49", 200, JOB_PROMPT), _record("src-49", 300, JOB_PROMPT)]
+    _reconcile_world(monkeypatch, listing, balance=255)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "dead", "verdict": "unknown", "credits_now": 255}]
+    assert [r["status"] for r in ledger.rows("dead")] == ["opening"]
 
 
 def test_reconcile_leaves_an_edit_open_when_two_new_versions_carry_its_prompt(monkeypatch, tmp_path):
