@@ -84,6 +84,38 @@ def test_rename_fails_when_the_grid_still_lists_another_title(monkeypatch):
         asyncio.run(projects.rename(_Session(), "P", "new title"))
 
 
+class _NewProjectButton:
+    def __init__(self, page):
+        self.page = page
+
+    @property
+    def first(self):
+        return self
+
+    async def click(self, timeout=None):
+        self.page.url = FlowSession.project_url("NEW")
+
+
+class _GridPage(_Page):
+    def __init__(self):
+        super().__init__()
+        self.url = MIGRATED_ROOT
+
+    def get_by_role(self, role, name=None):
+        return _NewProjectButton(self)
+
+
+def test_create_with_a_title_that_does_not_land_still_names_the_project_it_made(monkeypatch):
+    # Review 2026-09-15: once rename checked the grid, a failed title made project_create raise after the project
+    # already existed, without its id, so an agent's retry would create a second project.
+    _flow_answers(monkeypatch, {"jHPbke": [[]]}, RENAMED, _grid_listing("NEW", "Untitled project"))
+    session = _Session()
+    session.page = _GridPage()
+
+    with pytest.raises(RuntimeError, match="project NEW was created"):
+        asyncio.run(projects.create(session, "new title"))
+
+
 def test_rename_fails_when_the_project_is_not_on_the_grid(monkeypatch):
     _flow_answers(monkeypatch, RENAMED, _grid_listing("OTHER", "new title"))
 
