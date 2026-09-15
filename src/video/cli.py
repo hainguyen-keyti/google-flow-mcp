@@ -401,7 +401,11 @@ def clip_reconcile(project_id: str, out_dir: str, profile: str) -> None:
 
     from video.flow import clips
 
-    rows = _read(profile, lambda s: clips.reconcile_editor(s, project_id, out_dir=Path(out_dir)))
+    target = Path(out_dir)
+    if clips.reconcile_needs_flow(project_id, out_dir=target):
+        rows = _read(profile, lambda s: clips.reconcile_editor(s, project_id, out_dir=target))
+    else:
+        rows = asyncio.run(clips.reconcile_editor(None, project_id, out_dir=target))
     click.echo(json.dumps(rows, indent=2, ensure_ascii=False))
 
 

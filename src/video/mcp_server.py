@@ -198,7 +198,11 @@ class Backend:
         # jobs [] reads as "clean" only next to the ledger it came from: a missing file also yields [].
         found = {"ledger": str(ledger.resolve()), "ledger_exists": ledger.exists()}
         found["ledger_rows"] = len(gen_mod.Ledger(ledger).rows())
-        jobs = await self._with(lambda s: clips_mod.reconcile_editor(s, project_id, out_dir=target))
+        if clips_mod.reconcile_needs_flow(project_id, out_dir=target):
+            jobs = await self._with(lambda s: clips_mod.reconcile_editor(s, project_id, out_dir=target))
+        else:
+            # Nothing here can be judged, so there is no listing to read and no reason to wait for a browser.
+            jobs = await clips_mod.reconcile_editor(None, project_id, out_dir=target)
         return {**found, "jobs": jobs}
 
     async def uploads(self, project_id: str) -> dict[str, Any]:
@@ -566,7 +570,9 @@ async def clip_download(
         "in the project that the job had not already seen when it opened), unknown (left open for a person, also "
         "when the listing lacks the job's source clip or the job's row predates recorded workflows), skipped (never "
         "written: a gen_* or agent_send job, which names no clip, so check it with flow_media and flow_credits; or "
-        "another project's editor job, whose project is given, so run clip_reconcile on that project). Free."
+        "another project's editor job, whose project is given, so run clip_reconcile on that project). It opens "
+        "the browser only when the ledger holds a job of this project it can judge, otherwise it answers at once. "
+        "Free."
     ),
 )
 async def clip_reconcile(project_id: str, out_dir: str | None = None) -> str:

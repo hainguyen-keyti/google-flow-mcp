@@ -356,7 +356,15 @@ def _judgeable(row: dict[str, Any], project_id: str) -> bool:
     )
 
 
-async def reconcile_editor(session: FlowSession, project_id: str, *, out_dir: Path) -> list[dict[str, Any]]:
+def reconcile_needs_flow(project_id: str, *, out_dir: Path) -> bool:
+    """Whether the ledger holds a job reconcile can judge for this project, the only reason to open a browser."""
+    rows = gen.Ledger(Path(out_dir) / "ledger.jsonl").rows()
+    return any(_judgeable(row, project_id) for row in _stuck_editor_jobs(rows))
+
+
+async def reconcile_editor(
+    session: FlowSession | None, project_id: str, *, out_dir: Path
+) -> list[dict[str, Any]]:
     """Close out editor jobs that spent credits without ever recording an outcome.
 
     A job left on `unknown` is left alone: money moved but nothing on that media proves what it bought,

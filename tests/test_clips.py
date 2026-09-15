@@ -930,7 +930,9 @@ def test_clip_extend_and_edit_cli_print_json(monkeypatch):
         assert '"job_id": "j"' in result.output
 
 
-def test_clip_reconcile_cli_prints_every_verdict(monkeypatch):
+def test_clip_reconcile_cli_prints_every_verdict(monkeypatch, tmp_path):
+    # The ledger holds a job of project p that can be judged, the only case that opens a browser at all.
+    _opening(gen.Ledger(tmp_path / "ledger.jsonl"), "j", "m")
     seen = {}
 
     def fake_read(profile, fn):
@@ -941,9 +943,27 @@ def test_clip_reconcile_cli_prints_every_verdict(monkeypatch):
         ]
 
     monkeypatch.setattr(cli, "_read", fake_read)
-    result = CliRunner().invoke(cli.main, ["flow", "clip", "reconcile", "p", "--out", "out/x"])
+    result = CliRunner().invoke(cli.main, ["flow", "clip", "reconcile", "p", "--out", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
     assert '"verdict": "done"' in result.output
     assert '"verdict": "unknown"' in result.output, "a job left open has to stay visible, not be hidden"
     assert seen["profile"] == "default"
+
+
+def test_clip_reconcile_cli_opens_no_browser_when_no_job_can_be_judged_here(monkeypatch, tmp_path):
+    # Review 2026-09-15 (finding 4): the CLI opened Chrome (12-17 s) before reading a ledger holding nothing it
+    # could judge: a gen job and another project's editor job.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("g", "submitted", kind="t2v", credits_before=295)
+    _opening(ledger, "b", "m", project="q")
+
+    def no_browser(profile, fn):
+        raise AssertionError("flow clip reconcile opened a browser with nothing to judge")
+
+    monkeypatch.setattr(cli, "_read", no_browser)
+    result = CliRunner().invoke(cli.main, ["flow", "clip", "reconcile", "p", "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert '"verdict": "skipped"' in result.output
+    assert '"project": "q"' in result.output

@@ -850,6 +850,58 @@ def test_clip_reconcile_names_the_ledger_it_read_so_an_empty_answer_is_not_ambig
     assert seen == [tmp_path / "kept", tmp_path / "typo"]
 
 
+def test_clip_reconcile_opens_no_browser_when_no_job_can_be_judged_here(monkeypatch, tmp_path):
+    # Review 2026-09-15 (finding 4): clip_reconcile opened Chrome (12-17 s) before reading a ledger holding nothing it
+    # could judge: a gen job, another project's editor job, an old row that lists no workflows.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("g", "submitted", kind="t2v", credits_before=295)
+    ledger.append(
+        "b", "opening", kind="edit", source_media_id="m", credits_before=295, project="Q", workflows_before=[]
+    )
+    ledger.append("old", "opening", kind="extend", source_media_id="m", credits_before=295)
+
+    async def no_browser(self, fn):
+        raise AssertionError("clip_reconcile opened a browser with nothing to judge")
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", no_browser)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+
+    async def fn(s):
+        return await s.call_tool("clip_reconcile", {"project_id": "P", "out_dir": str(tmp_path)})
+
+    jobs = _payload(with_client(fn))["jobs"]
+    assert [(j["job_id"], j["verdict"]) for j in jobs] == [
+        ("g", "skipped"),
+        ("b", "skipped"),
+        ("old", "unknown"),
+    ]
+
+
+def test_clip_reconcile_opens_the_browser_when_a_job_of_this_project_can_be_judged(monkeypatch, tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        "j", "opening", kind="edit", source_media_id="m", credits_before=295, project="P", workflows_before=[]
+    )
+    opened = []
+
+    async def browser(self, fn):
+        opened.append(True)
+        return await fn("session")
+
+    async def fake_reconcile(session, project_id, *, out_dir):
+        return [{"job_id": "j", "verdict": "unknown", "session": session}]
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", browser)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    monkeypatch.setattr(mcp_server.clips_mod, "reconcile_editor", fake_reconcile)
+
+    async def fn(s):
+        return await s.call_tool("clip_reconcile", {"project_id": "P", "out_dir": str(tmp_path)})
+
+    assert _payload(with_client(fn))["jobs"] == [{"job_id": "j", "verdict": "unknown", "session": "session"}]
+    assert opened == [True]
+
+
 def test_project_rename_replies_with_the_project_id_and_the_title_the_grid_lists(monkeypatch):
     # Measured 2026-09-15: the reply was only {title}, the very string the agent had just sent.
     async def fake_rename(project_id, title):
