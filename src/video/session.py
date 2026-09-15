@@ -18,6 +18,7 @@ from gflow_cli.api.client import FlowApiClient
 import video  # noqa: F401
 
 _GUARD = threading.Lock()
+_GUARD_POLL_S = 0.05
 
 MIGRATED_ROOT = "https://flow.google.com/"
 GRID_READY = 'a[href*="/project/"]'
@@ -53,7 +54,10 @@ class FlowSession:
         self._entered = False
 
     async def __aenter__(self) -> Self:
-        await asyncio.to_thread(_GUARD.acquire)
+        # Never `to_thread(_GUARD.acquire)`: that thread outlives a cancelled caller, takes the lock later and
+        # never gives it back, which hung every later browser tool (review 2026-09-15). A poll holds nothing.
+        while not _GUARD.acquire(blocking=False):
+            await asyncio.sleep(_GUARD_POLL_S)
         try:
             self.client = self._factory(self.profile_dir, headless=self.headless)
             await self.client.__aenter__()

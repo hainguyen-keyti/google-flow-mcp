@@ -1,13 +1,17 @@
 import asyncio
 import json
 import re
+import threading
 from pathlib import Path
 
+import pytest
 from gflow_cli.api.transports.migrated_composer import R2V_DURATION_S
 from mcp.client.session import ClientSession
+from mcp.shared.exceptions import MCPError
 from mcp.shared.memory import create_client_server_memory_streams
 
 from video import cli, gen, mcp_server
+from video import session as session_mod
 from video.flow import parsers, reader
 from video.session import MIGRATED_ROOT, FlowSession
 
@@ -916,6 +920,89 @@ def test_the_server_log_of_a_failed_tool_carries_no_cookie_either(monkeypatch, t
         _error_text_of_a_failing_generation(monkeypatch, tmp_path, leaked)
     assert "tool gen_t2v failed" in caplog.text
     assert "sid-secret" not in caplog.text and "ssid-secret" not in caplog.text, caplog.text
+
+
+class _BrowserlessClient:
+    """Stands in for gflow's FlowApiClient so a real FlowSession, lock included, runs with no Chrome."""
+
+    def __init__(self, profile_dir, *, headless):
+        self._context = self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        pass
+
+    async def new_page(self):
+        return self
+
+    async def close(self):
+        pass
+
+
+def test_a_call_cancelled_while_it_waits_for_the_browser_does_not_wedge_later_calls(monkeypatch, tmp_path):
+    # Review 2026-09-15: a client whose read timeout runs out sends notifications/cancelled and the SDK cancels the
+    # handler. One cancelled while waiting for the session lock used to take the lock anyway, and every later
+    # browser tool hung until the server restarted.
+    guard = threading.Lock()
+    monkeypatch.setattr(session_mod, "_GUARD", guard)
+    cancelled_waiters = []
+
+    class _WatchedSession(FlowSession):
+        async def __aenter__(self):
+            try:
+                return await super().__aenter__()
+            except asyncio.CancelledError:
+                cancelled_waiters.append(self)
+                raise
+
+    monkeypatch.setattr(
+        mcp_server,
+        "FlowSession",
+        lambda profile: _WatchedSession(profile_dir=tmp_path, client_factory=_BrowserlessClient),
+    )
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+
+    async def fn(s):
+        release = asyncio.Event()
+
+        async def slow_credits(session):
+            await release.wait()
+            return {"balance": 1, "raw": [1]}
+
+        async def quick_lane(session):
+            return {"verdict": "MIGRATED"}
+
+        async def quick_projects(session):
+            return [{"id": "P"}]
+
+        monkeypatch.setattr(mcp_server.reader, "credits", slow_credits)
+        monkeypatch.setattr(mcp_server.lane_mod, "run", quick_lane)
+        monkeypatch.setattr(mcp_server.reader, "projects", quick_projects)
+        holder = asyncio.create_task(s.call_tool("flow_credits", {}))
+        await asyncio.sleep(0.2)
+        with pytest.raises(MCPError, match="timed out"):
+            await s.call_tool("flow_lane", {}, read_timeout_seconds=0.3)
+        # Let the lock go only once the server has really cancelled the waiter, or the test races past the bug.
+        for _ in range(40):
+            if cancelled_waiters:
+                break
+            await asyncio.sleep(0.05)
+        assert cancelled_waiters, "the server never cancelled the call that timed out"
+        release.set()
+        held = await holder
+        try:
+            later = await asyncio.wait_for(s.call_tool("flow_projects", {}), 3)
+        finally:
+            while guard.locked():
+                guard.release()
+                await asyncio.sleep(0.05)
+        return _payload(held), _payload(later)
+
+    held, later = with_client(fn)
+    assert held["balance"] == 1
+    assert later == [{"id": "P"}]
 
 
 def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():
