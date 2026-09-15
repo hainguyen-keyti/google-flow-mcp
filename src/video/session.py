@@ -7,6 +7,7 @@ class never takes a second one; the module guard serializes sessions inside one 
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -76,8 +77,15 @@ class FlowSession:
         try:
             try:
                 if self.page is not None:
-                    # Bounded: a close that never returns would keep the lease and the guard below forever.
-                    await asyncio.wait_for(self.page.close(), PAGE_CLOSE_TIMEOUT_S)
+                    # Bounded: a close that never returns would keep the lease and the guard below forever. Its timeout
+                    # is not raised, since it would replace the call's own result or error; the client exit closes it.
+                    try:
+                        await asyncio.wait_for(self.page.close(), PAGE_CLOSE_TIMEOUT_S)
+                    except TimeoutError:
+                        logging.getLogger(__name__).warning(
+                            "page.close() did not return within %s s; leaving it to the client exit",
+                            PAGE_CLOSE_TIMEOUT_S,
+                        )
             finally:
                 # A failed or cancelled close must not skip the client's exit: that exit returns gflow's profile
                 # lease (and survives cancellation itself), without which every later session is locked out.

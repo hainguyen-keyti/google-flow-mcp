@@ -102,8 +102,14 @@ class Backend:
         holds a row for it, `opening` included."""
         if job_id:
             if job_id in self._running:
-                raise gen_mod.AlreadySubmitted(_job_refused(job_id, "a call with it still running"))
-            ledgers = dict.fromkeys([*sorted(self.out_dir.rglob("ledger.jsonl")), out_dir / "ledger.jsonl"])
+                # Not _job_refused: flow_media and flow_credits cannot show a job still in flight, so "start it under a
+                # new job_id if it did not run" would pay twice.
+                raise gen_mod.AlreadySubmitted(
+                    "that job is still running in another call: wait for it to finish, then call again with the SAME "
+                    f"job_id; never start it under a new job_id, or it pays twice (job_id {job_id})"
+                )
+            found = sorted(path for path in self.out_dir.rglob("ledger.jsonl") if path.is_file())
+            ledgers = dict.fromkeys([*found, out_dir / "ledger.jsonl"])
             for ledger in ledgers:
                 statuses = sorted({str(row.get("status")) for row in gen_mod.Ledger(ledger).rows(job_id)})
                 if statuses:

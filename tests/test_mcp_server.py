@@ -476,7 +476,9 @@ def test_r2v_without_a_model_goes_out_as_omni_flash_and_leaves_its_only_length_t
     assert "--duration" not in argv
 
 
-@pytest.mark.parametrize(("model", "refs"), [("omni-flash", 8), ("veo-lite", 4), ("veo-quality", 1)])
+@pytest.mark.parametrize(
+    ("model", "refs"), [("omni-flash", 8), (None, 8), ("veo-lite", 4), ("veo-quality", 1)]
+)
 def test_r2v_with_more_references_than_the_model_takes_is_refused_before_the_ledger(
     monkeypatch, tmp_path, model, refs
 ):
@@ -713,17 +715,86 @@ def test_a_second_call_with_the_same_job_id_is_refused_while_the_first_still_run
         await asyncio.wait_for(gate["started"].wait(), 5)
         try:
             second = await asyncio.wait_for(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])), 5)
+            # A refused call must not clear the marker of the call that is still running.
+            again = await asyncio.wait_for(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])), 5)
         finally:
             gate["release"].set()
         done = await first
         # Nothing was written, so once the first call is over the id is free again rather than stuck.
         third = await asyncio.wait_for(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])), 5)
-        return done, second, third
+        return done, second, again, third
 
-    done, second, third = with_client(fn)
+    done, second, again, third = with_client(fn)
     assert not done.is_error, _texts([done])
-    assert second.is_error and "may already have spent credits" in _texts([second])[0], _texts([second])
+    for refused in (second, again):
+        text = _texts([refused])[0]
+        # Review 2026-09-15: "start it under a new job_id only if it did not run" cannot be checked while the job is
+        # still in flight (flow_media and flow_credits wait or see nothing yet), and following it pays twice.
+        assert refused.is_error and "still running" in text and "SAME job_id" in text, text
+        assert "new job_id only if" not in text, text
     assert not third.is_error, _texts([third])
+
+
+def test_a_job_id_is_free_again_after_its_call_failed_without_writing_anything(monkeypatch, tmp_path):
+    # The running marker has to go on every exit: an error that wrote no row leaves nothing spent to protect.
+    calls = []
+
+    async def failing_then_fine(job, out_dir, **kwargs):
+        calls.append(job.job_id)
+        if len(calls) == 1:
+            raise RuntimeError("gflow never started")
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", failing_then_fine)
+
+    async def fn(s):
+        return [await s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])) for _ in range(2)]
+
+    first, second = with_client(fn)
+    assert first.is_error and "gflow never started" in _texts([first])[0], _texts([first])
+    assert not second.is_error, _texts([second])
+    assert calls == ["job-t2v", "job-t2v"]
+
+
+def test_editor_calls_inside_a_relative_out_folder_are_accepted(monkeypatch, tmp_path):
+    # Review 2026-09-15: the real server keeps Path("out") relative to its working directory; comparing a resolved
+    # out_dir with that folder unresolved would refuse every editor call, while test tmp paths are already absolute.
+    monkeypatch.chdir(tmp_path)
+    reached = _spending_backend(monkeypatch, Path("out"))
+    inside = str(tmp_path / "out" / "run-2")
+
+    async def fn(s):
+        return [
+            await s.call_tool("clip_edit", dict(SPEND_CALLS["clip_edit"])),
+            await s.call_tool("clip_extend", SPEND_CALLS["clip_extend"] | {"out_dir": "out/run-1"}),
+            await s.call_tool(
+                "clip_edit", SPEND_CALLS["clip_edit"] | {"job_id": "job-edit-2", "out_dir": inside}
+            ),
+        ]
+
+    results = with_client(fn)
+    assert [result.is_error for result in results] == [False, False, False], _texts(results)
+    assert [step for step in reached if step != "browser"] == [
+        ("clip_edit", "job-edit"),
+        ("clip_extend", "job-extend"),
+        ("clip_edit", "job-edit-2"),
+    ]
+
+
+def test_a_folder_named_ledger_jsonl_under_out_does_not_block_every_spend(monkeypatch, tmp_path):
+    # Review 2026-09-15: clip_edit with an out_dir ending in "ledger.jsonl" makes Ledger.append create a folder of that
+    # name, and the scan read it as a ledger, so every later spend failed with IsADirectoryError.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    nested = tmp_path / "story3" / "ledger.jsonl" / "ledger.jsonl"
+    gen.Ledger(nested).append("other-job", "done", kind="edit", spent=20)
+
+    async def fn(s):
+        return await s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"]))
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])
+    assert ("gen_t2v", "job-t2v") in reached
 
 
 def test_generation_and_agent_calls_check_the_ledger_before_anything_runs(monkeypatch, tmp_path):

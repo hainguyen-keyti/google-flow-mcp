@@ -194,14 +194,19 @@ def test_a_page_close_that_never_returns_still_gives_the_profile_and_the_guard_b
     lease = {"held": False}
 
     async def run():
-        with pytest.raises(TimeoutError):
+        # Review of plan B: the bound's own TimeoutError replaced what the call inside had returned or raised, such as
+        # a driver error saying credits were spent. The client exit closes the browser anyway, so the call keeps its
+        # own outcome.
+        async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, HangingPage)):
+            pass
+        with pytest.raises(ValueError, match="spent 20 credits"):
             async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, HangingPage)):
-                pass
+                raise ValueError("edit: nothing was generated within 240s, spent 20 credits")
         async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, FakePage)):
             pass
 
     asyncio.run(asyncio.wait_for(run(), 5))
-    assert log.count("client.exit") == 2
+    assert log.count("client.exit") == 3
     assert not session_mod._GUARD.locked()
 
 
