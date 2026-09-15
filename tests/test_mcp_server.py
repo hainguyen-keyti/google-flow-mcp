@@ -7,6 +7,10 @@ from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 
 from video import cli, mcp_server
+from video.flow import parsers, reader
+from video.session import FlowSession
+
+FIXTURES = Path(__file__).parent / "fixtures" / "rpc"
 
 EXPECTED_TOOLS = {
     "flow_lane",
@@ -279,7 +283,8 @@ def test_flow_media_can_ask_for_every_version(monkeypatch):
 
     async def fake_media(project_id, all_versions=False):
         called.append((project_id, all_versions))
-        return [{"workflow_id": "w1"}, {"workflow_id": "w2"}] if all_versions else {"media": []}
+        versions = {"versions": [{"workflow_id": "w1"}, {"workflow_id": "w2"}]} if all_versions else {}
+        return {"meta": {}, "models": [], "media": [], **versions}
 
     monkeypatch.setattr(mcp_server.backend, "media", fake_media)
 
@@ -290,7 +295,7 @@ def test_flow_media_can_ask_for_every_version(monkeypatch):
     assert not result.is_error
     assert called == [("P", True)]
     payload = json.loads("".join(getattr(c, "text", "") for c in result.content))
-    assert [row["workflow_id"] for row in payload] == ["w1", "w2"]
+    assert [row["workflow_id"] for row in payload["versions"]] == ["w1", "w2"]
 
 
 def test_gen_tool_refuses_a_missing_project(monkeypatch):
@@ -479,6 +484,64 @@ def test_an_explicit_duration_is_sent_as_given(monkeypatch):
         monkeypatch, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "duration": 8}
     )
     assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "8")
+
+
+def _fixture(rpcid):
+    return json.loads((FIXTURES / f"{rpcid}.json").read_text(encoding="utf-8"))["payload"]
+
+
+def _payload(result):
+    assert not result.is_error, [getattr(c, "text", "") for c in result.content]
+    return json.loads("".join(getattr(c, "text", "") for c in result.content))
+
+
+class _OfflineSession:
+    """The real Backend and reader run against this: it records where it was sent and opens no browser."""
+
+    def __init__(self):
+        self.urls = []
+
+    async def goto(self, url, *, ready=None, timeout_ms=60_000):
+        self.urls.append(url)
+
+    project_url = staticmethod(FlowSession.project_url)
+
+
+def _offline_backend(monkeypatch, frames_for):
+    """Swap only the browser out: capture runs the navigation, then answers with recorded rpc payloads."""
+    session = _OfflineSession()
+
+    async def fake_capture(s, action, *, settle):
+        await action()
+        return frames_for(s.urls[-1])
+
+    async def fake_with(self, fn):
+        return await fn(session)
+
+    monkeypatch.setattr(reader, "capture", fake_capture)
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    return session
+
+
+def test_flow_media_answers_one_object_whether_or_not_all_versions_is_set(monkeypatch):
+    # Measured 2026-09-15: all_versions=true turned the reply from an object into a bare list, so code reading
+    # payload["media"] worked until the flag was set. The versions ride in the same Zzl0ze payload.
+    listing = _fixture("Zzl0ze")
+    frames = {"ngNC2": [_fixture("ngNC2")], "yBhWQ": [_fixture("yBhWQ")], "Zzl0ze": [listing]}
+    session = _offline_backend(monkeypatch, lambda url: frames)
+
+    async def fn(s):
+        plain = await s.call_tool("flow_media", {"project_id": "P"})
+        every = await s.call_tool("flow_media", {"project_id": "P", "all_versions": True})
+        return _payload(plain), _payload(every)
+
+    plain, every = with_client(fn)
+    assert sorted(plain) == ["media", "meta", "models"]
+    assert sorted(every) == ["media", "meta", "models", "versions"]
+    assert every["media"] == plain["media"]
+    assert every["versions"] == json.loads(json.dumps(parsers.records(listing), default=str))
+    assert session.urls == [FlowSession.project_url("P")] * 2
 
 
 def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():

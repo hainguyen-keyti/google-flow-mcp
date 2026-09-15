@@ -68,15 +68,21 @@ async def credits(session: FlowSession) -> dict[str, Any]:
     return info
 
 
-async def project(session: FlowSession, project_id: str, settle: float = 10.0) -> dict[str, Any]:
+async def project(
+    session: FlowSession, project_id: str, settle: float = 10.0, *, versions: bool = False
+) -> dict[str, Any]:
     frames = await capture(
         session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=settle
     )
-    return {
+    listing = one(frames, "Zzl0ze")
+    out = {
         "meta": parsers.project_meta(one(frames, "ngNC2")),
         "models": parsers.video_models(one(frames, "yBhWQ")),
-        "media": parsers.media(one(frames, "Zzl0ze")),
+        "media": parsers.media(listing),
     }
+    if versions:
+        out["versions"] = parsers.records(listing)
+    return out
 
 
 async def records(session: FlowSession, project_id: str, settle: float = 8.0) -> list[dict[str, Any]]:

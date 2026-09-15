@@ -55,12 +55,10 @@ class Backend:
     async def credits(self) -> dict[str, Any]:
         return await self._with(reader.credits)
 
-    async def media(self, project_id: str, all_versions: bool = False) -> Any:
+    async def media(self, project_id: str, all_versions: bool = False) -> dict[str, Any]:
         # The grid collapses a media to one row, so an Omni edit that stacks a new version onto the same
-        # media id is invisible there. `reader.records` is the only view that shows every version.
-        if all_versions:
-            return await self._with(lambda s: reader.records(s, project_id))
-        return await self._with(lambda s: reader.project(s, project_id))
+        # media id is invisible there; `versions` is the only view that shows every version.
+        return await self._with(lambda s: reader.project(s, project_id, versions=all_versions))
 
     async def characters(self, project_id: str) -> list[dict[str, Any]]:
         return await self._with(lambda s: characters_mod.list_characters(s, project_id))
@@ -271,9 +269,10 @@ async def flow_credits() -> str:
 @server.tool(
     name="flow_media",
     description=(
-        "A project's media (id, kind, model, size, url), meta and models. Set all_versions=true "
-        "for every generation record instead: each Omni edit or upscale stacks another version onto the "
-        "SAME media id, and only this view shows them, so it is how you find the clip an edit produced. Free."
+        "A project's media (id, kind, model, size, url), meta and models, always as one object. "
+        "all_versions=true adds a versions list holding every generation record: each Omni edit or upscale "
+        "stacks another version onto the SAME media id, and only that list shows them, so it is how you find "
+        "the clip an edit produced. Free."
     ),
 )
 async def flow_media(project_id: str, all_versions: bool = False) -> str:

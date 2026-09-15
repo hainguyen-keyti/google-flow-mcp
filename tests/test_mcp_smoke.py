@@ -86,7 +86,9 @@ class _Account:
         return self.replies["credits"]
 
     async def media(self, project_id, all_versions=False):
-        return self.replies["versions" if all_versions else "media"]
+        if not all_versions:
+            return self.replies["media"]
+        return self.replies.get("media_all", {**self.replies["media"], "versions": self.replies["versions"]})
 
     async def characters(self, project_id):
         return self.replies["characters"]
@@ -149,6 +151,11 @@ def _grid_rows_instead_of_versions(replies):
     replies["versions"] = [dict(replies["media"]["media"][0])]
 
 
+def _versions_as_a_bare_list(replies):
+    # The reply shape before 2026-09-15: all_versions swapped the object for a list, breaking payload["media"].
+    replies["media_all"] = replies["versions"]
+
+
 def _character_without_entity(replies):
     replies["characters"][0]["entity_id"] = ""
 
@@ -169,6 +176,7 @@ CORRUPTIONS = [
     ("flow_credits", _null_balance),
     ("flow_media", _meta_of_another_project),
     ("flow_media all", _grid_rows_instead_of_versions),
+    ("flow_media all", _versions_as_a_bare_list),
     ("flow_characters", _character_without_entity),
     ("flow_tools", _no_tools),
     ("scene_list", _trashed_scene_in_default_listing),

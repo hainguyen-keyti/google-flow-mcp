@@ -127,11 +127,15 @@ def media_of(project_id):
 
 
 def versions_of(project_id):
+    # all_versions keeps the object and adds `versions` (2026-09-15); a bare list is the old, broken shape.
     # Grid rows carry no `type` and version records always do, so a swallowed all_versions shows up here.
     def check(payload):
-        if not isinstance(payload, list):
-            return f"expected a list, got {type(payload).__name__}"
-        for record in payload:
+        if not isinstance(payload, dict):
+            return f"expected an object, got {type(payload).__name__}"
+        versions = payload.get("versions")
+        if not isinstance(versions, list):
+            return f"versions is {type(versions).__name__}, expected a list"
+        for record in versions:
             if not isinstance(record, dict) or record.get("project_id") != project_id:
                 return "a version record belongs to another project"
             if not isinstance(record.get("type"), str) or not record.get("workflow_id"):
