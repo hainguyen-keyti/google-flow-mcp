@@ -525,7 +525,10 @@ async def scene_create(project_id: str, title: str | None = None) -> str:
 
 @server.tool(
     name="scene_delete",
-    description="Move a scene to the project's trash; scene_restore brings it back. Free.",
+    description=(
+        "Move a scene to the project's trash; scene_restore brings it back. Grid tiles carry no scene id, so the tile "
+        "is found by the scene's exact title: a scene with no title, or a title two scenes share, is refused. Free."
+    ),
 )
 async def scene_delete(project_id: str, scene_id: str) -> str:
     _require(project_id, "project_id")
@@ -537,7 +540,8 @@ async def scene_delete(project_id: str, scene_id: str) -> str:
     name="scene_restore",
     description=(
         "Bring a trashed scene back from the project's trash (undoes scene_delete), confirmed by the listing. "
-        "The trash shows no ids, so it refuses when more than one trashed scene fits the title. Free."
+        "The trash shows no ids, so the tile is found by the scene's exact title: a scene with no title, or a title "
+        "more than one trashed scene shares, is refused. Free."
     ),
 )
 async def scene_restore(project_id: str, scene_id: str) -> str:

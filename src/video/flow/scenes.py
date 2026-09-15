@@ -82,14 +82,23 @@ async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[s
         raise LookupError(f"scene {scene_id} is not in the project listing")
     if scene["trashed"]:
         raise LookupError(f"scene {scene_id} is already in the trash")
-    title = scene["title"] or ""
-    tile = (
-        page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
-        .filter(has_text=re.compile(re.escape(title)))
-        .first
+    title = scene["title"]
+    if not title:
+        raise LookupError(
+            f"scene {scene_id} has no title, and grid tiles carry no scene id, so trashing it would guess"
+        )
+    # Measured 2026-09-16 (plan D T1): the title sits in an element of its own, between two icon ligatures.
+    tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile")).filter(
+        has=page.get_by_text(title, exact=True)
     )
-    if await tile.count() == 0:
+    matching = await tiles.count()
+    if matching == 0:
         raise LookupError(f"scene tile titled {title!r} not found on the grid")
+    if matching > 1:
+        raise RuntimeError(
+            f"{matching} scene tiles show {title!r}; grid tiles carry no ids, so trashing would guess"
+        )
+    tile = tiles.first
     await tile.hover(timeout=8_000)
     await page.wait_for_timeout(600)
     await tile.get_by_role("button", name=re.compile("More options", re.IGNORECASE)).first.click(
@@ -129,7 +138,8 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
 
     Measured 2026-09-15: /project/<id>/trash opens directly, a trashed tile carries no scene id, hovering it shows
     Restore and Delete permanently, and Restore fires BpMsoe with no confirm dialog. The tile can only be found
-    by title, so when more than one trash tile fits that title the restore is refused instead of guessed."""
+    by its exact title, so a scene with no title, or a title more than one trash tile shows, is refused instead of
+    guessed."""
     page = session.page
     scenes = await list_scenes(session, project_id, include_trashed=True)
     scene = next((s for s in scenes if s["scene_id"] == scene_id), None)
@@ -137,7 +147,11 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
         raise LookupError(f"scene {scene_id} is not in the project listing")
     if not scene["trashed"]:
         raise LookupError(f"scene {scene_id} is not in the trash")
-    title = scene["title"] or ""
+    title = scene["title"]
+    if not title:
+        raise LookupError(
+            f"scene {scene_id} has no title, and the trash shows no ids, so restoring it would guess"
+        )
     trashed = sum(1 for s in scenes if s["trashed"])
     await session.goto(f"{session.project_url(project_id)}/trash", ready=PROJECT_READY)
     scene_tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
@@ -153,7 +167,7 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
     if shown > trashed:
         # A tile the listing does not know ends the wait early and can be the only title match before the right one renders.
         raise LookupError(f"the trash shows {shown} scene tiles for {trashed} trashed scenes; not guessing")
-    tiles = scene_tiles.filter(has_text=re.compile(re.escape(title)))
+    tiles = scene_tiles.filter(has=page.get_by_text(title, exact=True))
     matching = await tiles.count()
     if matching != 1:
         raise RuntimeError(
