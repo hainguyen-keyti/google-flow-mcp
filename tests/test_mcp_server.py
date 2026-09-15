@@ -426,6 +426,20 @@ def test_every_credit_spending_tool_requires_a_job_id():
     assert optional_on_a_paid_tool == []
 
 
+def test_every_spending_description_keeps_the_same_job_id_for_a_call_still_running():
+    # Re-review 2026-09-15: the shared job_id rule put "still running in another call" in the sentence ending "check
+    # flow_media and flow_credits before starting it under a new one", which no check can confirm while a job is in
+    # flight, so an agent following the description paid twice.
+    tools = served_tool_objects()
+    for name in sorted(SPENDING_TOOLS):
+        sentences = re.split(r"(?<=\.)\s+", tools[name].description or "")
+        running = [sentence for sentence in sentences if "still running" in sentence]
+        assert running, name
+        for sentence in running:
+            assert "SAME job_id" in sentence, (name, sentence)
+            assert "flow_" not in sentence and "under a new one" not in sentence, (name, sentence)
+
+
 def _flag(argv, name):
     return argv[argv.index(name) + 1] if name in argv else None
 
@@ -709,19 +723,22 @@ def test_a_second_call_with_the_same_job_id_is_refused_while_the_first_still_run
     monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
     monkeypatch.setattr(mcp_server.gen_mod, "run_job", slow_run_job)
 
+    # A long id, so the guidance has to come before it to survive the 500-character cut on errors.
+    call = SPEND_CALLS["gen_t2v"] | {"job_id": "job-" + "x" * 600}
+
     async def fn(s):
         gate["started"], gate["release"] = asyncio.Event(), asyncio.Event()
-        first = asyncio.create_task(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])))
+        first = asyncio.create_task(s.call_tool("gen_t2v", dict(call)))
         await asyncio.wait_for(gate["started"].wait(), 5)
         try:
-            second = await asyncio.wait_for(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])), 5)
+            second = await asyncio.wait_for(s.call_tool("gen_t2v", dict(call)), 5)
             # A refused call must not clear the marker of the call that is still running.
-            again = await asyncio.wait_for(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])), 5)
+            again = await asyncio.wait_for(s.call_tool("gen_t2v", dict(call)), 5)
         finally:
             gate["release"].set()
         done = await first
         # Nothing was written, so once the first call is over the id is free again rather than stuck.
-        third = await asyncio.wait_for(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])), 5)
+        third = await asyncio.wait_for(s.call_tool("gen_t2v", dict(call)), 5)
         return done, second, again, third
 
     done, second, again, third = with_client(fn)
@@ -731,8 +748,59 @@ def test_a_second_call_with_the_same_job_id_is_refused_while_the_first_still_run
         # Review 2026-09-15: "start it under a new job_id only if it did not run" cannot be checked while the job is
         # still in flight (flow_media and flow_credits wait or see nothing yet), and following it pays twice.
         assert refused.is_error and "still running" in text and "SAME job_id" in text, text
-        assert "new job_id only if" not in text, text
+        assert "never start it under a new job_id" in text and "tell the owner" in text, text
+        assert "flow_media" not in text and "new job_id only if" not in text, text
     assert not third.is_error, _texts([third])
+
+
+def test_a_job_id_is_free_again_after_its_call_was_cancelled_without_writing_anything(monkeypatch, tmp_path):
+    # Re-review 2026-09-15: a client read timeout cancels the handler; the marker has to go then too, or every retry of
+    # an id that spent nothing is told it is still running until the server restarts.
+    calls = []
+    gate = {}
+
+    async def blocked_once(job, out_dir, **kwargs):
+        calls.append(job.job_id)
+        if len(calls) == 1:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                gate["cancelled"].set()
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", blocked_once)
+
+    async def fn(s):
+        gate["cancelled"] = asyncio.Event()
+        with pytest.raises(MCPError, match="timed out"):
+            await s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"]), read_timeout_seconds=0.3)
+        await asyncio.wait_for(gate["cancelled"].wait(), 5)
+        await asyncio.sleep(0.05)
+        return await asyncio.wait_for(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])), 5)
+
+    retry = with_client(fn)
+    assert not retry.is_error, _texts([retry])
+    assert calls == ["job-t2v", "job-t2v"]
+
+
+@pytest.mark.parametrize("path", ["out/ledger.jsonl", "out/s3/ledger.jsonl", "out/clip.mp4"])
+def test_an_editor_out_dir_that_is_a_ledger_or_a_file_is_refused_before_a_browser_opens(
+    monkeypatch, tmp_path, path
+):
+    # Re-review 2026-09-15: an out_dir copied from the "ledger" path clip_reconcile returns made the driver create a
+    # folder named ledger.jsonl, after which every spend reading that path failed with IsADirectoryError.
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "clip.mp4").write_bytes(b"")
+    reached = _spending_backend(monkeypatch, tmp_path / "out")
+
+    async def fn(s):
+        return await s.call_tool("clip_edit", SPEND_CALLS["clip_edit"] | {"out_dir": str(tmp_path / path)})
+
+    text = _texts([with_client(fn)])[0]
+    assert "out_dir must be a folder" in text, text
+    assert reached == []
+    assert not (tmp_path / "out" / "ledger.jsonl").is_dir()
 
 
 def test_a_job_id_is_free_again_after_its_call_failed_without_writing_anything(monkeypatch, tmp_path):

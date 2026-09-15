@@ -94,6 +94,9 @@ class Backend:
             raise ValueError(
                 f"out_dir must be inside {self.out_dir.resolve()} (outputs stay in out/), got {target}"
             )
+        # A ledger path would make the driver create a folder named ledger.jsonl, which every spend then reads.
+        if target.name == "ledger.jsonl" or (target.exists() and not target.is_dir()):
+            raise ValueError(f"out_dir must be a folder, not a ledger or another file, got {target}")
         return target
 
     async def _spend_once(self, job_id: str | None, out_dir: Path, run: Callable[[], Awaitable[Any]]) -> Any:
@@ -106,7 +109,8 @@ class Backend:
                 # new job_id if it did not run" would pay twice.
                 raise gen_mod.AlreadySubmitted(
                     "that job is still running in another call: wait for it to finish, then call again with the SAME "
-                    f"job_id; never start it under a new job_id, or it pays twice (job_id {job_id})"
+                    "job_id; never start it under a new job_id, or it pays twice; if it never finishes, stop and tell "
+                    f"the owner (job_id {job_id})"
                 )
             found = sorted(path for path in self.out_dir.rglob("ledger.jsonl") if path.is_file())
             ledgers = dict.fromkeys([*found, out_dir / "ledger.jsonl"])
@@ -363,10 +367,10 @@ server = TellingServer(
 
 _JOB_ID_RULE = (
     " job_id is required: use a new one for each new job, and keep the SAME one when calling again after an "
-    "error or a timeout. Any job_id already in a ledger under the out folder, or still running in another call, is "
-    "refused before a browser opens, so a retry never "
-    "pays twice; a refused job_id means that job may already have spent credits, so check flow_media and "
-    "flow_credits before starting it under a new one."
+    "error or a timeout. Any job_id already in a ledger under the out folder is refused before a browser opens, so a "
+    "retry never pays twice; that refusal means the job may already have spent credits, so check flow_media and "
+    "flow_credits before starting it under a new one. A job_id still running in another call is refused too: wait "
+    "for that call to finish and call again with the SAME job_id, never a new one."
 )
 
 
