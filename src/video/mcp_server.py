@@ -313,7 +313,7 @@ server = TellingServer(
         "unmeasured: ask the owner first. gen_t2i and gen_i2i are credit-free but draw on a daily image "
         "quota. Check a tool's description for its cost before calling it. Every call drives a real Chrome "
         "session and blocks until Flow answers: a read takes about 15-50 s and a change about 50 s, a generation "
-        "1.5-2 min, clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. The "
+        "2-5 min, clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. The "
         "credit-spending tools require a job_id. Never call one again under a new job_id because it was slow, "
         "errored or timed out: check flow_media and flow_credits first, and if you do call again keep the same "
         "job_id, which the ledger refuses instead of charging twice. When model is omitted gen_t2v and gen_i2v "
@@ -518,7 +518,8 @@ async def agent_mode(project_id: str, enabled: bool) -> str:
     description=(
         "Send a message to Flow's agent in a project. It may spend credits: 0 credits in 3 measured sends where "
         "the agent generated nothing, but a message that makes it generate media costs that generation's "
-        "price. Takes about 70-80 s." + _JOB_ID_RULE
+        "price. The send itself took 69-80 s in those runs, plus a balance read before and after."
+        + _JOB_ID_RULE
     ),
 )
 async def agent_send(project_id: str, message: str, job_id: str, wait: float = 60.0) -> str:
@@ -582,7 +583,7 @@ async def flow_uploads(project_id: str) -> str:
     name="clip_extend",
     description=(
         "Extend a clip with Veo 3.1 Lite. It spends credits and is ledgered: 10 credits per extend (measured). "
-        "Takes about 1.5-2 min, up to about 6 min when Flow is slow." + _JOB_ID_RULE
+        "Takes about 2-3 min, up to about 7 min when Flow is slow." + _JOB_ID_RULE
     ),
 )
 async def clip_extend(
@@ -600,7 +601,7 @@ async def clip_extend(
     name="clip_edit",
     description=(
         "Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledgered: 20 credits per "
-        "edit (measured). Takes about 1.5-2 min, up to about 6 min when Flow is slow." + _JOB_ID_RULE
+        "edit (measured). Takes about 2-3 min, up to about 7 min when Flow is slow." + _JOB_ID_RULE
     ),
 )
 async def clip_edit(
@@ -627,7 +628,8 @@ async def _gen(kind: str, **kwargs: Any) -> str:
     description=(
         "Text to video via gflow. It spends credits and is ledgered, measured on the PRO plan: omni-flash 10 s "
         "x1 = 15 credits (the default when model is omitted), veo-lite 8 s x1 = 10 credits, and count "
-        "multiplies it (veo-lite x2 = 20 credits). Takes about 75-85 s." + _JOB_ID_RULE
+        "multiplies it (veo-lite x2 = 20 credits). Allow 2-5 min: the gflow job took 74-85 s, plus a balance "
+        "read before and after." + _JOB_ID_RULE
     ),
 )
 async def gen_t2v(
@@ -656,8 +658,8 @@ async def gen_t2v(
     description=(
         "Image (first frame, optional last frame) to video via gflow. It spends credits and is ledgered; the "
         "price is unmeasured, because every attempt so far failed at Flow's frame picker and spent nothing, so "
-        "prefer gen_r2v with the frame as a reference. Uses omni-flash for 10 s when model is omitted."
-        + _JOB_ID_RULE
+        "prefer gen_r2v with the frame as a reference. Uses omni-flash for 10 s when model is omitted. Allow 2-5 "
+        "min." + _JOB_ID_RULE
     ),
 )
 async def gen_i2v(
@@ -687,10 +689,10 @@ async def gen_i2v(
 @server.tool(
     name="gen_r2v",
     description=(
-        "Reference images (ingredients) to video via gflow. It spends credits and is ledgered: veo-lite x1 = 10 "
-        "credits (measured); omni-flash, the default when model is omitted, is unmeasured. It always runs 8 s, "
-        "the only length this host offers references, so leave duration out. Takes about 100-120 s."
-        + _JOB_ID_RULE
+        "Reference images (ingredients) to video via gflow. It spends credits and is ledgered: omni-flash x1 = 12 "
+        "credits (the default when model is omitted, measured 2026-09-15) and veo-lite x1 = 10 credits "
+        "(measured). It always runs 8 s, the only length this host offers references, so leave duration out. "
+        "Allow 2-5 min: that omni-flash run took 292 s end to end." + _JOB_ID_RULE
     ),
 )
 async def gen_r2v(
