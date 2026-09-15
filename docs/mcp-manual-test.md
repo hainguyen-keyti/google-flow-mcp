@@ -72,7 +72,7 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `project_delete` | `project_id` | **xoá vĩnh viễn**; chỉ dùng cho id nháp |
 | `scene_create` | `project_id`, `title` | trả dict có `scene_id` |
 | `scene_delete` | `project_id`, `scene_id` | là "move to trash", scene vẫn còn trong `scene_list(include_trashed=true)`; lấy lại bằng `scene_restore` |
-| `scene_restore` | `project_id`, `scene_id` | lấy scene ra khỏi thùng rác, đọc lại listing rồi trả `{"scene_id", "trashed": false, "rpcids", "active"}`. Tile trong thùng rác không mang scene id nên tool tìm theo tên, và **từ chối khi tên khớp hơn một tile** |
+| `scene_restore` | `project_id`, `scene_id` | lấy scene ra khỏi thùng rác, đọc lại listing rồi trả `{"scene_id", "trashed": false, "rpcids", "active"}`. Tile trong thùng rác không mang scene id nên tool tìm theo tên, và **từ chối khi tên khớp hơn một tile** hoặc khi thùng rác hiện nhiều tile scene hơn số scene đã xoá trong listing |
 | `character_create` | `project_id`, `prompt`, `name`, `personality`, `wait=90` | chân dung vẽ bằng Nano Banana 2, **không tốn credit**. Trả `portrait.workflow_id`, **không phải media id**: lấy media id bằng `flow_characters` |
 | `character_delete` | `project_id`, `entity_id` | xoá vĩnh viễn nhân vật |
 | `flow_upload` | `project_id`, `path` | đường dẫn file trên máy; trả `{file, bytes, rpcids, tiles, media_id, workflow_id, size_bytes, ...}`. `media_id` là id dùng được với `flow_download`. `bytes` là file trên máy, `size_bytes` là bản Flow lưu (Flow nén ảnh lại: PNG 139 KB thành JPEG 5,6 KB). `tiles` đếm tile của view đang mở, không phải số upload |
@@ -80,14 +80,16 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 
 ### D. Tiêu credit, chỉ chạy khi bạn cố ý
 
-Cả 6 tool tốn credit **bắt buộc `job_id`**. `job_id` đã có bất kỳ dòng nào trong sổ bị từ chối ngay, trước khi mở
-trình duyệt. `clip_edit`, `clip_extend`, `agent_send` từ chối prompt có ký tự xuống dòng.
+Cả 6 tool tốn credit **bắt buộc `job_id`**. `job_id` đã có bất kỳ dòng nào trong mọi `ledger.jsonl` dưới `out/` bị từ
+chối ngay, trước khi mở trình duyệt; `job_id` đang chạy ở lời gọi khác cũng bị từ chối, lúc đó phải chờ rồi gọi lại
+với CÙNG `job_id`, không đổi id mới. `clip_edit`, `clip_extend`, `agent_send` từ chối prompt có ký tự xuống dòng;
+prompt toàn dấu cách bị từ chối; `out_dir` của `clip_edit`, `clip_extend` phải là thư mục nằm trong `out/`.
 
 | Tool | Giá đã đo | Ghi chú |
 |---|---|---|
 | `gen_t2i`, `gen_i2i` | **0 credit** (nano2) | tính vào quota ảnh theo ngày, không phải credit |
 | `gen_t2v` | **15** khi bỏ trống model (omni-flash 10 s, count 1); **10** với `model="veo-lite"` (8 s) | `count` nhân giá (veo-lite `count=2` là 20); `count` phải 1-4, `aspect` chỉ `9:16` hoặc `16:9` |
-| `gen_r2v` | **12** khi bỏ trống model (omni-flash, luôn 8 s, đo 2026-09-15); **10** với `model="veo-lite"` | host này chỉ cho r2v 8 s: đừng truyền `duration`. Flow từ chối ảnh có người mặc đồ lót |
+| `gen_r2v` | **12** khi bỏ trống model (omni-flash, luôn 8 s, đo 2026-09-15); **10** với `model="veo-lite"` | host này chỉ cho r2v 8 s: đừng truyền `duration` (truyền 8 cũng không được gửi đi). Số ảnh: omni-flash tối đa 7, veo-lite và veo-fast tối đa 3, veo-quality không nhận ảnh; quá số bị từ chối trước khi tiêu. Flow từ chối ảnh có người mặc đồ lót |
 | `gen_i2v` | **chưa đo** | chưa lần nào thành công: mọi lần thử đều hỏng phía Flow ở bước chọn khung đầu, 0 credit. Đường thay thế là `gen_r2v` |
 | `clip_extend` | **10** | tạo scene mới và chép clip nguồn vào đó |
 | `clip_edit` | **20** | Omni 1.1 Flash, sửa video theo chữ |
@@ -132,7 +134,7 @@ Cuối cùng: liệt kê tool nào chạy đúng, tool nào sai hoặc báo lỗ
    - `out/credits.jsonl`: hai dòng có giờ, khớp với số dư trước và sau.
 5. **Không bao giờ bấm lại khi nghi ngờ.** Flow có thể nhận cú bấm, bắn request, rồi không tạo job và không trừ
    tiền. Kết luận thành hay bại bằng `flow_media` cộng số dư, đừng bằng cách gọi lại. Lỡ gọi lại cùng job thì giữ
-   đúng `job_id` cũ: sổ từ chối ngay (`already has a submitted row`), không trừ tiền lần hai.
+   đúng `job_id` cũ: sổ từ chối ngay (`already has ledger rows`), không trừ tiền lần hai.
 
 ## 6. Bẫy đã đo, sẽ gặp khi bấm tay
 

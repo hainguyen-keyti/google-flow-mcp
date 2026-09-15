@@ -140,14 +140,20 @@ mặt, tay và món đồ.
 
 - **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
   `clip_edit`, `agent_send` (có thể tốn). Cả 6 tool **bắt buộc `job_id`**: job mới thì id mới, gọi lại cùng job
-  thì giữ id. `job_id` đã có BẤT KỲ dòng nào trong sổ (kể cả `opening`, ở sổ mặc định lẫn sổ trong `out_dir`) bị từ
-  chối trước khi mở trình duyệt, kèm lời dặn soát `flow_media` và `flow_credits`, nên gọi lại không bao giờ trả tiền
-  hai lần. `clip_edit`, `clip_extend`, `agent_send` từ chối prompt có ký tự xuống dòng, vì ô của Flow nhận nó như
-  phím Enter trước khi sổ kịp ghi dòng `submitted`.
+  thì giữ id. Trước khi mở trình duyệt, MCP từ chối `job_id` đã có BẤT KỲ dòng nào (kể cả `opening`) trong mọi file
+  `ledger.jsonl` dưới `out/`, kèm lời dặn soát `flow_media` và `flow_credits`, nên gọi lại không bao giờ trả tiền hai
+  lần. `job_id` đang chạy ở một lời gọi khác cũng bị từ chối, với lời dặn khác hẳn: chờ lời gọi đó xong rồi gọi lại
+  với CÙNG `job_id`, không bao giờ đổi id mới (lúc job còn đang bay, `flow_media` và `flow_credits` chưa thấy gì).
+  `clip_extend` và `clip_edit` chỉ nhận `out_dir` là thư mục nằm trong `out/` (không phải file, không phải đường dẫn
+  sổ `ledger.jsonl`). Prompt hay message toàn dấu cách bị từ chối; `clip_edit`, `clip_extend`, `agent_send` từ chối
+  prompt có ký tự xuống dòng, vì ô của Flow nhận nó như phím Enter trước khi sổ kịp ghi dòng `submitted`.
 - **Model mặc định qua MCP**: bỏ trống model thì `gen_t2v` và `gen_i2v` dùng `omni-flash` 10 s, còn `gen_r2v` dùng
-  `omni-flash` 8 s, độ dài duy nhất host này cho r2v (gflow tự ghim; truyền độ dài khác bị từ chối). Model veo thì
-  duration để Flow tự chọn (veo tối đa 8 s). Model và duration được kiểm theo đúng luật của gflow TRƯỚC khi ghi sổ,
-  để một giá trị gflow sẽ từ chối không đốt mất `job_id`. CLI `video gen` giữ nguyên.
+  `omni-flash` 8 s, độ dài duy nhất host này cho r2v. `gen_r2v` không bao giờ gửi `--duration` cho gflow, kể cả khi
+  truyền 8: gflow tự ghim 8 s, còn độ dài gửi tường minh làm gflow exit 11 ở cohort không có hàng duration; độ dài
+  khác 8 bị từ chối. Số ảnh tham chiếu của `gen_r2v` theo `reference_cap_for` của gflow: omni-flash tối đa 7,
+  veo-lite, veo-fast, veo-lite-lp tối đa 3, veo-quality không nhận ảnh. Model veo thì duration để Flow tự chọn (veo
+  tối đa 8 s). Model, duration, số ảnh được kiểm theo đúng luật của gflow TRƯỚC khi ghi sổ, để một giá trị gflow sẽ
+  từ chối không đốt mất `job_id`. CLI `video gen` giữ nguyên.
 - **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
 - **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media` (luôn trả một object,
   `all_versions=true` thêm khoá `versions`), `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
@@ -157,7 +163,8 @@ mặt, tay và món đồ.
   project khác ra `skipped`; sổ không có gì để chấm thì trả ngay, không mở Chrome).
 - **Miễn phí nhưng ĐỔI project thật**: `project_create`, `project_rename` (đọc lại tên trên grid rồi mới trả
   `{id, title}`), `project_delete`, `character_create`, `character_delete`, `scene_create`, `scene_delete`,
-  `scene_restore` (lấy scene ra khỏi thùng rác, từ chối khi tên khớp hơn một tile), `agent_mode`, `flow_upload`.
+  `scene_restore` (lấy scene ra khỏi thùng rác, từ chối khi tên khớp hơn một tile hoặc khi thùng rác hiện nhiều tile
+  scene hơn số scene đã xoá trong listing), `agent_mode`, `flow_upload`.
 - **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
   hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
 
@@ -176,7 +183,9 @@ Mọi tool dùng trình duyệt xếp hàng qua một khoá phiên. Client hết
 huỷ handler; lời gọi bị huỷ trong lúc chờ khoá trước đây vẫn lấy khoá rồi giữ luôn, làm treo mọi tool sau đó tới khi
 khởi động lại server (đo 2026-09-15). Giờ khoá được chờ bằng vòng hỏi không chặn, bị huỷ thì không cầm gì. Lời gọi
 bị huỷ khi ĐANG giữ trình duyệt cũng vẫn thoát client của gflow (chỗ trả khoá profile), kể cả khi đóng trang lỗi;
-trước đây mọi lời gọi sau nó lỗi `ProfileLockedError` tới khi khởi động lại.
+trước đây mọi lời gọi sau nó lỗi `ProfileLockedError` tới khi khởi động lại. Teardown chờ `page.close()` tối đa 10 s
+(`PAGE_CLOSE_TIMEOUT_S`): quá hạn thì ghi cảnh báo rồi vẫn thoát client và trả khoá, không ném lỗi đè lên kết quả thật
+của lời gọi; lời gọi bị huỷ trong lúc đó vẫn bị huỷ.
 
 ## Acceptance
 
