@@ -328,35 +328,58 @@ def _stuck_editor_jobs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(first.values())
 
 
-def _editor_verdict(row: dict[str, Any], records: list[dict[str, Any]], credits_now: int) -> str:
+def _taken_elsewhere(rows: list[dict[str, Any]], job_id: str) -> set[str]:
+    """Workflows another job's outputs already hold: one record is never two jobs' output (DECISIONS 2026-09-15)."""
+    return {
+        output.get("workflow_id")
+        for row in rows
+        if row.get("job_id") != job_id
+        for output in row.get("outputs") or []
+        if output.get("role") == "generated"
+    }
+
+
+def _editor_verdict(
+    row: dict[str, Any], records: list[dict[str, Any]], credits_now: int, taken: set[str]
+) -> tuple[str, dict[str, Any] | None]:
     """What really happened, judged by ground truth only, never by the editor's own say-so.
 
     Stricter than `story.pipeline.reconcile_decision` on `failed` (DECISIONS 2026-09-15): the balance has been
     measured moving with no spend (195 to 245 overnight), so an equal one proves nothing alone, while a job that
     spent has always left a record in the listing. A record is new when its workflow is missing from the
     `workflows_before` the job wrote as it opened, whatever its time: Flow's clock and this Mac's disagree, and a
-    clip's `created` is stamped at submit. `failed` needs an equal balance and no new record at all. A listing
-    without the job's own clip holds no evidence about the job, and a clip the row never saw would make every one
-    of its records look new: both are `unknown`.
+    clip's `created` is stamped at submit. `done` needs a new, finished record carrying the job's own prompt that no
+    other job's outputs hold, the same prompt test the driver uses: an extend's clip lands on a new media id and a
+    free upscale adds a promptless version (measured 2026-09-15). `failed` needs an equal balance and no new record
+    at all, taken or not. A listing without the job's own clip holds no evidence about the job, and a clip the row
+    never saw would make every one of its records look new: both are `unknown`.
     """
     media_id = row.get("source_media_id")
     before = set(row["workflows_before"])
     if not any(r.get("id") == media_id and r.get("workflow_id") in before for r in records):
-        return "unknown"
+        return "unknown", None
     fresh = new_records(before, records)
-    if any(r.get("id") == media_id for r in fresh):
-        return "done"
+    prompt = row["prompt"].strip()
+    ours = [
+        r
+        for r in fresh
+        if r["workflow_id"] not in taken and (r.get("prompt") or "").strip() == prompt and is_done(r)
+    ]
+    if ours:
+        return "done", ours[0]
     if credits_now == row.get("credits_before") and not fresh:
-        return "failed"
-    return "unknown"
+        return "failed", None
+    return "unknown", None
 
 
 def _judgeable(row: dict[str, Any], project_id: str) -> bool:
-    """An editor job of this project whose opening row lists the workflows it saw: the only kind reconcile judges."""
+    """An editor job of this project whose opening row lists the workflows it saw and its prompt: the only kind
+    reconcile judges."""
     return (
         bool(row.get("source_media_id"))
         and row.get("project") == project_id
         and row.get("workflows_before") is not None
+        and bool((row.get("prompt") or "").strip())
     )
 
 
@@ -401,12 +424,24 @@ async def reconcile_editor(
             )
             continue
         if not _judgeable(row, project_id):
-            # Written before opening rows listed their workflows (DECISIONS 2026-09-15): left for a person.
+            # Written before opening rows listed their workflows and prompt (DECISIONS 2026-09-15): left for a person.
             out.append({"job_id": row["job_id"], "verdict": "unknown", "credits_now": credits_now})
             continue
-        verdict = _editor_verdict(row, records, credits_now)
+        # Read again per job, so a record given to a job earlier in this pass is taken for the next one.
+        taken = _taken_elsewhere(ledger.rows(), row["job_id"])
+        verdict, record = _editor_verdict(row, records, credits_now, taken)
         before = row.get("credits_before")
         if verdict != "unknown":
+            outputs = []
+            if record is not None:
+                outputs = [
+                    {
+                        "media_id": record["id"],
+                        "workflow_id": record["workflow_id"],
+                        "role": "generated",
+                        "status": record["status"],
+                    }
+                ]
             ledger.append(
                 row["job_id"],
                 verdict,
@@ -415,6 +450,7 @@ async def reconcile_editor(
                 credits_before=before,
                 credits_after=credits_now,
                 spent=(before - credits_now) if before is not None else None,
+                outputs=outputs,
                 reconciled="checked the listing and the credit balance",
             )
         out.append({"job_id": row["job_id"], "verdict": verdict, "credits_now": credits_now})

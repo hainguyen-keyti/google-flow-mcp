@@ -1104,6 +1104,16 @@ def test_clip_reconcile_opens_no_browser_when_no_job_can_be_judged_here(monkeypa
         "b", "opening", kind="edit", source_media_id="m", credits_before=295, project="Q", workflows_before=[]
     )
     ledger.append("old", "opening", kind="extend", source_media_id="m", credits_before=295)
+    # An opening row of this project that names no prompt cannot be judged either (DECISIONS 2026-09-15).
+    ledger.append(
+        "noprompt",
+        "opening",
+        kind="edit",
+        source_media_id="m",
+        credits_before=295,
+        project="P",
+        workflows_before=["w"],
+    )
     # A settled job of this project is not open, so it is no reason to read the listing either.
     ledger.append(
         "s", "opening", kind="edit", source_media_id="m", credits_before=295, project="P", workflows_before=[]
@@ -1124,13 +1134,21 @@ def test_clip_reconcile_opens_no_browser_when_no_job_can_be_judged_here(monkeypa
         ("g", "skipped"),
         ("b", "skipped"),
         ("old", "unknown"),
+        ("noprompt", "unknown"),
     ]
 
 
 def test_clip_reconcile_opens_the_browser_when_a_job_of_this_project_can_be_judged(monkeypatch, tmp_path):
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     ledger.append(
-        "j", "opening", kind="edit", source_media_id="m", credits_before=295, project="P", workflows_before=[]
+        "j",
+        "opening",
+        kind="edit",
+        source_media_id="m",
+        credits_before=295,
+        project="P",
+        workflows_before=[],
+        prompt="make it night",
     )
     opened = []
 

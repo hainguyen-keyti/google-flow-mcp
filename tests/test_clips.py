@@ -453,20 +453,30 @@ def _reconcile_world(monkeypatch, records, balance):
     monkeypatch.setattr(clips.reader, "credits", fake_credits)
 
 
-def _record(media_id: str, created: float) -> dict:
+JOB_PROMPT = "make it night"
+
+
+def _record(media_id: str, created: float, prompt: str = "whatever") -> dict:
     return {
         "id": media_id,
         "workflow_id": f"w-{created:.0f}",
         "created": created,
         "status": 3,
         "url": "https://x/n",
-        "prompt": "whatever",
+        "prompt": prompt,
     }
 
 
 def _opening(ledger: gen.Ledger, job_id: str, media_id: str, **fields) -> float:
-    """An editor job's opening row as the driver writes it (project "p", one workflow listed); returns its time."""
-    row = {"kind": "edit", "credits_before": 295, "project": "p", "workflows_before": ["w-100"], **fields}
+    """An editor job's opening row as the driver writes it (project "p", one workflow listed, JOB_PROMPT typed)."""
+    row = {
+        "kind": "edit",
+        "credits_before": 295,
+        "project": "p",
+        "workflows_before": ["w-100"],
+        "prompt": JOB_PROMPT,
+        **fields,
+    }
     ledger.append(job_id, "opening", source_media_id=media_id, **row)
     return ledger.rows(job_id)[0]["ts"]
 
@@ -477,7 +487,7 @@ def test_reconcile_closes_an_orphan_as_done_when_the_media_gained_a_record(monke
     # clip: every extend on record got a new media id (review 2026-09-15).
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     _opening(ledger, "j", "src-1")
-    _reconcile_world(monkeypatch, [_record("src-1", 100), _record("src-1", 200)], balance=275)
+    _reconcile_world(monkeypatch, [_record("src-1", 100), _record("src-1", 200, JOB_PROMPT)], balance=275)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
@@ -486,6 +496,101 @@ def test_reconcile_closes_an_orphan_as_done_when_the_media_gained_a_record(monke
     assert [r["status"] for r in rows] == ["opening", "done"]
     assert rows[-1]["spent"] == 20
     assert rows[-1]["credits_after"] == 275
+    # Written into the done row so no other job can take the same record (DECISIONS 2026-09-15).
+    assert rows[-1]["outputs"] == [
+        {"media_id": "src-1", "workflow_id": "w-200", "role": "generated", "status": 3}
+    ]
+
+
+def test_reconcile_closes_an_extend_as_done_when_its_prompt_shows_up_on_a_new_clip(monkeypatch, tmp_path):
+    # Review 2026-09-15: a real extend puts its clip on a NEW media id next to a copy of the source (out/acceptance5,
+    # out/acceptance3), so "a new version of the source clip" never found one; the driver itself goes by the prompt.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "x", "src-15", kind="extend", prompt="keep going")
+    listing = [
+        _record("src-15", 100),
+        _record("copy-15", 300, "the source prompt"),
+        _record("new-15", 400, "keep going"),
+    ]
+    _reconcile_world(monkeypatch, listing, balance=285)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["done"]
+    rows = ledger.rows("x")
+    assert [r["status"] for r in rows] == ["opening", "done"]
+    assert rows[-1]["outputs"] == [
+        {"media_id": "new-15", "workflow_id": "w-400", "role": "generated", "status": 3}
+    ]
+
+
+def test_reconcile_never_takes_an_upscale_for_the_jobs_own_record(monkeypatch, tmp_path):
+    # Probe 2026-09-15 (out/upscale-probe-1789471163): a free 1080p download adds a version on the same media with a
+    # new workflow id ending in _upsampled and no prompt, which the old rule wrote up as `done, spent: 0`.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "u", "src-16")
+    upscale = {**_record("src-16", 100, ""), "workflow_id": "w-100_upsampled"}
+    _reconcile_world(monkeypatch, [_record("src-16", 100), upscale], balance=295)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("u")] == ["opening"]
+
+
+@pytest.mark.parametrize("balance", [275, 295])
+def test_reconcile_leaves_a_record_another_job_already_holds_to_that_job(monkeypatch, tmp_path, balance):
+    # Review 2026-09-15: a job that died before submitting was retried under a new job_id; the retry spent 20 and
+    # listed its record, yet reconcile gave the same record to the dead job, so the ledger counted 40 for one edit.
+    # The taken record still counts as new for `failed`, whatever the balance (DECISIONS 2026-09-15).
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "dead", "src-17")
+    _opening(ledger, "retry", "src-17")
+    taken = [{"media_id": "src-17", "workflow_id": "w-200", "role": "generated"}]
+    ledger.append("retry", "done", outputs=taken, spent=20)
+    _reconcile_world(
+        monkeypatch, [_record("src-17", 100), _record("src-17", 200, JOB_PROMPT)], balance=balance
+    )
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "dead", "verdict": "unknown", "credits_now": balance}]
+    assert [r["status"] for r in ledger.rows("dead")] == ["opening"]
+
+
+def test_reconcile_leaves_a_job_open_while_its_record_is_still_rendering(monkeypatch, tmp_path):
+    # DECISIONS 2026-09-15: `done` waits for the job's record to be finished (is_done), so a reconcile run too early
+    # leaves the job open and a later run closes it.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-18")
+    rendering = {**_record("src-18", 200, JOB_PROMPT), "status": 1, "url": None}
+    _reconcile_world(monkeypatch, [_record("src-18", 100), rendering], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
+def test_reconcile_never_judges_an_opening_row_without_its_prompt(monkeypatch, tmp_path):
+    # Rows written before opening rows carried the prompt (DECISIONS 2026-09-15) cannot tell the job's own record from
+    # an upscale or another job's: left for a person, with no listing read.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        "old",
+        "opening",
+        kind="edit",
+        source_media_id="src-19",
+        credits_before=295,
+        project="p",
+        workflows_before=["w-100"],
+    )
+    _no_flow_reads(monkeypatch)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "old", "verdict": "unknown", "credits_now": None}]
+    assert [r["status"] for r in ledger.rows("old")] == ["opening"]
 
 
 def test_reconcile_closes_an_orphan_as_failed_when_the_balance_never_moved(monkeypatch, tmp_path):
@@ -549,7 +654,7 @@ def test_reconcile_judges_a_reused_job_id_by_its_first_opening_row(monkeypatch, 
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     _opening(ledger, "j", "src-12", credits_before=295, workflows_before=["w-100"])
     _opening(ledger, "j", "src-12", credits_before=275, workflows_before=["w-100", "w-200"])
-    _reconcile_world(monkeypatch, [_record("src-12", 100), _record("src-12", 200)], balance=275)
+    _reconcile_world(monkeypatch, [_record("src-12", 100), _record("src-12", 200, JOB_PROMPT)], balance=275)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
@@ -588,7 +693,7 @@ def test_reconcile_judges_editor_rows_and_skips_the_rest_in_one_pass(monkeypatch
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     _opening(ledger, "e", "src-6")
     ledger.append("g", "submitted", kind="r2v", argv=["video", "r2v"], credits_before=295)
-    _reconcile_world(monkeypatch, [_record("src-6", 100), _record("src-6", 200)], balance=285)
+    _reconcile_world(monkeypatch, [_record("src-6", 100), _record("src-6", 200, JOB_PROMPT)], balance=285)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 

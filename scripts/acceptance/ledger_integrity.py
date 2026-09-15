@@ -29,6 +29,7 @@ from video.flow import clips
 
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 PROMPT = "keep going"
+JOB_PROMPT = "make it night"
 START_BALANCE = 295
 AFTER_BALANCE = 275
 
@@ -124,21 +125,22 @@ def _reads(balance=START_BALANCE, records=None, scenes=None):
     return fake_snapshot, fake_credits
 
 
-def _record(media_id: str, created: float) -> dict:
+def _record(media_id: str, created: float, prompt: str = PROMPT) -> dict:
     return {
         "id": media_id,
         "workflow_id": f"w-{created:.0f}",
         "created": created,
         "status": 3,
         "url": "https://example/n",
-        "prompt": PROMPT,
+        "prompt": prompt,
     }
 
 
 def _opening(ledger: gen.Ledger, job_id: str, media_id: str, **fields) -> None:
-    """An editor job's opening row as the driver writes it: project "p", the one workflow `_record(_, 1)` makes."""
+    """An editor job's opening row as the driver writes it: project "p", the one workflow `_record(_, 1)` makes, and
+    JOB_PROMPT, which only the job's own record carries."""
     row = {"kind": "edit", "credits_before": START_BALANCE, "project": "p", "workflows_before": ["w-1"]}
-    ledger.append(job_id, "opening", source_media_id=media_id, **{**row, **fields})
+    ledger.append(job_id, "opening", source_media_id=media_id, **{**row, "prompt": JOB_PROMPT, **fields})
 
 
 def check_intent_extend(tmp: Path) -> tuple[str, str]:
@@ -268,26 +270,41 @@ def check_retry_not_blocked(tmp: Path) -> tuple[str, str]:
 
 
 def check_reconcile_done(tmp: Path) -> tuple[str, str]:
-    """A record on the clip that the opening row did not list, plus a balance that fell, means the job really ran.
+    """A finished record the opening row did not list, carrying the job's own prompt, means the job really ran: an
+    edit's version on the source clip, or an extend's clip on a new media id beside a copy of the source.
 
-    An edit, because only an edit puts its version on the source clip; an extend's clip gets a new media id.
+    The record goes into the done row's outputs, so no other job can be given it later (DECISIONS 2026-09-15).
     """
-    ledger = gen.Ledger(tmp / "ledger.jsonl")
-    _opening(ledger, "d", "src-4")
-    snapshot, credits = _reads(balance=AFTER_BALANCE, records=[_record("src-4", 1), _record("src-4", 2)])
-    original = _patch(_snapshot=snapshot)
-    clips.reader.credits = credits
-    try:
-        out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp))
-    finally:
-        _restore(original)
-    rows = gen.Ledger(tmp / "ledger.jsonl").rows("d")
-    ok = (
-        [r["verdict"] for r in out] == ["done"]
-        and [r["status"] for r in rows] == ["opening", "done"]
-        and rows[-1].get("spent") == START_BALANCE - AFTER_BALANCE
+    cases = {
+        "edit": ([_record("src-4", 1), _record("src-4", 2, JOB_PROMPT)], ("src-4", "w-2")),
+        "extend": (
+            [_record("src-4", 1), _record("copy-4", 3), _record("new-4", 4, JOB_PROMPT)],
+            ("new-4", "w-4"),
+        ),
+    }
+    seen = {}
+    for kind, (records, expected) in cases.items():
+        room = tmp / kind
+        room.mkdir(parents=True, exist_ok=True)
+        _opening(gen.Ledger(room / "ledger.jsonl"), "d", "src-4", kind=kind)
+        snapshot, credits = _reads(balance=AFTER_BALANCE, records=records)
+        original = _patch(_snapshot=snapshot)
+        clips.reader.credits = credits
+        try:
+            out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=room))
+        finally:
+            _restore(original)
+        rows = gen.Ledger(room / "ledger.jsonl").rows("d")
+        taken = [(o.get("media_id"), o.get("workflow_id")) for o in rows[-1].get("outputs") or []]
+        seen[kind] = ([r["verdict"] for r in out], [r["status"] for r in rows], rows[-1].get("spent"), taken)
+    ok = all(
+        verdicts == ["done"]
+        and statuses == ["opening", "done"]
+        and spent == START_BALANCE - AFTER_BALANCE
+        and taken == [cases[kind][1]]
+        for kind, (verdicts, statuses, spent, taken) in seen.items()
     )
-    return ("PASS" if ok else "FAIL"), f"verdicts={[r['verdict'] for r in out]} spent={rows[-1].get('spent')}"
+    return ("PASS" if ok else "FAIL"), str(seen)
 
 
 def check_reconcile_failed(tmp: Path) -> tuple[str, str]:
@@ -317,20 +334,35 @@ def check_reconcile_failed(tmp: Path) -> tuple[str, str]:
 def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
     """Either sign alone is no proof, so nothing may be written: a record the job did not list while the balance
     never moved, or a balance that moved while nothing is new (the balance moves with no spend, 195 to 245). Nor
-    may a job whose opening row never saw its clip be judged: every record of that clip would look new.
+    may a job whose opening row never saw its clip be judged: every record of that clip would look new. A free 1080p
+    upscale (new workflow `..._upsampled`, no prompt, measured 2026-09-15) is not the job's record, and neither is a
+    record another job's outputs already hold, which still counts as new against `failed`.
 
     Each case gets its own ledger, since one reconcile reads one balance for every job.
     """
+    upscale = {**_record("src-6", 1, ""), "workflow_id": "w-1_upsampled"}
     cases = {
-        "new_record": (START_BALANCE, [_record("src-6", 1), _record("elsewhere", 2)], ["w-1"]),
-        "balance_moved": (AFTER_BALANCE, [_record("src-6", 1)], ["w-1"]),
-        "clip_unseen_at_open": (START_BALANCE, [_record("src-6", 1), _record("elsewhere", 2)], ["w-2"]),
+        "new_record": (START_BALANCE, [_record("src-6", 1), _record("elsewhere", 2)], ["w-1"], []),
+        "balance_moved": (AFTER_BALANCE, [_record("src-6", 1)], ["w-1"], []),
+        "clip_unseen_at_open": (START_BALANCE, [_record("src-6", 1), _record("elsewhere", 2)], ["w-2"], []),
+        "upscale": (START_BALANCE, [_record("src-6", 1), upscale], ["w-1"], []),
+        "taken_by_another_job": (
+            START_BALANCE,
+            [_record("src-6", 1), _record("src-6", 2, JOB_PROMPT)],
+            ["w-1"],
+            ["w-2"],
+        ),
     }
     seen = {}
-    for name, (balance, records, listed) in cases.items():
+    for name, (balance, records, listed, taken) in cases.items():
         room = tmp / name
         room.mkdir(parents=True, exist_ok=True)
         _opening(gen.Ledger(room / "ledger.jsonl"), "u", "src-6", workflows_before=listed)
+        if taken:
+            outputs = [
+                {"media_id": "src-6", "workflow_id": workflow, "role": "generated"} for workflow in taken
+            ]
+            gen.Ledger(room / "ledger.jsonl").append("other", "done", outputs=outputs, spent=20)
         snapshot, credits = _reads(balance=balance, records=records)
         original = _patch(_snapshot=snapshot)
         clips.reader.credits = credits
