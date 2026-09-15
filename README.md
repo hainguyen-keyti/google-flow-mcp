@@ -53,12 +53,18 @@ uv run video flow agent send <project> "<message>"   # agent có thể tự sinh
 Prompt của `clip extend|edit` và message của `agent send` phải một dòng: ô của Flow nhận ký tự xuống dòng như phím
 Enter, và việc gõ diễn ra trước khi sổ ghi `submitted`. Cả CLI (exit 2, chưa mở Chrome) lẫn driver đều từ chối.
 
-`clip reconcile` chỉ chấm job editor (hàng có `source_media_id`), và chỉ khi listing của project đang đọc có clip
-nguồn của job: dòng sổ không ghi project, nên thiếu clip đó thì có thể là job của project khác, ra `unknown`. `done`
-khi clip nguồn có version mới từ lúc job mở; `failed` khi số dư không đổi VÀ project không có record nào mới từ lúc
-job mở, trong đó record không có giờ hoặc tạo trong vòng 5 phút trước lúc job mở cũng tính là mới (số dư đã được đo
-là tự đổi mà không tiêu gì, và đồng hồ của Flow với máy này có thể lệch); còn lại `unknown`, để người quyết. Job gen
-và agent trả `skipped` và không bao giờ bị ghi.
+`clip reconcile` chỉ chấm job editor của đúng project đang đọc. Dòng `opening` của job ghi `project` và
+`workflows_before` (mọi workflow id listing có ngay trước khi job mở); "record mới" là record có workflow id ngoài tập
+đó, không so giờ, vì đồng hồ của Flow với máy này lệch nhau và `created` của clip đóng dấu lúc submit.
+- `done` khi clip nguồn có version mới. Edit tạo version như vậy, nhưng upscale 1080p (0 credit) cũng tạo, nên xem
+  `spent` và đúng version trước khi coi là output của edit. Extend tạo clip với media id mới, nên extend đã tiêu vẫn
+  ra `unknown`.
+- `failed` khi số dư không đổi VÀ project không có record mới (số dư đã được đo là tự đổi mà không tiêu gì).
+- `unknown` cho mọi ca còn lại, để người quyết; kể cả khi listing không còn record nào của clip nguồn mà job đã thấy,
+  và với dòng `opening` ghi trước khi có `workflows_before`.
+- `skipped` cho job gen và agent, và cho job editor của project khác (kèm `project`). Hai loại này không bao giờ bị ghi.
+
+Sổ không có job nào chấm được thì lệnh trả lời ngay, không mở Chrome.
 
 Sinh nội dung, tốn credit (video) hoặc quota (ảnh), luôn cần `--project`:
 
@@ -147,7 +153,8 @@ mặt, tay và món đồ.
   `all_versions=true` thêm khoá `versions`), `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
   tự mở project đầu tiên trên grid), `flow_uploads`, `scene_list`, `flow_download` (ghi file vào thư mục đích),
   `clip_reconcile` (đọc listing và số dư, ghi ledger, không sinh gì; trả kèm đường dẫn sổ đã đọc, sổ có tồn tại
-  không và số dòng, để `jobs: []` không bị hiểu nhầm là sạch khi đọc nhầm chỗ; job gen và agent ra `skipped`).
+  không và số dòng, để `jobs: []` không bị hiểu nhầm là sạch khi đọc nhầm chỗ; job gen, job agent và job editor của
+  project khác ra `skipped`; sổ không có gì để chấm thì trả ngay, không mở Chrome).
 - **Miễn phí nhưng ĐỔI project thật**: `project_create`, `project_rename` (đọc lại tên trên grid rồi mới trả
   `{id, title}`), `project_delete`, `character_create`, `character_delete`, `scene_create`, `scene_delete`,
   `scene_restore` (lấy scene ra khỏi thùng rác, từ chối khi tên khớp hơn một tile), `agent_mode`, `flow_upload`.
