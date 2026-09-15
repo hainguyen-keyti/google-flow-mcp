@@ -1,7 +1,8 @@
 """Spend-side wrappers around gflow with an append-only ledger.
 
 I1: the "submitted" row is written before gflow is spawned and a job id that already has one is
-refused. I5: credits are read before and after every job. I2: rows are scrubbed before they touch disk.
+refused. I5: credits are read before and after every job. I2: every string in a row is scrubbed on its own before
+the row touches disk, and a job id the scrub would change is refused, since it could never be found again.
 """
 
 from __future__ import annotations
@@ -98,6 +99,28 @@ def _scrub(text: str) -> str:
     return _SCRUB.sub("[redacted]", text)
 
 
+def _scrubbed(value: Any) -> Any:
+    """Scrub each string a row carries on its own, so the scrub can never eat the JSON around it."""
+    if isinstance(value, str):
+        return _scrub(value)
+    if isinstance(value, Path):
+        return _scrub(str(value))
+    if isinstance(value, dict):
+        return {key: _scrubbed(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_scrubbed(item) for item in value]
+    return value
+
+
+def check_job_id(job_id: str) -> None:
+    """Refuse a job id the scrub would rewrite: stored as another id, no later check could ever find it."""
+    if _scrub(job_id) != job_id:
+        raise ValueError(
+            "job_id must not hold session-like text (a cookie name or an Authorization header), since the ledger "
+            f"would store it as {_scrub(job_id)!r} and never find it again"
+        )
+
+
 def gflow_problem(stderr: str) -> dict[str, Any]:
     """The last structured error gflow printed: error_class, title, detail, route, incident id."""
     for line in reversed(stderr.splitlines()):
@@ -125,10 +148,11 @@ class Ledger:
         self.path = Path(path)
 
     def append(self, job_id: str, status: str, **fields: Any) -> None:
+        check_job_id(job_id)
         row = {"ts": time.time(), "job_id": job_id, "status": status, **fields}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(_scrub(json.dumps(row, ensure_ascii=False, default=str)) + "\n")
+            handle.write(json.dumps(_scrubbed(row), ensure_ascii=False, default=str) + "\n")
 
     def rows(self, job_id: str | None = None) -> list[dict[str, Any]]:
         if not self.path.exists():

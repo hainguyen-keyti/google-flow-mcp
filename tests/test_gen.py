@@ -122,6 +122,55 @@ def test_ledger_scrubs_session_material(tmp_path):
     assert "SAPISID=" not in text and "__Secure-" not in text and "Authorization:" not in text
 
 
+def test_ledger_rows_stay_readable_json_whatever_strings_they_carry(tmp_path):
+    # Review of plan B (HANDOFF ngã rẽ 5): the scrub ran over the whole JSON line, so "Authorization: denied" in a prompt
+    # ate the quote and comma after it, and every later read of any ledger under out/ failed with JSONDecodeError.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        "job-a",
+        "submitted",
+        prompt="Authorization: denied, then SAPISID=abc",
+        argv=["video", "t2v", "__Secure-1PSID=def", "--json"],
+        outputs=[{"note": "Authorization: Bearer ya29.x"}],
+    )
+    ledger.append("job-b", "planned", prompt="plain")
+
+    rows = ledger.rows()
+
+    assert [row["job_id"] for row in rows] == ["job-a", "job-b"]
+    text = (tmp_path / "ledger.jsonl").read_text(encoding="utf-8")
+    assert "SAPISID=" not in text and "__Secure-" not in text and "Authorization:" not in text
+    assert rows[0]["argv"][:2] == ["video", "t2v"] and rows[0]["argv"][-1] == "--json"
+    assert "[redacted]" in rows[0]["prompt"] and "[redacted]" in rows[0]["outputs"][0]["note"]
+
+
+@pytest.mark.parametrize("job_id", ["__Secure- x", "run SAPISID=1", "Authorization: me"])
+def test_the_ledger_refuses_a_job_id_the_scrub_would_change(tmp_path, job_id):
+    # Review of plan B (HANDOFF ngã rẽ 5): "__Secure- x" was stored as "[redacted] x", so the next call with the same id
+    # found no row and ran again (DECISIONS 2026-09-16: refused at Ledger.append as well as in MCP).
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+
+    with pytest.raises(ValueError, match="job_id"):
+        ledger.append(job_id, "submitted", kind="t2v")
+    assert not (tmp_path / "ledger.jsonl").exists()
+
+
+def test_run_job_never_spawns_gflow_for_a_job_id_the_ledger_refuses(tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    runner = FakeRunner(ledger, "{}", "__Secure- x")
+
+    async def read_credits():
+        return 100
+
+    with pytest.raises(ValueError, match="job_id"):
+        asyncio.run(
+            gen.run_job(
+                job(job_id="__Secure- x"), tmp_path, ledger=ledger, runner=runner, read_credits=read_credits
+            )
+        )
+    assert runner.calls == []
+
+
 class FakeRunner:
     def __init__(self, ledger, stdout, job_id):
         self.ledger = ledger

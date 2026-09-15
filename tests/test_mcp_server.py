@@ -694,6 +694,23 @@ def test_a_job_id_in_any_ledger_under_the_out_folder_is_refused_before_a_browser
     assert reached == []
 
 
+@pytest.mark.parametrize("tool", sorted(SPEND_CALLS))
+def test_a_job_id_the_ledger_scrub_would_change_is_refused_before_a_browser_opens(
+    monkeypatch, tmp_path, tool
+):
+    # Review of plan B (HANDOFF ngã rẽ 5): "__Secure- x" was written as "[redacted] x", so the ledger check never found
+    # that id again and a retry with it ran the driver twice (DECISIONS 2026-09-16).
+    reached = _spending_backend(monkeypatch, tmp_path)
+
+    async def fn(s):
+        return await s.call_tool(tool, SPEND_CALLS[tool] | {"job_id": "__Secure- x"})
+
+    result = with_client(fn)
+    text = _texts([result])[0]
+    assert result.is_error and "job_id" in text, text
+    assert reached == []
+
+
 @pytest.mark.parametrize("tool", ["clip_extend", "clip_edit"])
 @pytest.mark.parametrize("outside", ["elsewhere", "out/../elsewhere"])
 def test_an_editor_out_dir_outside_the_out_folder_is_refused_before_a_browser_opens(

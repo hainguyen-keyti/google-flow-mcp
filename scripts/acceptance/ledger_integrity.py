@@ -441,6 +441,30 @@ def check_reconcile_other_project(tmp: Path) -> tuple[str, str]:
     return ("PASS" if ok else "FAIL"), detail
 
 
+def check_scrub_keeps_rows(tmp: Path) -> tuple[str, str]:
+    """Session-like text in a row is redacted inside its own string, so the line stays readable JSON with its job_id, and a
+    job_id the scrub would change is refused before any row is written (DECISIONS 2026-09-16).
+
+    Review of plan B: the scrub ran over the whole JSON line, so `Authorization: denied` broke the line and every later
+    read of any ledger under out/ failed, and `__Secure- x` was stored as `[redacted] x`, which the job_id guard never
+    finds again.
+    """
+    ledger = gen.Ledger(tmp / "ledger.jsonl")
+    ledger.append("scrub-ok", "submitted", prompt="Authorization: denied", argv=["video", "SAPISID=abc"])
+    refused = None
+    try:
+        gen.Ledger(tmp / "refused.jsonl").append("__Secure- x", "submitted")
+    except ValueError as exc:
+        refused = str(exc)
+    try:
+        ids = [row["job_id"] for row in ledger.rows()]
+    except ValueError as exc:
+        return "FAIL", f"ledger unreadable: {type(exc).__name__}: {exc}"
+    leaked = [p.name for p in tmp.iterdir() if p.is_file() and SECRET.search(p.read_text(errors="ignore"))]
+    ok = ids == ["scrub-ok"] and refused is not None and not (tmp / "refused.jsonl").exists() and not leaked
+    return ("PASS" if ok else "FAIL"), f"job_ids={ids} refused={refused!r} leaked={leaked}"
+
+
 def check_no_leak(tmp: Path) -> tuple[str, str]:
     """Nothing this run wrote may carry session material."""
     leaked = [p.name for p in tmp.rglob("*") if p.is_file() and SECRET.search(p.read_text(errors="ignore"))]
@@ -455,6 +479,7 @@ CHECKS = (
     ("reconcile failed", check_reconcile_failed),
     ("reconcile unknown", check_reconcile_unknown),
     ("reconcile other project", check_reconcile_other_project),
+    ("scrub keeps rows", check_scrub_keeps_rows),
     ("I2 no leak", check_no_leak),
 )
 

@@ -104,6 +104,8 @@ class Backend:
         with that id still runs in this server, and when any ledger under the out folder, or the one out_dir names,
         holds a row for it, `opening` included."""
         if job_id:
+            # The ledger would store such an id as another one, so no check below could ever find it (DECISIONS 2026-09-16).
+            gen_mod.check_job_id(job_id)
             if job_id in self._running:
                 # Not _job_refused: flow_media and flow_credits cannot show a job still in flight, so "start it under a
                 # new job_id if it did not run" would pay twice.
