@@ -700,6 +700,22 @@ def test_a_refusal_from_inside_a_driver_says_check_the_money_rather_than_pay_aga
     assert "use a new job id" not in text
 
 
+@pytest.mark.parametrize(
+    ("tool", "field"), [("gen_t2v", "prompt"), ("clip_edit", "prompt"), ("agent_send", "message")]
+)
+def test_a_prompt_of_only_spaces_is_refused_before_anything_runs(monkeypatch, tmp_path, tool, field):
+    # Re-review 2026-09-15: only an empty string was refused, so "   " reached gflow or the editor after the ledger
+    # already held the job, burning the job_id for nothing.
+    reached = _spending_backend(monkeypatch, tmp_path)
+
+    async def fn(s):
+        return await s.call_tool(tool, SPEND_CALLS[tool] | {field: "   "})
+
+    text = _texts([with_client(fn)])[0]
+    assert f"{field} is required" in text, text
+    assert reached == []
+
+
 def test_an_empty_job_id_is_refused_with_the_reason(monkeypatch, tmp_path):
     reached = _spending_backend(monkeypatch, tmp_path)
 

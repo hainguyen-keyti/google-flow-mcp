@@ -350,7 +350,7 @@ def _json(data: Any) -> str:
 
 
 def _require(value: str, name: str) -> None:
-    if not value:
+    if not value or not value.strip():
         raise ValueError(f"{name} is required")
 
 
