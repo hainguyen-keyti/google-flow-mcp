@@ -15,7 +15,7 @@ Why a plausible payload is checked and not just `is_error`. Also measured 2026-0
 to accept an `all_versions` argument it did not implement, drop it silently, and answer as if nothing had
 been asked. That returns `is_error=False` and looks perfect, so `is_error` alone proves very little.
 
-MUTATION TOOLS ARE NEVER CALLED (invariant I4). `agent_mode`, `scene_create`, `scene_delete`,
+MUTATION TOOLS ARE NEVER CALLED (invariant I4). `agent_mode`, `scene_create`, `scene_delete`, `scene_restore`,
 `project_create`, `project_delete` and `flow_upload` cost nothing but change the owner's real project;
 a gate that ran them would quietly litter it on every run. The roster check below asserts they exist and
 the run asserts they stayed untouched.
@@ -35,14 +35,22 @@ from video import mcp_server
 
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 
-EXPECTED_TOOL_COUNT = 28
+EXPECTED_TOOL_COUNT = 29
 
 # Free AND side-effect free: safe to call on the owner's live account on every run.
 READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits", "flow_tools")
 READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_uploads", "scene_list")
 
 # Free but they CHANGE things. Never called here; see I4 in the plan.
-MUTATING = ("agent_mode", "scene_create", "scene_delete", "project_create", "project_delete", "flow_upload")
+MUTATING = (
+    "agent_mode",
+    "scene_create",
+    "scene_delete",
+    "scene_restore",
+    "project_create",
+    "project_delete",
+    "flow_upload",
+)
 
 
 def payload_of(result):

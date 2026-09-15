@@ -112,6 +112,9 @@ class Backend:
     async def scene_delete(self, project_id: str, scene_id: str) -> dict[str, Any]:
         return await self._with(lambda s: scenes_mod.delete(s, project_id, scene_id))
 
+    async def scene_restore(self, project_id: str, scene_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.restore(s, project_id, scene_id))
+
     async def agent_mode(self, project_id: str, enabled: bool) -> dict[str, Any]:
         return await self._with(lambda s: agent_mod.set_mode(s, project_id, enabled))
 
@@ -405,11 +408,27 @@ async def scene_create(project_id: str, title: str | None = None) -> str:
     return _json(await backend.scene_create(project_id, title))
 
 
-@server.tool(name="scene_delete", description="Move a scene to the project's trash. Free.")
+@server.tool(
+    name="scene_delete",
+    description="Move a scene to the project's trash; scene_restore brings it back. Free.",
+)
 async def scene_delete(project_id: str, scene_id: str) -> str:
     _require(project_id, "project_id")
     _require(scene_id, "scene_id")
     return _json(await backend.scene_delete(project_id, scene_id))
+
+
+@server.tool(
+    name="scene_restore",
+    description=(
+        "Bring a trashed scene back from the project's trash (undoes scene_delete), confirmed by the listing. "
+        "The trash shows no ids, so it refuses when more than one trashed scene fits the title. Free."
+    ),
+)
+async def scene_restore(project_id: str, scene_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    return _json(await backend.scene_restore(project_id, scene_id))
 
 
 @server.tool(

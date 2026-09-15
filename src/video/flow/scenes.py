@@ -122,3 +122,47 @@ async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[s
         "rpcids": sorted(frames),
         "remaining": sum(1 for s in after if not s["trashed"]),
     }
+
+
+async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[str, Any]:
+    """Bring a scene back from the project's Trash; verified by the trashed flag in the listing.
+
+    Measured 2026-09-15: /project/<id>/trash opens directly, a trashed tile carries no scene id, hovering it shows
+    Restore and Delete permanently, and Restore fires BpMsoe with no confirm dialog. The tile can only be found
+    by title, so when more than one trash tile fits that title the restore is refused instead of guessed."""
+    page = session.page
+    scenes = await list_scenes(session, project_id, include_trashed=True)
+    scene = next((s for s in scenes if s["scene_id"] == scene_id), None)
+    if scene is None:
+        raise LookupError(f"scene {scene_id} is not in the project listing")
+    if not scene["trashed"]:
+        raise LookupError(f"scene {scene_id} is not in the trash")
+    title = scene["title"] or ""
+    await session.goto(f"{session.project_url(project_id)}/trash", ready=PROJECT_READY)
+    tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile")).filter(
+        has_text=re.compile(re.escape(title))
+    )
+    try:
+        await tiles.first.wait_for(state="visible", timeout=15_000)
+    except PlaywrightTimeoutError as exc:
+        raise LookupError(f"no trash tile titled {title!r} for scene {scene_id}") from exc
+    matching = await tiles.count()
+    if matching != 1:
+        raise RuntimeError(
+            f"{matching} trash tiles match {title!r}; the trash shows no ids, so restoring would guess"
+        )
+    tile = tiles.first
+    await tile.hover(timeout=8_000)
+    await page.wait_for_timeout(600)
+    button = tile.get_by_role("button", name=re.compile("^Restore$", re.IGNORECASE)).first
+    frames = await capture(session, lambda: button.click(timeout=8_000), settle=5.0)
+    after = await list_scenes(session, project_id, include_trashed=True)
+    state = next((s for s in after if s["scene_id"] == scene_id), None)
+    if state is None or state["trashed"]:
+        raise RuntimeError(f"restore: scene {scene_id} is still in the trash; rpcids {sorted(frames)}")
+    return {
+        "scene_id": scene_id,
+        "trashed": False,
+        "rpcids": sorted(frames),
+        "active": sum(1 for s in after if not s["trashed"]),
+    }
