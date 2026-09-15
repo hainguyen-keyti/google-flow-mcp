@@ -81,25 +81,43 @@ class Backend:
     def __init__(self, profile: str = "default", out_dir: Path = Path("out")) -> None:
         self.profile = profile
         self.out_dir = out_dir
+        self._running: set[str] = set()
 
     async def _with(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
         async with FlowSession(self.profile) as session:
             return await fn(session)
 
+    def _editor_out_dir(self, out_dir: str | None) -> Path:
+        """Editor jobs ledger where out_dir points, and job ids are looked up only under the out folder."""
+        target = Path(out_dir) if out_dir else self.out_dir
+        if not target.resolve().is_relative_to(self.out_dir.resolve()):
+            raise ValueError(
+                f"out_dir must be inside {self.out_dir.resolve()} (outputs stay in out/), got {target}"
+            )
+        return target
+
     async def _spend_once(self, job_id: str | None, out_dir: Path, run: Callable[[], Awaitable[Any]]) -> Any:
-        """One job per job_id through MCP (DECISIONS 2026-09-15): any ledger row refuses the id, `opening` included,
-        in the default ledger and in the one out_dir names, before a browser opens."""
-        ledgers = dict.fromkeys((self.out_dir / "ledger.jsonl", out_dir / "ledger.jsonl")) if job_id else {}
-        for ledger in ledgers:
-            statuses = sorted({str(row.get("status")) for row in gen_mod.Ledger(ledger).rows(job_id)})
-            if statuses:
-                seen = f"ledger rows ({', '.join(statuses)}) in {ledger}"
-                raise gen_mod.AlreadySubmitted(_job_refused(job_id, seen))
+        """One job per job_id through MCP (DECISIONS 2026-09-15), decided before a browser opens: refused while a call
+        with that id still runs in this server, and when any ledger under the out folder, or the one out_dir names,
+        holds a row for it, `opening` included."""
+        if job_id:
+            if job_id in self._running:
+                raise gen_mod.AlreadySubmitted(_job_refused(job_id, "a call with it still running"))
+            ledgers = dict.fromkeys([*sorted(self.out_dir.rglob("ledger.jsonl")), out_dir / "ledger.jsonl"])
+            for ledger in ledgers:
+                statuses = sorted({str(row.get("status")) for row in gen_mod.Ledger(ledger).rows(job_id)})
+                if statuses:
+                    seen = f"ledger rows ({', '.join(statuses)}) in {ledger}"
+                    raise gen_mod.AlreadySubmitted(_job_refused(job_id, seen))
+            # Marked with no await since the check, so a second call with this id cannot slip in between.
+            self._running.add(job_id)
         try:
             return await run()
         except gen_mod.AlreadySubmitted as exc:
             # The drivers' own message ends "use a new job id", which invites paying twice.
             raise gen_mod.AlreadySubmitted(_job_refused(job_id, "a submitted row")) from exc
+        finally:
+            self._running.discard(job_id)
 
     async def lane(self) -> dict[str, Any]:
         return await self._with(lane_mod.run)
@@ -226,7 +244,7 @@ class Backend:
         out_dir: str | None = None,
         wait: float = 240.0,
     ) -> dict[str, Any]:
-        target = Path(out_dir) if out_dir else self.out_dir
+        target = self._editor_out_dir(out_dir)
         return await self._spend_once(
             job_id,
             target,
@@ -246,7 +264,7 @@ class Backend:
         out_dir: str | None = None,
         wait: float = 240.0,
     ) -> dict[str, Any]:
-        target = Path(out_dir) if out_dir else self.out_dir
+        target = self._editor_out_dir(out_dir)
         return await self._spend_once(
             job_id,
             target,
@@ -339,7 +357,8 @@ server = TellingServer(
 
 _JOB_ID_RULE = (
     " job_id is required: use a new one for each new job, and keep the SAME one when calling again after an "
-    "error or a timeout. Any job_id already in the ledger is refused before a browser opens, so a retry never "
+    "error or a timeout. Any job_id already in a ledger under the out folder, or still running in another call, is "
+    "refused before a browser opens, so a retry never "
     "pays twice; a refused job_id means that job may already have spent credits, so check flow_media and "
     "flow_credits before starting it under a new one."
 )
@@ -605,7 +624,8 @@ async def flow_uploads(project_id: str) -> str:
     name="clip_extend",
     description=(
         "Extend a clip with Veo 3.1 Lite. It spends credits and is ledgered: 10 credits per extend (measured). "
-        "Takes about 2-3 min, up to about 7 min when Flow is slow." + _JOB_ID_RULE
+        "Takes about 2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out "
+        "folder." + _JOB_ID_RULE
     ),
 )
 async def clip_extend(
@@ -623,7 +643,8 @@ async def clip_extend(
     name="clip_edit",
     description=(
         "Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledgered: 20 credits per "
-        "edit (measured). Takes about 2-3 min, up to about 7 min when Flow is slow." + _JOB_ID_RULE
+        "edit (measured). Takes about 2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be "
+        "inside the out folder." + _JOB_ID_RULE
     ),
 )
 async def clip_edit(

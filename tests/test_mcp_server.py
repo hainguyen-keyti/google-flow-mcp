@@ -656,6 +656,76 @@ def test_a_job_id_already_in_a_ledger_is_refused_before_a_browser_opens(monkeypa
     assert reached == []
 
 
+def test_a_job_id_in_any_ledger_under_the_out_folder_is_refused_before_a_browser_opens(monkeypatch, tmp_path):
+    # Re-review 2026-09-15: only the default ledger and the one out_dir named were read, so the same job_id sent with
+    # another out_dir, or already spent by a run that wrote elsewhere under out, was not seen (DECISIONS 2026-09-15).
+    reached = _spending_backend(monkeypatch, tmp_path)
+    gen.Ledger(tmp_path / "story2" / "ledger.jsonl").append("job-edit", "done", kind="edit", spent=20)
+    gen.Ledger(tmp_path / "deep" / "run" / "ledger.jsonl").append("job-t2v", "submitted", kind="t2v")
+
+    async def fn(s):
+        return [
+            await s.call_tool("clip_edit", SPEND_CALLS["clip_edit"] | {"out_dir": str(tmp_path / "fresh")}),
+            await s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])),
+        ]
+
+    results = with_client(fn)
+    assert [result.is_error for result in results] == [True, True]
+    texts = _texts(results)
+    assert "may already have spent credits" in texts[0] and "story2" in texts[0], texts[0]
+    assert "may already have spent credits" in texts[1] and "deep" in texts[1], texts[1]
+    assert reached == []
+
+
+@pytest.mark.parametrize("tool", ["clip_extend", "clip_edit"])
+@pytest.mark.parametrize("outside", ["elsewhere", "out/../elsewhere"])
+def test_an_editor_out_dir_outside_the_out_folder_is_refused_before_a_browser_opens(
+    monkeypatch, tmp_path, tool, outside
+):
+    # DECISIONS 2026-09-15 (plan B): a job_id is looked up only in ledgers under the out folder, so an editor job may
+    # only write its ledger inside it (CLAUDE.md rule 5).
+    reached = _spending_backend(monkeypatch, tmp_path / "out")
+
+    async def fn(s):
+        return await s.call_tool(tool, SPEND_CALLS[tool] | {"out_dir": str(tmp_path / outside)})
+
+    text = _texts([with_client(fn)])[0]
+    assert "out_dir must be inside" in text, text
+    assert reached == []
+
+
+def test_a_second_call_with_the_same_job_id_is_refused_while_the_first_still_runs(monkeypatch, tmp_path):
+    # Re-review 2026-09-15: the ledger check and the spend are two steps with awaits between, so two calls with one
+    # job_id both passed the check before either had written a row.
+    gate = {}
+
+    async def slow_run_job(job, out_dir, **kwargs):
+        gate["started"].set()
+        await gate["release"].wait()
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", slow_run_job)
+
+    async def fn(s):
+        gate["started"], gate["release"] = asyncio.Event(), asyncio.Event()
+        first = asyncio.create_task(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])))
+        await asyncio.wait_for(gate["started"].wait(), 5)
+        try:
+            second = await asyncio.wait_for(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])), 5)
+        finally:
+            gate["release"].set()
+        done = await first
+        # Nothing was written, so once the first call is over the id is free again rather than stuck.
+        third = await asyncio.wait_for(s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])), 5)
+        return done, second, third
+
+    done, second, third = with_client(fn)
+    assert not done.is_error, _texts([done])
+    assert second.is_error and "may already have spent credits" in _texts([second])[0], _texts([second])
+    assert not third.is_error, _texts([third])
+
+
 def test_generation_and_agent_calls_check_the_ledger_before_anything_runs(monkeypatch, tmp_path):
     # Scoped re-review 2026-09-15: only the clip tools were pinned, so generate or agent_send skipping the check
     # left every test green.
