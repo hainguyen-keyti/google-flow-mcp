@@ -1,12 +1,13 @@
 # Test tay MCP `video`: 28 tool, có giá và có rào chắn
 
 Hướng dẫn để chủ repo tự test, hoặc giao cho một agent khác gọi qua MCP. Mọi hình dạng kết quả dưới đây là
-**đo thật ngày 2026-09-14**, không phải suy từ code.
+**đo thật ngày 2026-09-14 và 2026-09-15**, không phải suy từ code.
 
 ## 0. Trước khi bắt đầu
 
-- **Kết nối lại MCP.** Server `video` đang chạy trong phiên cũ KHÔNG tự nạp code mới. Mở phiên Claude Code mới
-  trong repo này, hoặc kết nối lại MCP, nếu không bạn sẽ test nhầm bản cũ.
+- **Mở phiên Claude Code mới trong repo này.** Server `video` đang chạy KHÔNG tự nạp code mới. Tắt tiến trình
+  server thì lời gọi kế tiếp chạy code mới, nhưng phiên đang mở vẫn giữ mô tả tool và `instructions` cũ (đo
+  2026-09-15), nên agent trong phiên cũ đọc hướng dẫn cũ.
 - Gọi thử hai tool rẻ nhất: `flow_lane()` phải ra `verdict: MIGRATED`, và `flow_credits()` ra số dư (lần đo cuối
   là **195**). Mỗi lần đọc số dư đều ghi thêm một dòng vào `out/credits.jsonl`.
 - Số dư **dao động giữa các lần đọc mà chưa rõ cơ chế**, nên trước mỗi lần định tiêu tiền phải đọc lại.
@@ -17,7 +18,7 @@ Tầng 0 đỏ thì dừng, đừng test tay tiếp: lỗi nằm ở tầng dư�
 
 | Lệnh | Kỳ vọng |
 |---|---|
-| `uv run pytest -q` | `263 passed` |
+| `uv run pytest -q` | `265 passed` |
 | `uv run python scripts/acceptance/ledger_integrity.py` | `rows=6 pass=6 fail=0`, offline, không mở trình duyệt |
 | `uv run python scripts/acceptance/mcp_smoke.py` | `rows=12 pass=12 fail=0`, 2 đến 3 phút, gọi THẬT 8 tool đọc qua MCP |
 | `uv run python scripts/acceptance/flow_coverage.py --project <id> --character` | ma trận CLI; tự tạo rồi tự xoá project "acceptance probe" |
@@ -44,8 +45,8 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `flow_projects` | không | list dict `{id, title, created, cover_media_id, thumbnail_url}`. **Có một id KHÔNG phải UUID**: `8822142b-ca75-46b7-aac8-03d2831_backfill` |
 | `flow_credits` | không | `{"balance": <int>, "raw": [...]}` |
 | `flow_media` | `project_id`, `all_versions=False` | `{"meta": {id, title}, "media": [...], "models": [4 tên model]}`. `all_versions=true` trả LIST bản ghi có `type` và `workflow_id` |
-| `flow_characters` | `project_id` | list `{entity_id, name, portrait_media_id}`; project mới ra `[]` |
-| `flow_tools` | `project_id` | list 62 tool của gallery cộng đồng (giống nhau ở mọi project) |
+| `flow_characters` | `project_id` | list `{entity_id, name, portrait_media_id, portrait_workflow_id}`. Tải ảnh chân dung bằng `portrait_media_id` (là `null` khi listing chưa có record của ảnh); project mới ra `[]` |
+| `flow_tools` | `project_id` | list tool của gallery cộng đồng, giống nhau ở mọi project; số lượng đổi theo thời gian (62 ngày 14/9, 60 ngày 15/9) |
 | `flow_uploads` | `project_id` | `{"count": n}` và không có gì khác |
 | `scene_list` | `project_id`, `include_trashed=False` | list `{scene_id, title, trashed, created, updated}`. Mặc định ẩn scene đã xoá; `include_trashed=true` mới thấy |
 
@@ -53,7 +54,7 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 
 | Tool | Tham số | Ghi chú |
 |---|---|---|
-| `flow_download` | `project_id`, `media_id`, `out_dir` | trả đường dẫn file trong `out/` |
+| `flow_download` | `project_id`, `media_id`, `out_dir` | trả đường dẫn file trong `out/`. `media_id` phải là `id` của listing (`flow_media`); workflow id sẽ bị từ chối |
 | `clip_download` | `project_id`, `media_id`, `quality="1080p"`, `out_dir`, `workflow_id` | mặc định lấy bản MỚI NHẤT đã xong; truyền `workflow_id` để chỉ đích danh một version. **`quality="4k"` là bản upscale của Flow, CHƯA ĐO GIÁ, có thể tốn credit: đừng gọi nếu chưa muốn trả tiền** |
 | `clip_reconcile` | `project_id`, `out_dir` | đóng sổ cho job editor mồ côi; project sạch thì trả `[]` |
 
@@ -65,10 +66,10 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `project_rename` | `project_id`, `title` | trả tên mới |
 | `project_delete` | `project_id` | **xoá vĩnh viễn**; chỉ dùng cho id nháp |
 | `scene_create` | `project_id`, `title` | trả dict có `scene_id` |
-| `scene_delete` | `project_id`, `scene_id` | là "move to trash", scene vẫn còn trong `scene_list(include_trashed=true)` |
-| `character_create` | `project_id`, `prompt`, `name`, `personality`, `wait=90` | chân dung vẽ bằng Nano Banana 2, **không tốn credit** |
+| `scene_delete` | `project_id`, `scene_id` | là "move to trash", scene vẫn còn trong `scene_list(include_trashed=true)`; không có tool nào lấy lại |
+| `character_create` | `project_id`, `prompt`, `name`, `personality`, `wait=90` | chân dung vẽ bằng Nano Banana 2, **không tốn credit**. Trả `portrait.workflow_id`, **không phải media id**: lấy media id bằng `flow_characters` |
 | `character_delete` | `project_id`, `entity_id` | xoá vĩnh viễn nhân vật |
-| `flow_upload` | `project_id`, `path` | đường dẫn file trên máy; trả `{file, bytes, rpcids, tiles, media_id, ...}` |
+| `flow_upload` | `project_id`, `path` | đường dẫn file trên máy; trả `{file, bytes, rpcids, tiles, media_id, workflow_id, size_bytes, ...}`. `media_id` là id dùng được với `flow_download`. `bytes` là file trên máy, `size_bytes` là bản Flow lưu (Flow nén ảnh lại: PNG 139 KB thành JPEG 5,6 KB). `tiles` đếm tile của view đang mở, không phải số upload |
 | `agent_mode` | `project_id`, `enabled` | bật xong **nhớ tắt**: bật thì Flow giấu chip và nút settings của composer |
 
 ### D. Tiêu credit, chỉ chạy khi bạn cố ý
@@ -124,7 +125,8 @@ Cuối cùng: liệt kê tool nào chạy đúng, tool nào sai hoặc báo lỗ
 
 ## 6. Bẫy đã đo, sẽ gặp khi bấm tay
 
-- **Server MCP đang chạy không nạp code mới.** Sửa code xong phải kết nối lại.
+- **Server MCP đang chạy không nạp code mới, và phiên đang mở giữ mô tả tool cũ.** Sửa code xong phải mở phiên
+  mới.
 - **Sidebar của project render sau khi trang sẵn sàng**, khoảng 2000ms (project có upload) đến 3000ms (project
   rỗng). Tool đã chờ đúng cách, nhưng nếu bạn tự lái trình duyệt thì đừng đọc sidebar quá sớm.
 - **Mục Uploads lọc phía client**: bấm vào không gọi mạng, URL không đổi.
