@@ -31,8 +31,10 @@ def test_portrait_from_ogiz0b_uses_gflow_image_records(monkeypatch):
 
     monkeypatch.setattr(characters, "image_records", fake_image_records)
     portrait = characters.portrait_from_frames({"ogiZ0b": [["payload"]]})
+    # gflow's image record calls it media_id, but in this repo it is the WORKFLOW id: measured 2026-09-15,
+    # flow_download rejects 5ab4f13a (what character_create reported) and accepts the listing's 750b6fd2.
     assert portrait == {
-        "media_id": "17b41e47-177e-4f4a-aa87-b8d77485a589",
+        "workflow_id": "17b41e47-177e-4f4a-aa87-b8d77485a589",
         "url": "https://flow-content.google/image/17b41e47?sig",
         "width": 1024,
         "height": 1024,

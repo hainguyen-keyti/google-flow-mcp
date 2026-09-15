@@ -249,7 +249,13 @@ async def flow_media(project_id: str, all_versions: bool = False) -> str:
     return _json(await backend.media(project_id, all_versions))
 
 
-@server.tool(name="flow_characters", description="A project's characters (entity_id, name, portrait). Free.")
+@server.tool(
+    name="flow_characters",
+    description=(
+        "A project's characters: entity_id, name, portrait_media_id (the id flow_download accepts; null when "
+        "the portrait is not in the listing) and portrait_workflow_id. Free."
+    ),
+)
 async def flow_characters(project_id: str) -> str:
     _require(project_id, "project_id")
     return _json(await backend.characters(project_id))
@@ -299,7 +305,11 @@ async def project_delete(project_id: str) -> str:
 
 @server.tool(
     name="character_create",
-    description="Create a character from a face prompt (portrait via Nano Banana 2, credit-free), set name and personality.",
+    description=(
+        "Create a character from a face prompt (portrait via Nano Banana 2, credit-free), set name and "
+        "personality. The reply's portrait.workflow_id is NOT a media id: call flow_characters for the "
+        "portrait's media id, which flow_download accepts."
+    ),
 )
 async def character_create(
     project_id: str, prompt: str, name: str | None = None, personality: str | None = None, wait: float = 90.0

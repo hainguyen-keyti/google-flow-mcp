@@ -77,37 +77,44 @@ def video_models(payload: Any) -> list[str]:
 
 def characters_from_listing(payload: Any) -> list[dict[str, Any]]:
     """Characters ride inside the project listing: Zzl0ze[5] holds one entry per entity
-    ([_, entity_id, _, [_, name, ...], portrait_media_id, ...]); None when the project has none."""
+    ([_, entity_id, _, [_, name, ...], portrait_workflow_id, ...]); None when the project has none.
+
+    The entry names the portrait by its WORKFLOW id, which flow_download rejects (measured 2026-09-15), so the
+    media id is looked up among the records of the same listing, and left None when that record is absent."""
     entries = _at(payload, 5)
     if entries is None:
         return []
     if not isinstance(entries, list):
         raise TypeError("Zzl0ze[5]: expected a list of character entries")
+    media_by_workflow = {record["workflow_id"]: record["id"] for record in records(payload)}
     out = []
     for entry in entries:
         entity_id = _at(entry, 1)
         if not _uuid(entity_id):
             continue
+        portrait = _str(_at(entry, 4))
         out.append(
             {
                 "entity_id": entity_id,
                 "name": _str(_at(entry, 3, 1)),
-                "portrait_media_id": _str(_at(entry, 4)),
+                "portrait_media_id": media_by_workflow.get(portrait),
+                "portrait_workflow_id": portrait,
             }
         )
     return out
 
 
 def upload_record(payload: Any) -> dict[str, Any]:
-    """maseQ answers an upload with [[media_id, project_id, workflow_id, "CAE", _, details, ...]]."""
+    """maseQ answers an upload with [[workflow_id, project_id, media_id, "CAE", _, details, ...]]: the same record
+    shape the listing uses, where record[2] is the media id every other tool accepts (measured 2026-09-15)."""
     record = _at(payload, 0)
     if not (isinstance(record, list) and _uuid(_at(record, 0)) and _at(record, 3) == "CAE"):
-        raise TypeError("maseQ: expected [[media_id, project_id, workflow_id, 'CAE', ...]]")
+        raise TypeError("maseQ: expected [[workflow_id, project_id, media_id, 'CAE', ...]]")
     size = _at(record, 5, 13)
     return {
-        "media_id": record[0],
+        "media_id": _str(_at(record, 2)),
         "project_id": _str(_at(record, 1)),
-        "workflow_id": _str(_at(record, 2)),
+        "workflow_id": record[0],
         "size_bytes": size if isinstance(size, int) else None,
     }
 

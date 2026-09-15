@@ -34,7 +34,8 @@ def portrait_from_frames(frames: dict[str, list[Any]]) -> dict[str, Any] | None:
     records = image_records("ogiZ0b", payloads[0])
     record = records[0]
     return {
-        "media_id": record.media_id,
+        # gflow calls it media_id; in this repo it is the workflow id, which flow_download rejects.
+        "workflow_id": record.media_id,
         "url": record.image_url,
         "width": record.dimensions[0],
         "height": record.dimensions[1],
