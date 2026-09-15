@@ -334,7 +334,8 @@ def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
     upscale (new workflow `..._upsampled`, no prompt, measured 2026-09-15) is not the job's record, and neither is a
     record another job's outputs already hold, which still counts as new against `failed`. An edit is never given a
     record on another clip (an extend copies edited versions onto new media with their prompts), and an extend is
-    never closed as done (DECISIONS 2026-09-15).
+    never closed as done (DECISIONS 2026-09-15). Nor is an edit given a version while another job of its clip and
+    prompt holds none there, even a closed one: its driver writes `failed` when the version shows up after the deadline.
 
     Each case gets its own ledger, since one reconcile reads one balance for every job.
     """
@@ -366,6 +367,12 @@ def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
             ["w-1"],
             [],
         ),
+        "rival_closed_without_its_version": (
+            AFTER_BALANCE,
+            [_record("src-6", 1), _record("src-6", 2, JOB_PROMPT)],
+            ["w-1"],
+            [],
+        ),
     }
     seen = {}
     for name, (balance, records, listed, taken) in cases.items():
@@ -373,6 +380,9 @@ def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
         room.mkdir(parents=True, exist_ok=True)
         kind = "extend" if name.startswith("extend") else "edit"
         _opening(gen.Ledger(room / "ledger.jsonl"), "u", "src-6", workflows_before=listed, kind=kind)
+        if name.startswith("rival"):
+            _opening(gen.Ledger(room / "ledger.jsonl"), "retry", "src-6", workflows_before=listed)
+            gen.Ledger(room / "ledger.jsonl").append("retry", "failed", outputs=[], spent=20)
         if taken:
             outputs = [
                 {"media_id": "src-6", "workflow_id": workflow, "role": "generated"} for workflow in taken

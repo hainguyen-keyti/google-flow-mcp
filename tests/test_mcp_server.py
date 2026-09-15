@@ -1114,9 +1114,17 @@ def test_clip_reconcile_opens_no_browser_when_no_job_can_be_judged_here(monkeypa
         project="P",
         workflows_before=["w"],
     )
-    # A settled job of this project is not open, so it is no reason to read the listing either.
+    # A settled job of this project is not open, so it is no reason to read the listing either. It names its workflows
+    # and prompt, so only its done row keeps it out (review of plan C, 2026-09-15).
     ledger.append(
-        "s", "opening", kind="edit", source_media_id="m", credits_before=295, project="P", workflows_before=[]
+        "s",
+        "opening",
+        kind="edit",
+        source_media_id="m",
+        credits_before=295,
+        project="P",
+        workflows_before=["w"],
+        prompt="make it night",
     )
     ledger.append("s", "done", spent=20)
 
@@ -1147,7 +1155,7 @@ def test_clip_reconcile_opens_the_browser_when_a_job_of_this_project_can_be_judg
         source_media_id="m",
         credits_before=295,
         project="P",
-        workflows_before=[],
+        workflows_before=["w"],
         prompt="make it night",
     )
     opened = []

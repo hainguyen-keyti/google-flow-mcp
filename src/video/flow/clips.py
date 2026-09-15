@@ -348,13 +348,15 @@ def _editor_verdict(
     measured moving with no spend (195 to 245 overnight), so an equal one proves nothing alone, while a job that
     spent has always left a record in the listing. A record is new when its workflow is missing from the
     `workflows_before` the job wrote as it opened, whatever its time: Flow's clock and this Mac's disagree, and a
-    clip's `created` is stamped at submit. `done` is for an edit only: exactly one new, finished version on its own
-    clip carrying its prompt (compared as the driver does), held by no other job's outputs, with no other open job of
-    that clip and prompt. Every measured edit put its version on its clip, while an extend's clip lands on a new media
-    id beside copies of each source version that keep their prompts, and a free upscale adds a promptless version, so
-    an extend is never `done` (DECISIONS 2026-09-15). `failed` needs an equal balance and no new record
-    at all, taken or not. A listing without the job's own clip holds no evidence about the job, and a clip the row
-    never saw would make every one of its records look new: both are `unknown`.
+    clip's `created` is stamped at submit. `done` is for an edit only: exactly one new version on its own clip
+    carries its prompt (compared as the driver does) and is held by no other job's outputs, counting one still
+    rendering; that version is finished; and no rival is left, another job open or closed that named this clip and
+    prompt yet holds no version on it, since a driver closes a job `failed` when its version shows up after the
+    deadline (DECISIONS 2026-09-15). Every measured edit put its version on its clip, while an extend's clip lands on
+    a new media id beside copies of each source version that keep their prompts, and a free upscale adds a promptless
+    version, so an extend is never `done`. `failed` needs an equal balance and no new record at all, taken or not. A
+    listing without the job's own clip holds no evidence about the job, and a clip the row never saw would make every
+    one of its records look new: both are `unknown`.
     """
     media_id = row.get("source_media_id")
     before = set(row["workflows_before"])
@@ -362,16 +364,15 @@ def _editor_verdict(
         return "unknown", None
     fresh = new_records(before, records)
     prompt = row["prompt"].strip()
-    ours = [
+    candidates = [
         r
         for r in fresh
         if r.get("id") == media_id
         and r["workflow_id"] not in taken
         and (r.get("prompt") or "").strip() == prompt
-        and is_done(r)
     ]
-    if row.get("kind") == "edit" and len(ours) == 1 and not contested:
-        return "done", ours[0]
+    if row.get("kind") == "edit" and len(candidates) == 1 and is_done(candidates[0]) and not contested:
+        return "done", candidates[0]
     if credits_now == row.get("credits_before") and not fresh:
         return "failed", None
     return "unknown", None
@@ -379,11 +380,11 @@ def _editor_verdict(
 
 def _judgeable(row: dict[str, Any], project_id: str) -> bool:
     """An editor job of this project whose opening row lists the workflows it saw and its prompt: the only kind
-    reconcile judges."""
+    reconcile judges. An empty list never shows the source clip as seen, so it counts as none."""
     return (
         bool(row.get("source_media_id"))
         and row.get("project") == project_id
-        and row.get("workflows_before") is not None
+        and bool(row.get("workflows_before"))
         and bool((row.get("prompt") or "").strip())
     )
 
@@ -413,6 +414,12 @@ async def reconcile_editor(
     if judgeable:
         records, _ = await _snapshot(session, project_id)
         credits_now = (await reader.credits(session))["balance"]
+    held_on_clip = {
+        (other.get("job_id"), output.get("media_id"))
+        for other in rows
+        for output in other.get("outputs") or []
+        if output.get("role") == "generated"
+    }
     out: list[dict[str, Any]] = []
     for row in stuck:
         if not row.get("source_media_id"):
@@ -431,15 +438,17 @@ async def reconcile_editor(
             )
             continue
         if not _judgeable(row, project_id):
-            # Written before opening rows listed their workflows and prompt (DECISIONS 2026-09-15): left for a person.
+            # Nothing to judge by: no workflows listed, or no prompt (DECISIONS 2026-09-15). Left for a person.
             out.append({"job_id": row["job_id"], "verdict": "unknown", "credits_now": credits_now})
             continue
-        # Two open jobs of one clip and prompt could each own its new version, so neither is given it.
+        # Another job that named this clip and prompt, open or closed, may own the new version unless it holds one
+        # there already: a driver closes a job `failed` when its version shows up after the deadline.
         contested = any(
-            other["job_id"] != row["job_id"]
-            and other.get("source_media_id") == row.get("source_media_id")
-            and other["prompt"].strip() == row["prompt"].strip()
-            for other in judgeable
+            other.get("job_id") != row["job_id"]
+            and other.get("source_media_id") == row["source_media_id"]
+            and (other.get("prompt") or "").strip() == row["prompt"].strip()
+            and (other.get("job_id"), row["source_media_id"]) not in held_on_clip
+            for other in rows
         )
         taken = _taken_elsewhere(rows, row["job_id"])
         verdict, record = _editor_verdict(row, records, credits_now, taken, contested)

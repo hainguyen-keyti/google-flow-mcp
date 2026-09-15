@@ -613,6 +613,110 @@ def test_reconcile_closes_two_open_edits_that_differ_in_clip_or_prompt(monkeypat
     ]
 
 
+@pytest.mark.parametrize(
+    "closing",
+    [
+        # Its driver saw no version before the deadline, so it wrote failed with no generated output.
+        [("submitted", {}), ("failed", {"outputs": [], "spent": 20})],
+        # Closed by hand.
+        [("done", {"spent": 20})],
+        # Closed the way story's reconcile does, naming the media but listing no outputs.
+        [("done", {"media_id": "src-40", "spent": 20})],
+        # Its driver listed only a free upscale of the clip, which carries no prompt and so went in as a copy.
+        [("submitted", {}), ("failed", {"outputs": [{"media_id": "src-40", "role": "copy"}], "spent": 20})],
+    ],
+)
+def test_reconcile_leaves_an_orphan_open_when_a_closed_job_of_its_clip_and_prompt_holds_no_version(
+    monkeypatch, tmp_path, closing
+):
+    # Re-review of plan C (2026-09-15, N1): the retry was closed without naming its version, which showed up later and
+    # went to the orphan that never submitted, so the ledger counted 40 for one 20-credit edit (DECISIONS 2026-09-15).
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "dead", "src-40")
+    _opening(ledger, "retry", "src-40")
+    for status, fields in closing:
+        ledger.append("retry", status, **fields)
+    _reconcile_world(monkeypatch, [_record("src-40", 100), _record("src-40", 200, JOB_PROMPT)], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "dead", "verdict": "unknown", "credits_now": 275}]
+    assert [r["status"] for r in ledger.rows("dead")] == ["opening"]
+
+
+def test_reconcile_leaves_an_edit_open_while_a_second_version_with_its_prompt_is_still_rendering(
+    monkeypatch, tmp_path
+):
+    # Re-review of plan C (2026-09-15, N1): two versions carry the job's prompt on its clip, one still rendering, so the
+    # finished one may not be this job's (DECISIONS 2026-09-15).
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-43")
+    rendering = {**_record("src-43", 300, JOB_PROMPT), "status": 1, "url": None}
+    listing = [_record("src-43", 100), _record("src-43", 200, JOB_PROMPT), rendering]
+    _reconcile_world(monkeypatch, listing, balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
+def test_reconcile_counts_every_opening_row_of_a_reused_job_id_as_a_rival(monkeypatch, tmp_path):
+    # Re-review of plan C (2026-09-15, N1): job k is judged by its first row, on another clip, but its second attempt
+    # ran on this clip with this prompt, so the new version may be k's.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "k", "old-clip", workflows_before=["w-99", "w-100"])
+    _opening(ledger, "k", "src-46", workflows_before=["w-99", "w-100"])
+    _opening(ledger, "dead", "src-46", workflows_before=["w-99", "w-100"])
+    listing = [_record("old-clip", 99), _record("src-46", 100), _record("src-46", 200, JOB_PROMPT)]
+    _reconcile_world(monkeypatch, listing, balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [(r["job_id"], r["verdict"]) for r in out] == [("k", "unknown"), ("dead", "unknown")]
+    assert [r["status"] for r in ledger.rows()] == ["opening", "opening", "opening"]
+
+
+def test_reconcile_counts_a_job_holding_versions_only_on_other_clips_as_a_rival(monkeypatch, tmp_path):
+    # role_of matches prompts only (clips.py:41-44), so a driver lists a new version carrying its prompt on any clip as
+    # generated; holding one on another clip tells nothing about the new version on this one.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "dead", "src-47", workflows_before=["w-100", "w-101"])
+    _opening(ledger, "x", "src-47", workflows_before=["w-100", "w-101"])
+    elsewhere = [{"media_id": "shot-2", "workflow_id": "w-300", "role": "generated"}]
+    ledger.append("x", "done", outputs=elsewhere, spent=20)
+    listing = [
+        _record("src-47", 100),
+        _record("shot-2", 101),
+        _record("src-47", 200, JOB_PROMPT),
+        _record("shot-2", 300, JOB_PROMPT),
+    ]
+    _reconcile_world(monkeypatch, listing, balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "dead", "verdict": "unknown", "credits_now": 275}]
+    assert [r["status"] for r in ledger.rows("dead")] == ["opening"]
+
+
+def test_reconcile_still_closes_an_edit_beside_a_job_of_its_clip_and_prompt_holding_its_own_version(
+    monkeypatch, tmp_path
+):
+    # A job that holds its version on the clip already has what it made, so the other new version is this job's.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-48")
+    _opening(ledger, "x", "src-48")
+    held = [{"media_id": "src-48", "workflow_id": "w-200", "role": "generated"}]
+    ledger.append("x", "done", outputs=held, spent=20)
+    listing = [_record("src-48", 100), _record("src-48", 200, JOB_PROMPT), _record("src-48", 300, JOB_PROMPT)]
+    _reconcile_world(monkeypatch, listing, balance=255)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["done"]
+    assert ledger.rows("j")[-1]["outputs"][0]["workflow_id"] == "w-300"
+
+
 def test_reconcile_leaves_an_edit_open_when_two_new_versions_carry_its_prompt(monkeypatch, tmp_path):
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     _opening(ledger, "j", "src-22")
@@ -743,6 +847,91 @@ def test_reconcile_never_judges_an_opening_row_without_its_prompt(monkeypatch, t
 
     assert out == [{"job_id": "old", "verdict": "unknown", "credits_now": None}]
     assert [r["status"] for r in ledger.rows("old")] == ["opening"]
+
+
+def test_reconcile_never_judges_an_opening_row_whose_workflow_set_is_empty(monkeypatch, tmp_path):
+    # Review of plan C (2026-09-15): an empty set can never show the source clip as seen, so the job is always unknown,
+    # yet Chrome was opened to find that out.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-50", workflows_before=[])
+    _no_flow_reads(monkeypatch)
+
+    assert not clips.reconcile_needs_flow("p", out_dir=tmp_path)
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "j", "verdict": "unknown", "credits_now": None}]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
+def test_reconcile_takes_a_listed_prompt_with_outer_spaces_for_the_jobs_own(monkeypatch, tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-51")
+    listing = [_record("src-51", 100), _record("src-51", 200, f" {JOB_PROMPT}  ")]
+    _reconcile_world(monkeypatch, listing, balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["done"]
+
+
+def test_reconcile_leaves_a_version_without_a_url_open(monkeypatch, tmp_path):
+    # `is_done` needs a url as well as status 3, the same test the driver waits on before it fetches.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-52")
+    no_url = {**_record("src-52", 200, JOB_PROMPT), "url": None}
+    _reconcile_world(monkeypatch, [_record("src-52", 100), no_url], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
+def test_reconcile_leaves_a_version_another_jobs_pending_row_lists_as_generated(monkeypatch, tmp_path):
+    # Whatever clip a job worked on, a version its pending row lists as generated is held by it: the driver writes
+    # pending when the download failed.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "a", "src-53", workflows_before=["w-100", "w-101"])
+    _opening(ledger, "other", "src-54", workflows_before=["w-100", "w-101"])
+    held = [{"media_id": "src-53", "workflow_id": "w-200", "role": "generated"}]
+    ledger.append("other", "pending", outputs=held)
+    listing = [_record("src-53", 100), _record("src-54", 101), _record("src-53", 200, JOB_PROMPT)]
+    _reconcile_world(monkeypatch, listing, balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [(r["job_id"], r["verdict"]) for r in out] == [("a", "unknown"), ("other", "unknown")]
+    assert [r["status"] for r in ledger.rows()] == ["opening", "opening", "pending"]
+
+
+def test_reconcile_never_judges_a_job_its_driver_already_closed_as_failed(monkeypatch, tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "f", "src-55")
+    ledger.append("f", "failed", outputs=[], spent=0)
+    _no_flow_reads(monkeypatch)
+
+    assert asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path)) == []
+    assert [r["status"] for r in ledger.rows("f")] == ["opening", "failed"]
+
+
+def test_reconcile_never_closes_a_row_that_does_not_name_its_kind(monkeypatch, tmp_path):
+    # Only an edit puts its version on the source clip, so a row that does not say it is one is left for a person.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        "k",
+        "opening",
+        source_media_id="src-56",
+        credits_before=295,
+        project="p",
+        workflows_before=["w-100"],
+        prompt=JOB_PROMPT,
+    )
+    _reconcile_world(monkeypatch, [_record("src-56", 100), _record("src-56", 200, JOB_PROMPT)], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("k")] == ["opening"]
 
 
 def test_reconcile_closes_an_orphan_as_failed_when_the_balance_never_moved(monkeypatch, tmp_path):
