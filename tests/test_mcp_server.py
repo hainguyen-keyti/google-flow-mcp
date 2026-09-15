@@ -504,6 +504,16 @@ def test_a_model_or_length_gflow_would_refuse_is_refused_before_the_ledger_is_to
     assert f"only at {R2V_DURATION_S} s" in _refused_before_the_ledger(
         monkeypatch, tmp_path, "gen_r2v", r2v_ten
     )
+    # Scoped re-review 2026-09-15: count 0 sent no --count, so a call asking for nothing paid for one clip.
+    assert "count must be 1-4" in _refused_before_the_ledger(
+        monkeypatch, tmp_path, "gen_t2v", t2v | {"count": 0}
+    )
+    assert "count must be 1-4" in _refused_before_the_ledger(
+        monkeypatch, tmp_path, "gen_t2v", t2v | {"count": 5}
+    )
+    assert "aspect must be one of" in _refused_before_the_ledger(
+        monkeypatch, tmp_path, "gen_t2v", t2v | {"aspect": "1:1"}
+    )
     assert not (tmp_path / "ledger.jsonl").exists()
 
 
@@ -620,6 +630,41 @@ def test_a_job_id_already_in_a_ledger_is_refused_before_a_browser_opens(monkeypa
     for text in _texts(results):
         assert "may already have spent credits" in text and "flow_credits" in text, text
         assert "use a new job id" not in text
+    assert reached == []
+
+
+def test_generation_and_agent_calls_check_the_ledger_before_anything_runs(monkeypatch, tmp_path):
+    # Scoped re-review 2026-09-15: only the clip tools were pinned, so generate or agent_send skipping the check
+    # left every test green.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("job-t2v", "submitted", kind="t2v")
+    ledger.append("job-agent", "done", kind="agent", spent=0)
+
+    async def fn(s):
+        return [
+            await s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"])),
+            await s.call_tool("agent_send", dict(SPEND_CALLS["agent_send"])),
+        ]
+
+    results = with_client(fn)
+    assert [result.is_error for result in results] == [True, True]
+    assert all("may already have spent credits" in text for text in _texts(results)), _texts(results)
+    assert reached == []
+
+
+def test_the_refusal_guidance_survives_a_long_ledger_path(monkeypatch, tmp_path):
+    # Errors reaching the agent are cut at 500 characters, so the guidance has to come before the path.
+    deep = tmp_path.joinpath(*["very-long-directory-name-" * 4] * 4)
+    assert len(str(deep)) > 400
+    reached = _spending_backend(monkeypatch, tmp_path)
+    gen.Ledger(deep / "ledger.jsonl").append("job-edit", "opening", kind="edit")
+
+    async def fn(s):
+        return await s.call_tool("clip_edit", SPEND_CALLS["clip_edit"] | {"out_dir": str(deep)})
+
+    text = _texts([with_client(fn)])[0]
+    assert "check flow_media and flow_credits" in text and "only if it did not run" in text, text
     assert reached == []
 
 
@@ -862,6 +907,15 @@ def test_an_error_shown_to_the_agent_never_carries_a_cookie(monkeypatch, tmp_pat
     for secret in ("abc123secret", "sid-secret", "hsid-secret", "bearer-secret", "ssid-secret", "Call log"):
         assert secret not in text, text
     assert "request failed" in text
+
+
+def test_the_server_log_of_a_failed_tool_carries_no_cookie_either(monkeypatch, tmp_path, caplog):
+    # Scoped re-review 2026-09-15: the traceback logged to the server's stderr still held the raw cookies.
+    leaked = RuntimeError("request failed; cookie: SID=sid-secret\nCall log:\n  - cookie: SSID=ssid-secret")
+    with caplog.at_level("DEBUG"):
+        _error_text_of_a_failing_generation(monkeypatch, tmp_path, leaked)
+    assert "tool gen_t2v failed" in caplog.text
+    assert "sid-secret" not in caplog.text and "ssid-secret" not in caplog.text, caplog.text
 
 
 def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():

@@ -167,6 +167,20 @@ def test_restore_gives_up_when_the_trash_never_shows_every_trashed_scene(monkeyp
     assert session.page.restored == []
 
 
+def test_restore_counts_a_tile_that_appears_during_the_last_wait(monkeypatch):
+    # Scoped re-review 2026-09-15: the loop gave up right after its last wait without looking again.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", True)),
+        RESTORED,
+        _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "bravo", True)),
+    )
+    session = _Session({"alpha": 0, "bravo": 15_000})
+
+    assert asyncio.run(scenes.restore(session, PROJECT, SCENE))["trashed"] is False
+    assert session.page.restored == ["alpha"]
+
+
 def test_restore_names_another_scene_whose_trash_flag_changed(monkeypatch):
     # The trash shows no ids, so a wrong tile can only be caught afterwards, in the listing: say which one moved.
     _flow_answers(

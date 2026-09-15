@@ -35,12 +35,19 @@ VIDEO_DEFAULT_MODEL = "omni-flash"
 OMNI_FLASH_SECONDS = 10
 
 
-def _video_settings(kind: str, model: str | None, duration: int | None) -> tuple[str, int | None]:
+def _video_settings(
+    kind: str, model: str | None, duration: int | None, aspect: str | None = None, count: int = 1
+) -> tuple[str, int | None]:
     """Refuse up front what gflow's CLI refuses only after run_job has written `submitted`, burning the job_id."""
     model = model or VIDEO_DEFAULT_MODEL
-    models = next(p.type.choices for p in cli_video.video.commands[kind].params if p.name == "model")
-    if model not in models:
-        raise ValueError(f"model must be one of {list(models)}, got {model!r}")
+    params = {p.name: p.type for p in cli_video.video.commands[kind].params}
+    if model not in params["model"].choices:
+        raise ValueError(f"model must be one of {list(params['model'].choices)}, got {model!r}")
+    if aspect is not None and aspect not in params["aspect"].choices:
+        raise ValueError(f"aspect must be one of {list(params['aspect'].choices)}, got {aspect!r}")
+    # build_argv sends no --count below 2, so 0 would quietly pay for one clip.
+    if not params["count"].min <= count <= params["count"].max:
+        raise ValueError(f"count must be {params['count'].min}-{params['count'].max}, got {count}")
     if kind == "r2v":
         # gflow pins r2v to its only length on this host when none is sent (migrated_composer.py:968-986).
         if duration not in (None, R2V_DURATION_S):
@@ -54,9 +61,10 @@ def _video_settings(kind: str, model: str | None, duration: int | None) -> tuple
 
 
 def _job_refused(job_id: str | None, seen: str) -> str:
+    # The guidance leads because the agent sees at most 500 characters and a ledger path can be long.
     return (
-        f"job_id {job_id} already has {seen}, so that job may already have spent credits. Check flow_media and "
-        "flow_credits, and start it again under a new job_id only if it did not run."
+        "that job may already have spent credits: check flow_media and flow_credits, and start it again under a "
+        f"new job_id only if it did not run (job_id {job_id} already has {seen})"
     )
 
 
@@ -253,7 +261,7 @@ class Backend:
         out_dir: str | None = None,
     ) -> dict[str, Any]:
         if kind in gen_mod.VIDEO_KINDS:
-            model, duration = _video_settings(kind, model, duration)
+            model, duration = _video_settings(kind, model, duration, aspect, count)
         job = gen_mod.Job(
             job_id=job_id or str(uuid.uuid4()),
             kind=kind,
@@ -287,10 +295,11 @@ class TellingServer(MCPServer):
             return await super().call_tool(name, arguments, context)
         except UnexpectedToolError as exc:
             cause = exc.__cause__ or exc
-            logging.getLogger(__name__).exception("tool %s failed", name)
             # A Playwright error appends a call log listing request headers, cookies included: drop it whole.
             text = str(cause).split("\nCall log:")[0]
             detail = redact_error_detail(gen_mod._scrub(f"{type(cause).__name__}: {text}"))
+            # Only the scrubbed line is logged: the raw traceback would put the same cookies in the server's stderr.
+            logging.getLogger(__name__).error("tool %s failed: %s", name, detail)
             raise ToolError(f"Error executing tool {name}: {detail}") from cause
 
 

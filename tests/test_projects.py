@@ -1,6 +1,7 @@
 import asyncio
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video.flow import projects
 from video.session import MIGRATED_ROOT, FlowSession
@@ -111,6 +112,22 @@ def test_create_with_a_title_that_does_not_land_still_names_the_project_it_made(
     _flow_answers(monkeypatch, {"jHPbke": [[]]}, RENAMED, _grid_listing("NEW", "Untitled project"))
     session = _Session()
     session.page = _GridPage()
+
+    with pytest.raises(RuntimeError, match="project NEW was created"):
+        asyncio.run(projects.create(session, "new title"))
+
+
+class _StuckTitleBox(_TitleBox):
+    async def click(self, timeout=None):
+        raise PlaywrightTimeoutError("Locator.click: Timeout 8000ms exceeded")
+
+
+def test_create_names_the_project_it_made_whatever_stopped_the_rename(monkeypatch):
+    # Scoped re-review 2026-09-15: a Playwright timeout is neither LookupError nor RuntimeError and escaped bare.
+    _flow_answers(monkeypatch, {"jHPbke": [[]]})
+    session = _Session()
+    session.page = _GridPage()
+    session.page.locator = lambda selector: _StuckTitleBox()
 
     with pytest.raises(RuntimeError, match="project NEW was created"):
         asyncio.run(projects.create(session, "new title"))

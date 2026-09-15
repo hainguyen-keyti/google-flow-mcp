@@ -142,13 +142,14 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
     await session.goto(f"{session.project_url(project_id)}/trash", ready=PROJECT_READY)
     scene_tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
     # Tiles render over time: match the title only once every trashed scene has one, or a late namesake hides.
-    for _ in range(15):
-        if await scene_tiles.count() >= trashed:
-            break
+    waited_ms = 0
+    while (shown := await scene_tiles.count()) < trashed:
+        if waited_ms >= 15_000:
+            raise LookupError(
+                f"the trash shows {shown} scene tiles for {trashed} trashed scenes; not guessing"
+            )
         await page.wait_for_timeout(1_000)
-    else:
-        shown = await scene_tiles.count()
-        raise LookupError(f"the trash shows {shown} scene tiles for {trashed} trashed scenes; not guessing")
+        waited_ms += 1_000
     tiles = scene_tiles.filter(has_text=re.compile(re.escape(title)))
     matching = await tiles.count()
     if matching != 1:

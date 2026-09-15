@@ -39,9 +39,11 @@ async def create(session: FlowSession, title: str | None = None) -> dict[str, An
     if title:
         try:
             result["title"] = await rename(session, project_id, title, navigate=False)
-        except (LookupError, RuntimeError) as exc:
+        except Exception as exc:
             # The project exists by now: an error without its id sends a retry off to create a second one.
-            raise RuntimeError(f"project {project_id} was created, but naming it failed: {exc}") from exc
+            raise RuntimeError(
+                f"project {project_id} was created, but naming it failed: {type(exc).__name__}: {exc}"
+            ) from exc
     return result
 
 
