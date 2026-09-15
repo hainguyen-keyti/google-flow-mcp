@@ -117,25 +117,43 @@ mặt, tay và món đồ.
 ## MCP
 
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`). Server
-đang chạy không tự nạp code mới: sửa code xong phải kết nối lại MCP hoặc mở phiên mới.
+đang chạy không tự nạp code mới, và phiên đang mở còn giữ mô tả tool cũ: sửa code xong phải mở phiên mới.
 
-28 tool, chia theo đúng mô tả chi phí của từng tool:
+29 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
+"unmeasured"):
 
 - **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
-  `clip_edit`, `agent_send` (có thể tốn).
+  `clip_edit`, `agent_send` (có thể tốn). Cả 6 tool **bắt buộc `job_id`**: job mới thì id mới, gọi lại cùng job
+  thì giữ id. `job_id` đã có BẤT KỲ dòng nào trong sổ (kể cả `opening`, ở sổ mặc định lẫn sổ trong `out_dir`) bị từ
+  chối trước khi mở trình duyệt, kèm lời dặn soát `flow_media` và `flow_credits`, nên gọi lại không bao giờ trả tiền
+  hai lần. `clip_edit`, `clip_extend`, `agent_send` từ chối prompt có ký tự xuống dòng, vì ô của Flow nhận nó như
+  phím Enter trước khi sổ kịp ghi dòng `submitted`.
+- **Model mặc định qua MCP**: bỏ trống model thì `gen_t2v` và `gen_i2v` dùng `omni-flash` 10 s, còn `gen_r2v` dùng
+  `omni-flash` 8 s, độ dài duy nhất host này cho r2v (gflow tự ghim; truyền độ dài khác bị từ chối). Model veo thì
+  duration để Flow tự chọn (veo tối đa 8 s). Model và duration được kiểm theo đúng luật của gflow TRƯỚC khi ghi sổ,
+  để một giá trị gflow sẽ từ chối không đốt mất `job_id`. CLI `video gen` giữ nguyên.
 - **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
-- **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media`, `flow_characters`,
-  `flow_tools`, `flow_uploads`, `scene_list`, `flow_download` (ghi file vào thư mục đích), `clip_reconcile`
-  (đọc listing và số dư, ghi ledger, không sinh gì).
-- **Miễn phí nhưng ĐỔI project thật**: `project_create`, `project_rename`, `project_delete`,
-  `character_create`, `character_delete`, `scene_create`, `scene_delete`, `agent_mode`, `flow_upload`.
+- **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media` (luôn trả một object,
+  `all_versions=true` thêm khoá `versions`), `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
+  tự mở project đầu tiên trên grid), `flow_uploads`, `scene_list`, `flow_download` (ghi file vào thư mục đích),
+  `clip_reconcile` (đọc listing và số dư, ghi ledger, không sinh gì; trả kèm đường dẫn sổ đã đọc, sổ có tồn tại
+  không và số dòng, để `jobs: []` không bị hiểu nhầm là sạch khi đọc nhầm chỗ).
+- **Miễn phí nhưng ĐỔI project thật**: `project_create`, `project_rename` (đọc lại tên trên grid rồi mới trả
+  `{id, title}`), `project_delete`, `character_create`, `character_delete`, `scene_create`, `scene_delete`,
+  `scene_restore` (lấy scene ra khỏi thùng rác, từ chối khi tên khớp hơn một tile), `agent_mode`, `flow_upload`.
 - **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
   hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
 
 Không có chế độ no-spend: chủ repo chốt agent được gọi mọi thứ. Chuỗi `instructions` mà server gửi cho agent lúc
-`initialize` nêu đích danh nhóm tốn credit, và có test canh để nó không lệch khỏi mô tả của từng tool. Mỗi lần
-đọc số dư (CLI, MCP, job sinh, clip editor) ghi thêm một dòng kèm giờ vào `out/credits.jsonl`. Bị Google gắn cờ
-hoạt động bất thường (WAF, gflow exit 10) thì dừng hẳn: không thử lại, không đăng nhập lại, báo chủ repo.
+`initialize` nêu đích danh nhóm tốn credit, thời gian chờ và luật giữ `job_id`, và có test canh để nó không lệch
+khỏi mô tả của từng tool. Mỗi lần đọc số dư (CLI, MCP, job sinh, clip editor) ghi thêm một dòng kèm giờ vào
+`out/credits.jsonl`. Bị Google gắn cờ hoạt động bất thường (WAF, gflow exit 10) thì dừng hẳn: không thử lại,
+không đăng nhập lại, báo chủ repo.
+
+mcp 2.2.0 giấu lời của mọi exception không phải `ToolError`, agent chỉ thấy `Error executing tool <tên>` (đo
+2026-09-15, cả lời dặn WAF lẫn lời từ chối `job_id`). Server của repo chuyển lỗi thành `ToolError` kèm lý do: cắt
+bỏ phần "Call log" của Playwright (nó liệt kê header, có cả cookie), rồi lọc bằng regex của ledger cộng
+`redact_error_detail` của gflow (SID, HSID, SSID, APISID, Bearer, URL có chữ ký, email), tối đa 500 ký tự.
 
 ## Acceptance
 
@@ -146,7 +164,7 @@ uv run python scripts/acceptance/ledger_integrity.py     # $0, offline, không c
 uv run pytest -q
 ```
 
-Test tay toàn bộ 28 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
+Test tay toàn bộ 29 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
 `docs/mcp-manual-test.md`.
 
 `ledger_integrity.py` canh đúng một luật: **không credit nào rời tài khoản qua clip editor mà không có
@@ -189,8 +207,12 @@ quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần
 - Xoá scene là "Move to trash" trên tile của grid (rpc `BpMsoe`): scene vẫn nằm trong listing với cờ
   trashed và hiện ở view Trash; `scene list` mặc định ẩn scene đã trash, `--all` để thấy. Nút "Move to
   trash" bên trong editor scene không làm gì (đo 2 lần).
+- View Trash mở thẳng được ở `/project/<id>/trash`. Hover tile scene đã xoá hiện "Restore" và "Delete
+  permanently"; "Restore" bắn `BpMsoe`, không hỏi xác nhận. Tile trong thùng rác **không mang scene id** nên
+  `scene_restore` chỉ tìm được theo tên (đo 2026-09-15).
 - Giá đo được trên gói PRO: Veo 3.1 Lite 720p 8s = 10 credit, `clip extend` (7 s) = 10, `clip edit` Omni
-  1.1 Flash = 20, Omni Flash 10 s = 15, `--count 2` = 20, ảnh Nano Banana 2 = 0, upscale 1080p = 0.
+  1.1 Flash = 20, Omni Flash 10 s = 15, `--count 2` = 20, ảnh Nano Banana 2 = 0, upscale 1080p = 0, r2v Omni
+  Flash 8 s = 12 (đo 2026-09-15, 292 s đầu cuối qua MCP). `gen i2v` chưa thành công lần nào nên chưa có giá.
 - Thao tác tốn credit chỉ bấm "Start generation" ĐÚNG MỘT LẦN. Bấm lại khi tưởng cú trước hụt là cách
   nhanh nhất để trả tiền hai lần: đo 2026-09-13, cú thứ hai rơi vào ô prompt thường và cộng thêm một
   Omni edit 20 credit lên trên extend 10 credit (hoá đơn 30). Thành hay bại đọc ở listing và số dư.
