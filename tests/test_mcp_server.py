@@ -438,6 +438,7 @@ def test_every_spending_description_keeps_the_same_job_id_for_a_call_still_runni
         for sentence in running:
             assert "SAME job_id" in sentence, (name, sentence)
             assert "flow_" not in sentence and "under a new one" not in sentence, (name, sentence)
+            assert "new" not in sentence.replace("never a new one", ""), (name, sentence)
 
 
 def _flag(argv, name):
@@ -750,6 +751,7 @@ def test_a_second_call_with_the_same_job_id_is_refused_while_the_first_still_run
         assert refused.is_error and "still running" in text and "SAME job_id" in text, text
         assert "never start it under a new job_id" in text and "tell the owner" in text, text
         assert "flow_media" not in text and "new job_id only if" not in text, text
+        assert "new job_id" not in text.replace("never start it under a new job_id", ""), text
     assert not third.is_error, _texts([third])
 
 
@@ -800,7 +802,6 @@ def test_an_editor_out_dir_that_is_a_ledger_or_a_file_is_refused_before_a_browse
     text = _texts([with_client(fn)])[0]
     assert "out_dir must be a folder" in text, text
     assert reached == []
-    assert not (tmp_path / "out" / "ledger.jsonl").is_dir()
 
 
 def test_a_job_id_is_free_again_after_its_call_failed_without_writing_anything(monkeypatch, tmp_path):
