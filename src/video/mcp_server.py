@@ -563,8 +563,9 @@ async def clip_download(
         "the ledger it read (absolute path), ledger_exists, ledger_rows and one verdict per open job in jobs: "
         "jobs [] means nothing is left open in THAT ledger, so check that it exists; an error means the check "
         "itself failed. Verdicts: done (a new version of the source clip), failed (balance unchanged AND no new "
-        "record in the project), unknown (left open for a person), skipped (a gen_* or agent_send job, which "
-        "names no clip: never written, check it with flow_media and flow_credits). Free."
+        "record in the project), unknown (left open for a person; always unknown when this project's listing "
+        "does not hold the job's source clip, since ledger rows name no project), skipped (a gen_* or agent_send "
+        "job, which names no clip: never written, check it with flow_media and flow_credits). Free."
     ),
 )
 async def clip_reconcile(project_id: str, out_dir: str | None = None) -> str:

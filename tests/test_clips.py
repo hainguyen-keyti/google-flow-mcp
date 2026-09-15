@@ -471,9 +471,11 @@ def test_reconcile_closes_an_orphan_as_failed_when_the_balance_never_moved(monke
 
 def test_reconcile_leaves_a_job_alone_when_the_evidence_does_not_agree(monkeypatch, tmp_path):
     # Money moved but nothing new is on that media: guessing either way would put a lie in the ledger.
+    # The listing must hold the clip's older record, or the verdict stops at "clip not listed" before the balance.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     ledger.append("j", "opening", kind="edit", source_media_id="src-3", credits_before=295)
-    _reconcile_world(monkeypatch, [], balance=275)
+    stamp = ledger.rows("j")[0]["ts"]
+    _reconcile_world(monkeypatch, [_record("src-3", stamp - 3_600)], balance=275)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
