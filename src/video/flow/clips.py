@@ -317,14 +317,17 @@ def _stuck_editor_jobs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _editor_verdict(row: dict[str, Any], records: list[dict[str, Any]], credits_now: int) -> str:
     """What really happened, judged by ground truth only, never by the editor's own say-so.
 
-    Same three-way rule as `story.pipeline.reconcile_decision`. It is repeated here on purpose: the flow
-    layer must not import the story layer, and four lines of rule are cheaper than that dependency.
+    Stricter than `story.pipeline.reconcile_decision` on `failed` (DECISIONS 2026-09-15): the balance has been
+    measured moving with no spend (195 to 245 overnight), so an equal one proves nothing alone, while a job that
+    spent has always left a record in the listing. `failed` needs both an equal balance and a project that gained
+    no record since the job opened.
     """
     media_id = row.get("source_media_id")
     stamp = row.get("ts") or 0
     if any(r.get("id") == media_id and (r.get("created") or 0) >= stamp for r in records):
         return "done"
-    if credits_now == row.get("credits_before"):
+    project_changed = any((r.get("created") or 0) >= stamp for r in records)
+    if credits_now == row.get("credits_before") and not project_changed:
         return "failed"
     return "unknown"
 
@@ -339,10 +342,17 @@ async def reconcile_editor(session: FlowSession, project_id: str, *, out_dir: Pa
     stuck = _stuck_editor_jobs(ledger.rows())
     if not stuck:
         return []
-    records, _ = await _snapshot(session, project_id)
-    credits_now = (await reader.credits(session))["balance"]
-    out = []
+    records: list[dict[str, Any]] = []
+    credits_now = None
+    if any(row.get("source_media_id") for row in stuck):
+        records, _ = await _snapshot(session, project_id)
+        credits_now = (await reader.credits(session))["balance"]
+    out: list[dict[str, Any]] = []
     for row in stuck:
+        if not row.get("source_media_id"):
+            # A gen or agent job names no clip, so nothing here can judge it: report it, never write it.
+            out.append({"job_id": row["job_id"], "kind": row.get("kind"), "verdict": "skipped"})
+            continue
         verdict = _editor_verdict(row, records, credits_now)
         before = row.get("credits_before")
         if verdict != "unknown":

@@ -472,6 +472,61 @@ def test_reconcile_ignores_jobs_that_already_have_an_outcome(monkeypatch, tmp_pa
     assert len(ledger.rows("settled")) == 3
 
 
+def _no_flow_reads(monkeypatch):
+    async def must_not_read(*args, **kwargs):
+        raise AssertionError("reconcile read Flow with nothing it can judge")
+
+    monkeypatch.setattr(clips, "_snapshot", must_not_read)
+    monkeypatch.setattr(clips.reader, "credits", must_not_read)
+
+
+def test_reconcile_reports_gen_and_agent_jobs_as_skipped_and_never_writes_them(monkeypatch, tmp_path):
+    # Review 2026-09-15: gen and agent rows name no clip, so the editor's rule could never find them done and wrote
+    # "failed" from the balance alone, a balance measured to move with no spend (195 to 245 overnight).
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("g", "submitted", kind="t2v", argv=["video", "t2v"], credits_before=295)
+    ledger.append("a", "submitted", kind="agent", project="p", message="hi", credits_before=295)
+    _no_flow_reads(monkeypatch)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [
+        {"job_id": "g", "kind": "t2v", "verdict": "skipped"},
+        {"job_id": "a", "kind": "agent", "verdict": "skipped"},
+    ]
+    assert [r["status"] for r in ledger.rows()] == ["submitted", "submitted"]
+
+
+def test_reconcile_judges_editor_rows_and_skips_the_rest_in_one_pass(monkeypatch, tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("e", "opening", kind="extend", source_media_id="src-6", credits_before=295)
+    ledger.append("g", "submitted", kind="r2v", argv=["video", "r2v"], credits_before=295)
+    stamp = ledger.rows("e")[0]["ts"]
+    _reconcile_world(monkeypatch, [_record("src-6", stamp + 10)], balance=285)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [(r["job_id"], r["verdict"]) for r in out] == [("e", "done"), ("g", "skipped")]
+    assert [r["status"] for r in ledger.rows("e")] == ["opening", "done"]
+    assert [r["status"] for r in ledger.rows("g")] == ["submitted"]
+
+
+def test_reconcile_leaves_an_editor_job_open_when_the_balance_matches_but_the_project_gained_a_record(
+    monkeypatch, tmp_path
+):
+    # An equal balance is not proof on its own that nothing was bought: failed also needs a project with no record
+    # made since the job opened (DECISIONS 2026-09-15).
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("j", "opening", kind="edit", source_media_id="src-7", credits_before=295)
+    stamp = ledger.rows("j")[0]["ts"]
+    _reconcile_world(monkeypatch, [_record("another-media", stamp + 10)], balance=295)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
 def test_editor_job_keeps_polling_past_the_scene_copy_until_its_own_record_is_done(monkeypatch, tmp_path):
     # Measured 2026-09-13 00:11: the scene's copy of the source is listed (status 3) seconds after Extend,
     # the extension itself only a minute later; stopping at the first done record lost the extension.
