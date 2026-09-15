@@ -502,9 +502,10 @@ def test_reconcile_closes_an_orphan_as_done_when_the_media_gained_a_record(monke
     ]
 
 
-def test_reconcile_closes_an_extend_as_done_when_its_prompt_shows_up_on_a_new_clip(monkeypatch, tmp_path):
-    # Review 2026-09-15: a real extend puts its clip on a NEW media id next to a copy of the source (out/acceptance5,
-    # out/acceptance3), so "a new version of the source clip" never found one; the driver itself goes by the prompt.
+def test_reconcile_leaves_an_extend_open_even_when_its_prompt_shows_up_on_a_new_clip(monkeypatch, tmp_path):
+    # Review of plan C (2026-09-15): an extend's clip lands on a new media id beside copies of every version of the
+    # source, which keep their prompts on new workflows, so nothing ties a new clip to this job: a person closes
+    # extends (DECISIONS 2026-09-15). The new records it left still keep `failed` away.
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     _opening(ledger, "x", "src-15", kind="extend", prompt="keep going")
     listing = [
@@ -512,16 +513,132 @@ def test_reconcile_closes_an_extend_as_done_when_its_prompt_shows_up_on_a_new_cl
         _record("copy-15", 300, "the source prompt"),
         _record("new-15", 400, "keep going"),
     ]
-    _reconcile_world(monkeypatch, listing, balance=285)
+    _reconcile_world(monkeypatch, listing, balance=295)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("x")] == ["opening"]
+
+
+def test_reconcile_never_closes_an_extend_with_a_version_made_on_its_own_clip(monkeypatch, tmp_path):
+    # An extend never adds a version to its source clip; one carrying the same prompt there came from some edit.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "x", "src-28", kind="extend")
+    _reconcile_world(monkeypatch, [_record("src-28", 100), _record("src-28", 200, JOB_PROMPT)], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("x")] == ["opening"]
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        # Another job's edit on a different clip with the same prompt, closed by hand or ledgered elsewhere.
+        [_record("src-20", 100), _record("other-clip", 200, JOB_PROMPT)],
+        # An extend's copy of an earlier edit of this clip: new media, new workflow, the same prompt and time.
+        [
+            _record("src-20", 100),
+            _record("src-20", 150, JOB_PROMPT),
+            {**_record("copy-20", 150, JOB_PROMPT), "workflow_id": "w-copy"},
+        ],
+    ],
+)
+def test_reconcile_never_gives_an_edit_a_record_that_is_not_on_its_own_clip(monkeypatch, tmp_path, listing):
+    # Review of plan C (2026-09-15): story sends one prompt to every edit and extends copy edited versions onto new
+    # media, so matching by prompt alone gave other clips' records to this job; 10 of 10 real edits landed on their
+    # own clip.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    listed = [record["workflow_id"] for record in listing if record["id"] == "src-20"]
+    _opening(ledger, "a", "src-20", workflows_before=listed)
+    _reconcile_world(monkeypatch, listing, balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("a")] == ["opening"]
+
+
+def test_reconcile_leaves_two_open_edits_of_the_same_clip_and_prompt_to_a_person(monkeypatch, tmp_path):
+    # Review of plan C (2026-09-15): with two open jobs that could both own the new version, ledger order picked the
+    # winner, and it could be the job that never submitted.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "never-submitted", "src-21")
+    _opening(ledger, "submitted", "src-21")
+    _reconcile_world(monkeypatch, [_record("src-21", 100), _record("src-21", 200, JOB_PROMPT)], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [(r["job_id"], r["verdict"]) for r in out] == [
+        ("never-submitted", "unknown"),
+        ("submitted", "unknown"),
+    ]
+    assert [r["status"] for r in ledger.rows()] == ["opening", "opening"]
+
+
+def test_reconcile_leaves_an_edit_open_when_two_new_versions_carry_its_prompt(monkeypatch, tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-22")
+    listing = [_record("src-22", 100), _record("src-22", 200, JOB_PROMPT), _record("src-22", 300, JOB_PROMPT)]
+    _reconcile_world(monkeypatch, listing, balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["unknown"]
+    assert [r["status"] for r in ledger.rows("j")] == ["opening"]
+
+
+def test_reconcile_still_closes_an_edit_whose_own_pending_row_lists_the_version(monkeypatch, tmp_path):
+    # The job's own rows are not another job: a driver that saw its version but died fetching it wrote `pending`.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-23")
+    ledger.append(
+        "j", "pending", outputs=[{"media_id": "src-23", "workflow_id": "w-200", "role": "generated"}]
+    )
+    _reconcile_world(monkeypatch, [_record("src-23", 100), _record("src-23", 200, JOB_PROMPT)], balance=275)
 
     out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
 
     assert [r["verdict"] for r in out] == ["done"]
-    rows = ledger.rows("x")
-    assert [r["status"] for r in rows] == ["opening", "done"]
-    assert rows[-1]["outputs"] == [
-        {"media_id": "new-15", "workflow_id": "w-400", "role": "generated", "status": 3}
-    ]
+
+
+def test_reconcile_still_closes_an_edit_whose_version_another_job_listed_only_as_a_copy(
+    monkeypatch, tmp_path
+):
+    # A driver lists every new record it sees; one not carrying its own prompt goes in as a copy, not as its output.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-24")
+    _opening(ledger, "later", "src-25", prompt="something else")
+    seen = [{"media_id": "src-24", "workflow_id": "w-200", "role": "copy"}]
+    ledger.append("later", "done", outputs=seen, spent=20)
+    _reconcile_world(monkeypatch, [_record("src-24", 100), _record("src-24", 200, JOB_PROMPT)], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["done"]
+
+
+def test_reconcile_compares_prompts_as_the_driver_does_ignoring_outer_spaces(monkeypatch, tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-26", prompt=f"  {JOB_PROMPT} ")
+    _reconcile_world(monkeypatch, [_record("src-26", 100), _record("src-26", 200, JOB_PROMPT)], balance=275)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert [r["verdict"] for r in out] == ["done"]
+
+
+def test_reconcile_never_judges_an_opening_row_whose_prompt_is_only_spaces(monkeypatch, tmp_path):
+    # The driver refuses only newlines, so a prompt of spaces can reach the ledger; it would match an upscale's empty one.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    _opening(ledger, "j", "src-27", prompt="   ")
+    _no_flow_reads(monkeypatch)
+
+    out = asyncio.run(clips.reconcile_editor(_Session(), "p", out_dir=tmp_path))
+
+    assert out == [{"job_id": "j", "verdict": "unknown", "credits_now": None}]
 
 
 def test_reconcile_never_takes_an_upscale_for_the_jobs_own_record(monkeypatch, tmp_path):

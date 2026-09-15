@@ -270,17 +270,13 @@ def check_retry_not_blocked(tmp: Path) -> tuple[str, str]:
 
 
 def check_reconcile_done(tmp: Path) -> tuple[str, str]:
-    """A finished record the opening row did not list, carrying the job's own prompt, means the job really ran: an
-    edit's version on the source clip, or an extend's clip on a new media id beside a copy of the source.
+    """A finished version on the source clip that the opening row did not list, carrying the edit's own prompt, means
+    the edit really ran; an extend is never closed as done (DECISIONS 2026-09-15).
 
-    The record goes into the done row's outputs, so no other job can be given it later (DECISIONS 2026-09-15).
+    The record goes into the done row's outputs, so no other job can be given it later.
     """
     cases = {
         "edit": ([_record("src-4", 1), _record("src-4", 2, JOB_PROMPT)], ("src-4", "w-2")),
-        "extend": (
-            [_record("src-4", 1), _record("copy-4", 3), _record("new-4", 4, JOB_PROMPT)],
-            ("new-4", "w-4"),
-        ),
     }
     seen = {}
     for kind, (records, expected) in cases.items():
@@ -336,7 +332,9 @@ def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
     never moved, or a balance that moved while nothing is new (the balance moves with no spend, 195 to 245). Nor
     may a job whose opening row never saw its clip be judged: every record of that clip would look new. A free 1080p
     upscale (new workflow `..._upsampled`, no prompt, measured 2026-09-15) is not the job's record, and neither is a
-    record another job's outputs already hold, which still counts as new against `failed`.
+    record another job's outputs already hold, which still counts as new against `failed`. An edit is never given a
+    record on another clip (an extend copies edited versions onto new media with their prompts), and an extend is
+    never closed as done (DECISIONS 2026-09-15).
 
     Each case gets its own ledger, since one reconcile reads one balance for every job.
     """
@@ -352,12 +350,29 @@ def check_reconcile_unknown(tmp: Path) -> tuple[str, str]:
             ["w-1"],
             ["w-2"],
         ),
+        "record_on_another_clip": (
+            START_BALANCE,
+            [_record("src-6", 1), _record("other-clip", 2, JOB_PROMPT)],
+            ["w-1"],
+            [],
+        ),
+        "extend_with_its_prompt": (
+            AFTER_BALANCE,
+            [
+                _record("src-6", 1),
+                {**_record("copy-clip", 1), "workflow_id": "w-copy"},
+                _record("new-clip", 2, JOB_PROMPT),
+            ],
+            ["w-1"],
+            [],
+        ),
     }
     seen = {}
     for name, (balance, records, listed, taken) in cases.items():
         room = tmp / name
         room.mkdir(parents=True, exist_ok=True)
-        _opening(gen.Ledger(room / "ledger.jsonl"), "u", "src-6", workflows_before=listed)
+        kind = "extend" if name.startswith("extend") else "edit"
+        _opening(gen.Ledger(room / "ledger.jsonl"), "u", "src-6", workflows_before=listed, kind=kind)
         if taken:
             outputs = [
                 {"media_id": "src-6", "workflow_id": workflow, "role": "generated"} for workflow in taken

@@ -340,7 +340,7 @@ def _taken_elsewhere(rows: list[dict[str, Any]], job_id: str) -> set[str]:
 
 
 def _editor_verdict(
-    row: dict[str, Any], records: list[dict[str, Any]], credits_now: int, taken: set[str]
+    row: dict[str, Any], records: list[dict[str, Any]], credits_now: int, taken: set[str], contested: bool
 ) -> tuple[str, dict[str, Any] | None]:
     """What really happened, judged by ground truth only, never by the editor's own say-so.
 
@@ -348,9 +348,11 @@ def _editor_verdict(
     measured moving with no spend (195 to 245 overnight), so an equal one proves nothing alone, while a job that
     spent has always left a record in the listing. A record is new when its workflow is missing from the
     `workflows_before` the job wrote as it opened, whatever its time: Flow's clock and this Mac's disagree, and a
-    clip's `created` is stamped at submit. `done` needs a new, finished record carrying the job's own prompt that no
-    other job's outputs hold, the same prompt test the driver uses: an extend's clip lands on a new media id and a
-    free upscale adds a promptless version (measured 2026-09-15). `failed` needs an equal balance and no new record
+    clip's `created` is stamped at submit. `done` is for an edit only: exactly one new, finished version on its own
+    clip carrying its prompt (compared as the driver does), held by no other job's outputs, with no other open job of
+    that clip and prompt. Every measured edit put its version on its clip, while an extend's clip lands on a new media
+    id beside copies of each source version that keep their prompts, and a free upscale adds a promptless version, so
+    an extend is never `done` (DECISIONS 2026-09-15). `failed` needs an equal balance and no new record
     at all, taken or not. A listing without the job's own clip holds no evidence about the job, and a clip the row
     never saw would make every one of its records look new: both are `unknown`.
     """
@@ -363,9 +365,12 @@ def _editor_verdict(
     ours = [
         r
         for r in fresh
-        if r["workflow_id"] not in taken and (r.get("prompt") or "").strip() == prompt and is_done(r)
+        if r.get("id") == media_id
+        and r["workflow_id"] not in taken
+        and (r.get("prompt") or "").strip() == prompt
+        and is_done(r)
     ]
-    if ours:
+    if row.get("kind") == "edit" and len(ours) == 1 and not contested:
         return "done", ours[0]
     if credits_now == row.get("credits_before") and not fresh:
         return "failed", None
@@ -398,12 +403,14 @@ async def reconcile_editor(
     and writing a guess into the ledger is worse than leaving the question open for a human.
     """
     ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
-    stuck = _stuck_editor_jobs(ledger.rows())
+    rows = ledger.rows()
+    stuck = _stuck_editor_jobs(rows)
     if not stuck:
         return []
     records: list[dict[str, Any]] = []
     credits_now = None
-    if any(_judgeable(row, project_id) for row in stuck):
+    judgeable = [row for row in stuck if _judgeable(row, project_id)]
+    if judgeable:
         records, _ = await _snapshot(session, project_id)
         credits_now = (await reader.credits(session))["balance"]
     out: list[dict[str, Any]] = []
@@ -427,9 +434,15 @@ async def reconcile_editor(
             # Written before opening rows listed their workflows and prompt (DECISIONS 2026-09-15): left for a person.
             out.append({"job_id": row["job_id"], "verdict": "unknown", "credits_now": credits_now})
             continue
-        # Read again per job, so a record given to a job earlier in this pass is taken for the next one.
-        taken = _taken_elsewhere(ledger.rows(), row["job_id"])
-        verdict, record = _editor_verdict(row, records, credits_now, taken)
+        # Two open jobs of one clip and prompt could each own its new version, so neither is given it.
+        contested = any(
+            other["job_id"] != row["job_id"]
+            and other.get("source_media_id") == row.get("source_media_id")
+            and other["prompt"].strip() == row["prompt"].strip()
+            for other in judgeable
+        )
+        taken = _taken_elsewhere(rows, row["job_id"])
+        verdict, record = _editor_verdict(row, records, credits_now, taken, contested)
         before = row.get("credits_before")
         if verdict != "unknown":
             outputs = []
