@@ -370,6 +370,8 @@ def test_the_opening_row_names_the_project_and_every_workflow_the_listing_held(m
     assert [r["status"] for r in rows] == ["opening"], rows
     assert rows[0]["project"] == "p"
     assert rows[0]["workflows_before"] == ["w-100", "w-200"]
+    # Plan C (DECISIONS 2026-09-15): the prompt too, the only mark telling the job's own record from an upscale.
+    assert rows[0]["prompt"] == "keep going"
 
 
 def test_an_orphaned_opening_row_does_not_block_the_same_job_from_running_again(monkeypatch, tmp_path):

@@ -174,6 +174,7 @@ def check_intent_extend(tmp: Path) -> tuple[str, str]:
         and rows[0].get("credits_before") == START_BALANCE
         and rows[0].get("project") == "p"
         and rows[0].get("workflows_before") == ["w-1", "w-2"]
+        and rows[0].get("prompt") == PROMPT
     )
     return ("PASS" if ok else "FAIL"), f"rows={[r['status'] for r in rows]} first={rows[0] if rows else None}"
 
@@ -204,6 +205,7 @@ def check_intent_edit(tmp: Path) -> tuple[str, str]:
         and rows[0].get("source_media_id") == "src-2"
         and rows[0].get("project") == "p"
         and rows[0].get("workflows_before") == ["w-1"]
+        and rows[0].get("prompt") == PROMPT
     )
     return ("PASS" if ok else "FAIL"), f"rows={[r['status'] for r in rows]} first={rows[0] if rows else None}"
 

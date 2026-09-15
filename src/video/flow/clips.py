@@ -216,7 +216,8 @@ async def _generate_from_editor(
     # died before its `submitted` row, so nothing in the ledger pointed at them). The two calls above are
     # reads that cannot spend, and this row needs their numbers. The status stays outside the set
     # `has_submitted` blocks on, so an orphaned row never stops a legitimate retry. The project and the
-    # workflows already listed let reconcile tell what this job added without comparing two clocks.
+    # workflows already listed let reconcile tell what this job added without comparing two clocks, and the
+    # prompt tells this job's own record from an upscale or another job's output.
     ledger.append(
         job_id,
         "opening",
@@ -225,6 +226,7 @@ async def _generate_from_editor(
         credits_before=credits_before,
         project=project_id,
         workflows_before=sorted(before),
+        prompt=prompt,
     )
     await _open(session, project_id, media_id)
     page = session.page
