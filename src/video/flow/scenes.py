@@ -138,14 +138,18 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
     if not scene["trashed"]:
         raise LookupError(f"scene {scene_id} is not in the trash")
     title = scene["title"] or ""
+    trashed = sum(1 for s in scenes if s["trashed"])
     await session.goto(f"{session.project_url(project_id)}/trash", ready=PROJECT_READY)
-    tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile")).filter(
-        has_text=re.compile(re.escape(title))
-    )
-    try:
-        await tiles.first.wait_for(state="visible", timeout=15_000)
-    except PlaywrightTimeoutError as exc:
-        raise LookupError(f"no trash tile titled {title!r} for scene {scene_id}") from exc
+    scene_tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
+    # Tiles render over time: match the title only once every trashed scene has one, or a late namesake hides.
+    for _ in range(15):
+        if await scene_tiles.count() >= trashed:
+            break
+        await page.wait_for_timeout(1_000)
+    else:
+        shown = await scene_tiles.count()
+        raise LookupError(f"the trash shows {shown} scene tiles for {trashed} trashed scenes; not guessing")
+    tiles = scene_tiles.filter(has_text=re.compile(re.escape(title)))
     matching = await tiles.count()
     if matching != 1:
         raise RuntimeError(
@@ -157,6 +161,13 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
     button = tile.get_by_role("button", name=re.compile("^Restore$", re.IGNORECASE)).first
     frames = await capture(session, lambda: button.click(timeout=8_000), settle=5.0)
     after = await list_scenes(session, project_id, include_trashed=True)
+    was = {s["scene_id"]: s["trashed"] for s in scenes}
+    moved = [
+        s for s in after if s["scene_id"] != scene_id and was.get(s["scene_id"], s["trashed"]) != s["trashed"]
+    ]
+    if moved:
+        names = ", ".join(f"{s['scene_id']} ({s['title']!r})" for s in moved)
+        raise RuntimeError(f"restore changed another scene: {names}; check scene_list with include_trashed")
     state = next((s for s in after if s["scene_id"] == scene_id), None)
     if state is None or state["trashed"]:
         raise RuntimeError(f"restore: scene {scene_id} is still in the trash; rpcids {sorted(frames)}")

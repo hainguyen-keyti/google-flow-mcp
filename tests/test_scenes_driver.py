@@ -51,38 +51,50 @@ class _Tile:
 
 
 class _Tiles:
-    def __init__(self, page, titles):
+    """A live locator: what it matches is read off the page each time, so a late tile shows up in a later count."""
+
+    def __init__(self, page, pattern=None):
         self.page = page
-        self.titles = titles
+        self.pattern = pattern
+
+    def _titles(self):
+        # Measured 2026-09-15: a trash tile's text is its title between two icon ligatures.
+        shown = self.page.shown()
+        return [t for t in shown if self.pattern is None or self.pattern.search(f"movie_edit {t} movie")]
 
     def filter(self, has_text=None):
-        # Measured 2026-09-15: a trash tile's text is its title between two icon ligatures.
-        return _Tiles(self.page, [t for t in self.titles if has_text.search(f"movie_edit {t} movie")])
+        return _Tiles(self.page, has_text)
 
     @property
     def first(self):
-        return _Tile(self.page, self.titles[0] if self.titles else None)
+        titles = self._titles()
+        return _Tile(self.page, titles[0] if titles else None)
 
     async def count(self):
-        return len(self.titles)
+        return len(self._titles())
 
 
 class _TrashPage:
     """The project's Trash view as measured on 2026-09-15: scene tiles carry no scene id, hovering one shows
-    Restore and Delete permanently, and Restore asks for no confirmation."""
+    Restore and Delete permanently, and Restore asks for no confirmation. Tiles may render late: `titles` maps
+    each shown title to the millisecond it appears."""
 
     def __init__(self, titles):
-        self.titles = titles
+        self.titles = titles if isinstance(titles, dict) else {title: 0 for title in titles}
+        self.elapsed_ms = 0
         self.restored = []
+
+    def shown(self):
+        return [title for title, at in self.titles.items() if at <= self.elapsed_ms]
 
     def locator(self, selector, has=None):
         if selector == "flow-scene-tile":
             return selector
         assert selector == "flow-tile-container" and has == "flow-scene-tile"
-        return _Tiles(self, list(self.titles))
+        return _Tiles(self)
 
     async def wait_for_timeout(self, ms):
-        pass
+        self.elapsed_ms += ms
 
 
 class _Session:
@@ -133,6 +145,39 @@ def test_restore_refuses_to_guess_when_more_than_one_trash_tile_matches_the_titl
     with pytest.raises(RuntimeError, match=re.escape("2 trash tiles match 'scene'")):
         asyncio.run(scenes.restore(session, PROJECT, SCENE))
     assert session.page.restored == []
+
+
+def test_restore_waits_for_every_trashed_scene_tile_before_it_matches_the_title(monkeypatch):
+    # Review 2026-09-15: counting as soon as the first match showed let "Scene 10", rendered before "Scene 1",
+    # be the only fit for "Scene 1" and get restored in its place.
+    _flow_answers(monkeypatch, _listing(_entry(SCENE, "Scene 1", True), _entry(OTHER, "Scene 10", True)))
+    session = _Session({"Scene 10": 0, "Scene 1": 2_000})
+
+    with pytest.raises(RuntimeError, match=re.escape("2 trash tiles match 'Scene 1'")):
+        asyncio.run(scenes.restore(session, PROJECT, SCENE))
+    assert session.page.restored == []
+
+
+def test_restore_gives_up_when_the_trash_never_shows_every_trashed_scene(monkeypatch):
+    _flow_answers(monkeypatch, _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", True)))
+    session = _Session(["alpha"])
+
+    with pytest.raises(LookupError, match="shows 1 scene tiles for 2 trashed scenes"):
+        asyncio.run(scenes.restore(session, PROJECT, SCENE))
+    assert session.page.restored == []
+
+
+def test_restore_names_another_scene_whose_trash_flag_changed(monkeypatch):
+    # The trash shows no ids, so a wrong tile can only be caught afterwards, in the listing: say which one moved.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", True)),
+        RESTORED,
+        _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", False)),
+    )
+
+    with pytest.raises(RuntimeError, match=f"{OTHER} \\('bravo'\\)"):
+        asyncio.run(scenes.restore(_Session(["alpha", "bravo"]), PROJECT, SCENE))
 
 
 def test_restore_refuses_a_scene_that_is_not_in_the_trash(monkeypatch):
