@@ -803,7 +803,18 @@ def test_a_job_id_is_free_again_after_its_call_was_cancelled_without_writing_any
     assert calls == ["job-t2v", "job-t2v"]
 
 
-@pytest.mark.parametrize("path", ["out/ledger.jsonl", "out/s3/ledger.jsonl", "out/clip.mp4"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "out/ledger.jsonl",
+        "out/s3/ledger.jsonl",
+        "out/clip.mp4",
+        # Narrow re-review of plan B (DECISIONS 2026-09-15 debt, plan D T6): only the last part was compared, case and all.
+        "out/x/LEDGER.JSONL",
+        "out/y/ledger.jsonl/run",
+        "out/clip.mp4/x",
+    ],
+)
 def test_an_editor_out_dir_that_is_a_ledger_or_a_file_is_refused_before_a_browser_opens(
     monkeypatch, tmp_path, path
 ):
@@ -818,6 +829,37 @@ def test_an_editor_out_dir_that_is_a_ledger_or_a_file_is_refused_before_a_browse
 
     text = _texts([with_client(fn)])[0]
     assert "out_dir must be a folder" in text, text
+    assert reached == []
+
+
+@pytest.mark.parametrize("path", ["out/ledgers/run", "out/Ledger-notes/x"])
+def test_an_editor_out_dir_that_only_mentions_a_ledger_is_still_accepted(monkeypatch, tmp_path, path):
+    # Plan D T6: the stricter check looks at whole path parts, so a folder whose name merely contains "ledger" still works.
+    (tmp_path / "out").mkdir()
+    reached = _spending_backend(monkeypatch, tmp_path / "out")
+
+    async def fn(s):
+        return await s.call_tool("clip_edit", SPEND_CALLS["clip_edit"] | {"out_dir": str(tmp_path / path)})
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])
+    assert [step for step in reached if step != "browser"] == [("clip_edit", "job-edit")]
+
+
+def test_a_job_id_in_a_ledger_file_named_in_another_case_is_refused_before_a_browser_opens(
+    monkeypatch, tmp_path
+):
+    # Narrow re-review of plan B (DECISIONS 2026-09-15 debt): the scan used rglob("ledger.jsonl"), which misses
+    # Ledger.jsonl even where the disk does not tell the two names apart.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    gen.Ledger(tmp_path / "deep" / "Ledger.jsonl").append("job-t2v", "submitted", kind="t2v")
+
+    async def fn(s):
+        return await s.call_tool("gen_t2v", dict(SPEND_CALLS["gen_t2v"]))
+
+    result = with_client(fn)
+    text = _texts([result])[0]
+    assert result.is_error and "may already have spent credits" in text, text
     assert reached == []
 
 

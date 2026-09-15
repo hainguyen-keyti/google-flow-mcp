@@ -94,9 +94,13 @@ class Backend:
             raise ValueError(
                 f"out_dir must be inside {self.out_dir.resolve()} (outputs stay in out/), got {target}"
             )
-        # A ledger path would make the driver create a folder named ledger.jsonl, which every spend then reads.
-        if target.name == "ledger.jsonl" or (target.exists() and not target.is_dir()):
-            raise ValueError(f"out_dir must be a folder, not a ledger or another file, got {target}")
+        # Any part named ledger.jsonl, in any case since the disk may not tell the names apart, makes the driver create a
+        # folder every spend then fails to read; a part that is already a file would fail only once a browser is open.
+        current = self.out_dir.resolve()
+        for part in target.resolve().relative_to(current).parts:
+            current = current / part
+            if part.casefold() == "ledger.jsonl" or (current.exists() and not current.is_dir()):
+                raise ValueError(f"out_dir must be a folder, not a ledger or another file, got {target}")
         return target
 
     async def _spend_once(self, job_id: str | None, out_dir: Path, run: Callable[[], Awaitable[Any]]) -> Any:
@@ -114,7 +118,9 @@ class Backend:
                     "job_id; never start it under a new job_id, or it pays twice; if it never finishes, stop and tell "
                     f"the owner (job_id {job_id})"
                 )
-            found = sorted(path for path in self.out_dir.rglob("ledger.jsonl") if path.is_file())
+            found = sorted(
+                path for path in self.out_dir.rglob("ledger.jsonl", case_sensitive=False) if path.is_file()
+            )
             ledgers = dict.fromkeys([*found, out_dir / "ledger.jsonl"])
             for ledger in ledgers:
                 statuses = sorted({str(row.get("status")) for row in gen_mod.Ledger(ledger).rows(job_id)})
