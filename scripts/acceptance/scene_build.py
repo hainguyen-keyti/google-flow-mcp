@@ -57,7 +57,11 @@ def _duration(payload: Any) -> float | None:
 
 
 async def run(project: str, rows: list[dict[str, Any]], state: dict[str, Any]) -> None:
-    title = f"pB{int(time.time())}"
+    stamp = int(time.time())
+    title = f"pB{stamp}"
+    # A room of its own: the source clip and the films land here, so a second run never trips the no-overwrite rule
+    # on a file an earlier run left behind (CLAUDE.md rule 5).
+    room = f"out/scene_build_{stamp}"
     scene_id: str | None = None
     first: float | None = None
 
@@ -90,7 +94,7 @@ async def run(project: str, rows: list[dict[str, Any]], state: dict[str, Any]) -
                     return
                 media_id = videos[0]["id"]
                 # Free, and it gives the yardstick the film rows compare against.
-                arguments = {"project_id": project, "media_id": media_id, "out_dir": "out"}
+                arguments = {"project_id": project, "media_id": media_id, "out_dir": room}
                 source, error, _ = await call(session, "flow_download", arguments)
                 source_s = _duration(source)
                 if error or not source_s:
@@ -118,7 +122,7 @@ async def run(project: str, rows: list[dict[str, Any]], state: dict[str, Any]) -
                 )
 
                 add_arguments = {"project_id": project, "scene_id": scene_id, "media_id": media_id}
-                film_arguments = {"project_id": project, "scene_id": scene_id}
+                film_arguments = {"project_id": project, "scene_id": scene_id, "out_dir": room}
 
                 _, add_error, add_took = await call(session, "scene_add_clip", add_arguments)
                 film, film_error, film_took = await call(session, "scene_download", film_arguments)
