@@ -1025,6 +1025,17 @@ def test_submit_strict_output_leaves_a_job_unknown_when_the_balance_moved_and_no
     assert (last["status"], last["candidates"]) == ("unknown", [])
 
 
+def test_submit_strict_output_counts_a_balance_that_went_up_as_moved(monkeypatch, tmp_path):
+    # The daily credits refresh on the first generation of the day (DECISIONS 2026-09-16), so a refill can land here.
+    log = []
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 250, 250))
+    with pytest.raises(RuntimeError, match="balance moved by -50") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert "nothing was generated" not in str(raised.value)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert (last["status"], last["spent"]) == ("unknown", -50)
+
+
 def test_a_promptless_video_never_matches_a_job_whose_box_was_not_read():
     # Measured in out/records_now.json: an upscale adds a video record whose prompt is ''.
     assert composer.matching_outputs([_video("w-upscale", "")], PROMPT) == []
@@ -1303,6 +1314,24 @@ def test_submit_a_failure_inside_the_click_window_claims_no_rpcids(monkeypatch, 
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
     assert log.count("click") == 1 and last["status"] == "unknown" and last["rpcids"] is None
+
+
+@pytest.mark.parametrize(("heard", "rpcids"), [({"MZZa6b": [[]]}, ["MZZa6b"]), ({}, [])])
+def test_submit_a_failure_after_the_click_window_names_the_rpcids_it_heard(
+    monkeypatch, tmp_path, heard, rpcids
+):
+    log = []
+    _install(monkeypatch, tmp_path, log, poll_error=LookupError("rpc Zzl0ze not observed; saw []"))
+
+    async def await_submit(session, click, *, settle=30.0, patience=90.0):
+        await click()
+        return heard
+
+    monkeypatch.setattr(composer.clips, "_await_submit", await_submit)
+    with pytest.raises(RuntimeError, match="credits may already be spent"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert last["status"] == "unknown" and last["rpcids"] == rpcids
 
 
 def test_submit_a_screenshot_that_fails_after_the_click_changes_nothing(monkeypatch, tmp_path):
@@ -1714,6 +1743,14 @@ def test_generate_verify_refuses_a_prompt_that_changed_after_setup(monkeypatch, 
 
 def test_generate_verify_compares_the_box_text_with_its_whitespace_collapsed(monkeypatch):
     box_text = f"Thu  peobj1.png\n{PROMPT} "
+    setup, verify, session = _prepared(monkeypatch, [], ON_PAGE, box_text=box_text)
+    asyncio.run(setup(session))
+    assert asyncio.run(verify(session))["prompt_text"] == box_text
+
+
+def test_generate_verify_ignores_letter_case(monkeypatch):
+    # innerText applies CSS text-transform while a chip's textContent does not.
+    box_text = f"THU PEOBJ1.PNG {PROMPT}"
     setup, verify, session = _prepared(monkeypatch, [], ON_PAGE, box_text=box_text)
     asyncio.run(setup(session))
     assert asyncio.run(verify(session))["prompt_text"] == box_text
