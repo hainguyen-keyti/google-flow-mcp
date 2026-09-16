@@ -1139,6 +1139,58 @@ def test_gen_character_shows_the_agent_its_defaults():
     assert schema["dry_run"].get("default") is False
 
 
+def test_character_create_takes_exactly_one_of_prompt_and_image_before_a_browser_opens(monkeypatch, tmp_path):
+    # Plan character-generation T5b: a character can come from the owner's own face photo (DECISIONS 2026-09-16).
+    recorder = _Recorder()
+    monkeypatch.setattr(mcp_server, "backend", recorder)
+    face = tmp_path / "face.jpg"
+    face.write_bytes(b"\xff\xd8\xff")
+
+    async def fn(s):
+        return [
+            await s.call_tool("character_create", {"project_id": "P"}),
+            await s.call_tool(
+                "character_create", {"project_id": "P", "prompt": "a calm face", "image": str(face)}
+            ),
+            await s.call_tool("character_create", {"project_id": "P", "prompt": "   "}),
+            await s.call_tool("character_create", {"project_id": "P", "image": str(tmp_path / "gone.jpg")}),
+            await s.call_tool("character_create", {"project_id": "P", "image": str(tmp_path)}),
+        ]
+
+    results = with_client(fn)
+    texts = _texts(results)
+    assert [result.is_error for result in results] == [True] * 5, texts
+    assert all("exactly one of prompt and image" in text for text in texts[:3]), texts
+    assert "gone.jpg" in texts[3] and "no image file" in texts[4], texts
+    assert recorder.calls == []
+
+
+def test_character_create_forwards_an_image_to_the_driver(monkeypatch, tmp_path):
+    face = tmp_path / "face.jpg"
+    face.write_bytes(b"\xff\xd8\xff")
+    seen = {}
+
+    async def fake_with(self, fn):
+        return await fn(object())
+
+    async def fake_create(
+        session, project_id, prompt=None, *, image=None, name=None, personality=None, wait=90.0
+    ):
+        seen.update(project_id=project_id, prompt=prompt, image=image, name=name)
+        return {"entity_id": "E"}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.characters_mod, "create", fake_create)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+
+    async def fn(s):
+        return await s.call_tool("character_create", {"project_id": "P", "image": str(face), "name": "Mai"})
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])
+    assert seen == {"project_id": "P", "prompt": None, "image": face, "name": "Mai"}
+
+
 def _fixture(rpcid):
     return json.loads((FIXTURES / f"{rpcid}.json").read_text(encoding="utf-8"))["payload"]
 

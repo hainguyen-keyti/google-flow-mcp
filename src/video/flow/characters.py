@@ -5,6 +5,7 @@ editor exposes name, personality, voice, Create body, Done and Delete."""
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from gflow_cli.api.transports.batchexecute import image_records
@@ -50,26 +51,76 @@ async def _type_prompt(session: FlowSession, prompt: str) -> None:
     await session.page.wait_for_timeout(500)
 
 
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+
+async def _upload_portrait(session: FlowSession, image: Path) -> dict[str, list[Any]]:
+    """The New character page's one Upload button (measured 2026-09-16): the chosen file becomes the portrait, and
+    Flow creates the entity (C4BZMd, maseQ) and moves the page to /character/<entity>."""
+    page = session.page
+    upload = page.get_by_role("button", name=re.compile("Upload", re.IGNORECASE))
+    count = await upload.count()
+    if count != 1:
+        raise LookupError(f"{count} Upload buttons on the New character page; not guessing")
+
+    async def pick() -> None:
+        async with page.expect_file_chooser(timeout=15_000) as chooser:
+            await upload.first.click(timeout=8_000)
+        picked = await chooser.value
+        await picked.set_files(str(image.resolve()))
+
+    return await capture(session, pick, settle=25.0)
+
+
 async def create(
     session: FlowSession,
     project_id: str,
-    prompt: str,
+    prompt: str | None = None,
     *,
+    image: Path | None = None,
     name: str | None = None,
     personality: str | None = None,
     wait: float = 90.0,
 ) -> dict[str, Any]:
+    """A character from a face prompt (portrait by Nano Banana 2) or from a local face image (the upload is the
+    portrait); exactly one of the two."""
+    if bool(prompt and prompt.strip()) == (image is not None):
+        raise ValueError("give exactly one of a prompt and an image")
+    if image is not None:
+        image = Path(image)
+        if not image.is_file():
+            raise FileNotFoundError(f"no image at {image}")
+        if image.suffix.lower() not in IMAGE_SUFFIXES:
+            raise ValueError(f"the image must be a png, jpg, jpeg or webp file, got {image.name}")
     page = session.page
     await session.goto(f"{session.project_url(project_id)}/character", ready=NEW_PAGE)
     await page.wait_for_timeout(2_000)
-    await _type_prompt(session, prompt)
-    start = page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
-    frames = await capture(session, lambda: start.click(timeout=8_000), settle=wait)
-    entity_id = entity_id_from_url(page.url)
+    if image is None:
+        await _type_prompt(session, prompt)
+        start = page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
+        frames = await capture(session, lambda: start.click(timeout=8_000), settle=wait)
+        portrait = portrait_from_frames(frames)
+    else:
+        frames = await _upload_portrait(session, image)
+        uploaded = frames.get("maseQ")
+        portrait = (
+            {"workflow_id": parsers.upload_record(uploaded[0])["workflow_id"], "source": "upload"}
+            if uploaded
+            else None
+        )
+    try:
+        entity_id = entity_id_from_url(page.url)
+    except ValueError:
+        if image is None:
+            raise
+        raise RuntimeError(
+            f"uploading {image.name} created no character (rpcids {sorted(frames)}); Flow has refused photos without "
+            "a message before, for example people wearing lace (measured 2026-09-13)"
+        ) from None
     result: dict[str, Any] = {
         "entity_id": entity_id,
         "project_id": project_id,
-        "portrait": portrait_from_frames(frames),
+        "portrait": portrait,
         "rpcids": sorted(frames),
         "name": None,
         "personality": None,

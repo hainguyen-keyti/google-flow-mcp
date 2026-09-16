@@ -182,14 +182,21 @@ class Backend:
     async def character_create(
         self,
         project_id: str,
-        prompt: str,
+        prompt: str | None = None,
         name: str | None = None,
         personality: str | None = None,
         wait: float = 90.0,
+        image: str | None = None,
     ) -> dict[str, Any]:
         return await self._with(
             lambda s: characters_mod.create(
-                s, project_id, prompt, name=name, personality=personality, wait=wait
+                s,
+                project_id,
+                prompt,
+                image=Path(image) if image else None,
+                name=name,
+                personality=personality,
+                wait=wait,
             )
         )
 
@@ -560,17 +567,27 @@ async def project_delete(project_id: str) -> str:
 @server.tool(
     name="character_create",
     description=(
-        "Create a character from a face prompt (portrait via Nano Banana 2, credit-free), set name and "
-        "personality. The reply's portrait.workflow_id is NOT a media id: call flow_characters for the "
-        "portrait's media id, which flow_download accepts. Free."
+        "Create a character, then set name and personality. Give exactly one of prompt (a face described in words; "
+        "the portrait comes from Nano Banana 2, credit-free) and image (a local png, jpg, jpeg or webp of a face; "
+        "the upload becomes the portrait). Flow has refused photos without a message, for example of people wearing "
+        "lace (measured 2026-09-13), while a close-up portrait was accepted. The reply's portrait.workflow_id is NOT "
+        "a media id: call flow_characters for the portrait's media id, which flow_download accepts. Free."
     ),
 )
 async def character_create(
-    project_id: str, prompt: str, name: str | None = None, personality: str | None = None, wait: float = 90.0
+    project_id: str,
+    prompt: str | None = None,
+    image: str | None = None,
+    name: str | None = None,
+    personality: str | None = None,
+    wait: float = 90.0,
 ) -> str:
     _require(project_id, "project_id")
-    _require(prompt, "prompt")
-    return _json(await backend.character_create(project_id, prompt, name, personality, wait))
+    if bool(prompt and prompt.strip()) == bool(image and image.strip()):
+        raise ValueError("give exactly one of prompt and image")
+    if image and not Path(image).is_file():
+        raise ValueError(f"no image file at {image}")
+    return _json(await backend.character_create(project_id, prompt, name, personality, wait, image))
 
 
 @server.tool(name="character_delete", description="Delete a character entity permanently. Free.")
