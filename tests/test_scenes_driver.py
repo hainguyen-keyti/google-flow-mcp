@@ -638,8 +638,9 @@ class _Expect:
 
 
 class _ScenePage:
-    def __init__(self, titles, *, clips=0, toolbar=None, builds_after=0):
+    def __init__(self, titles, *, clips=0, toolbar=None, builds_after=0, adds=True):
         self.titles = list(titles)
+        self.adds = adds
         self.timeline = clips * THUMBS_PER_CLIP
         self.overlay = None
         self.toolbar = list(TOOLBAR if toolbar is None else toolbar)
@@ -674,7 +675,8 @@ class _ScenePage:
             self.overlay = "picker"
         elif kind == "overlay" and label in self.titles:
             self.added.append(label)
-            self.timeline += THUMBS_PER_CLIP
+            if self.adds:
+                self.timeline += THUMBS_PER_CLIP
             self.overlay = None
         elif kind == "toolbar" and "Download scene" in label:
             self.downloaded = "pB-probe_20260916.mp4"
@@ -838,6 +840,16 @@ def test_add_clip_never_clicks_a_paid_item(monkeypatch):
     with pytest.raises(RuntimeError, match="spends credits"):
         asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
     assert page.added == []
+
+
+def test_add_clip_says_so_when_the_click_landed_but_the_timeline_did_not_grow(monkeypatch):
+    # The picker closes itself either way, so a click that changed nothing looks exactly like a good one.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], adds=False)
+
+    with pytest.raises(RuntimeError, match="nothing was added"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
 
 
 def test_download_saves_the_film_under_the_scene_id(monkeypatch, tmp_path):
