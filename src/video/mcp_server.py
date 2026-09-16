@@ -23,6 +23,7 @@ from video.flow import agent as agent_mod
 from video.flow import characters as characters_mod
 from video.flow import clips as clips_mod
 from video.flow import download as download_mod
+from video.flow import ingredients as ingredients_mod
 from video.flow import lane as lane_mod
 from video.flow import projects as projects_mod
 from video.flow import reader
@@ -325,6 +326,36 @@ class Backend:
             ),
         )
 
+    async def gen_character(
+        self,
+        project: str,
+        prompt: str,
+        characters: list[str],
+        media_ids: list[str] | None = None,
+        model: str = VIDEO_DEFAULT_MODEL,
+        aspect: str = "9:16",
+        dry_run: bool = False,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
+        def run() -> Awaitable[Any]:
+            return self._with(
+                lambda s: ingredients_mod.generate(
+                    s,
+                    project,
+                    prompt=prompt,
+                    characters=characters,
+                    media_ids=media_ids or [],
+                    model=model,
+                    aspect=aspect,
+                    job_id=job_id,
+                    out_dir=self.out_dir,
+                    dry_run=dry_run,
+                )
+            )
+
+        # A dry run clicks nothing and writes no row, so there is no job to guard.
+        return await run() if dry_run else await self._spend_once(job_id, self.out_dir, run)
+
     async def generate(
         self,
         *,
@@ -389,8 +420,8 @@ server = TellingServer(
     "video",
     instructions=(
         "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
-        "recorded in the ledger (out/ledger.jsonl by default): gen_t2v, gen_i2v, gen_r2v, clip_extend, "
-        "clip_edit, and agent_send (may spend). clip_download at 4k is a Flow upscale whose cost is "
+        "recorded in the ledger (out/ledger.jsonl by default): gen_t2v, gen_i2v, gen_r2v, gen_character, "
+        "clip_extend, clip_edit, and agent_send (may spend). clip_download at 4k is a Flow upscale whose cost is "
         "unmeasured: ask the owner first. gen_t2i and gen_i2i are credit-free but draw on a daily image "
         "quota. Check a tool's description for its cost before calling it. Every call drives a real Chrome "
         "session and blocks until Flow answers: a read takes about 15-50 s and a change about 50 s, a generation "
@@ -872,6 +903,50 @@ async def gen_r2v(
         duration=duration,
         refs=refs,
         job_id=job_id,
+    )
+
+
+@server.tool(
+    name="gen_character",
+    description=(
+        "Video starring the project's characters (entity ids from flow_characters), optionally with images already "
+        "in the project (media ids from flow_media, images only). Each goes into the prompt as a Flow @ mention, and "
+        "every chip is checked against its id before anything is spent. It spends credits and is ledgered: always "
+        "8 s at x1; omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 credits "
+        "by Flow's own price table, unmeasured. The live price line is read first and a different price is refused "
+        "before the click. dry_run=true returns the quote and the chips, clicks nothing, writes no ledger row, leaves "
+        "the composer empty and needs no job_id; for a real run,"
+        + _JOB_ID_RULE
+        + " Allow 3-7 min for a real run, about 1-2 min for a dry run."
+    ),
+)
+async def gen_character(
+    project: str,
+    prompt: str,
+    characters: list[str],
+    job_id: str | None = None,
+    media_ids: list[str] | None = None,
+    model: str = VIDEO_DEFAULT_MODEL,
+    aspect: str = "9:16",
+    dry_run: bool = False,
+) -> str:
+    _require(project, "project")
+    _require(prompt, "prompt")
+    if not characters:
+        raise ValueError("characters is required: one or more entity ids from flow_characters")
+    wanted = [*characters, *(media_ids or [])]
+    if any(not value or not value.strip() for value in wanted):
+        raise ValueError("character and media ids must not be blank")
+    if len(set(wanted)) != len(wanted):
+        raise ValueError(f"each character and image may be named once, got {wanted}")
+    if model not in ingredients_mod.PRICES:
+        raise ValueError(f"model must be one of {sorted(ingredients_mod.PRICES)}, got {model!r}")
+    if aspect not in ingredients_mod.ASPECTS:
+        raise ValueError(f"aspect must be one of {sorted(ingredients_mod.ASPECTS)}, got {aspect!r}")
+    if not dry_run:
+        _require(job_id or "", "job_id")
+    return _json(
+        await backend.gen_character(project, prompt, characters, media_ids, model, aspect, dry_run, job_id)
     )
 
 

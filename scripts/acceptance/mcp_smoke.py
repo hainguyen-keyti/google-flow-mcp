@@ -67,7 +67,7 @@ DOWNLOADING = ("flow_download", "scene_download")
 MAYBE_SPENDING = ("clip_download",)
 
 # Real money. Never called here, and the roster row insists they stay declared rather than quietly vanish.
-SPENDING = ("gen_t2v", "gen_i2v", "gen_r2v", "clip_extend", "clip_edit", "agent_send")
+SPENDING = ("gen_t2v", "gen_i2v", "gen_r2v", "gen_character", "clip_extend", "clip_edit", "agent_send")
 
 # One source for the roster contract: a tool that exists must be classified above, and a name declared above must
 # still be served. The count used to be typed here as well, so adding three tools left this gate red while the unit

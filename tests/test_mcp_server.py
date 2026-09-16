@@ -13,7 +13,7 @@ from mcp.shared.memory import create_client_server_memory_streams
 
 from video import cli, gen, mcp_server
 from video import session as session_mod
-from video.flow import parsers, reader
+from video.flow import ingredients, parsers, reader
 from video.session import MIGRATED_ROOT, FlowSession
 
 FIXTURES = Path(__file__).parent / "fixtures" / "rpc"
@@ -37,6 +37,8 @@ EXPECTED_TOOLS = {
     "gen_r2v",
     "gen_t2i",
     "gen_i2i",
+    # Plan character-generation T5: one tool added on purpose, so this roster grows from 32 to 33.
+    "gen_character",
     "scene_list",
     "scene_create",
     "scene_delete",
@@ -111,6 +113,7 @@ TOOL_CALLS: dict[str, dict] = {
     "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"},
     "gen_t2i": {"prompt": "a boat", "project": "P"},
     "gen_i2i": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P"},
+    "gen_character": {"prompt": "a boat", "project": "P", "characters": ["E"], "job_id": "job-character"},
 }
 
 
@@ -394,7 +397,10 @@ def test_the_instructions_do_not_tell_an_agent_it_cannot_create_projects():
 
 
 # The owner's roster of tools that move money (DECISIONS 2026-09-15). gen_t2i and gen_i2i are credit-free.
-SPENDING_TOOLS = {"gen_t2v", "gen_i2v", "gen_r2v", "clip_extend", "clip_edit", "agent_send"}
+SPENDING_TOOLS = {"gen_t2v", "gen_i2v", "gen_r2v", "clip_extend", "clip_edit", "agent_send", "gen_character"}
+# A tool whose dry_run quotes for free needs no job_id to quote (plan character-generation, DECISIONS 2026-09-16); its
+# real run is held to the job_id rule by test_gen_character_refuses_a_real_run_without_a_job_id_before_a_browser_opens.
+DRY_RUN_QUOTES = {"gen_character"}
 
 
 def served_tool_objects():
@@ -428,10 +434,13 @@ def test_every_credit_spending_tool_requires_a_job_id():
         for name, tool in tools.items()
         if "job_id" in tool.input_schema.get("properties", {})
         and name not in required
+        and name not in DRY_RUN_QUOTES
         and "0 credits" not in (tool.description or "")
     )
-    assert sorted(SPENDING_TOOLS - required) == []
+    assert sorted(SPENDING_TOOLS - required - DRY_RUN_QUOTES) == []
     assert optional_on_a_paid_tool == []
+    for name in sorted(DRY_RUN_QUOTES):
+        assert "dry_run" in tools[name].input_schema["properties"], name
 
 
 def test_every_spending_description_keeps_the_same_job_id_for_a_call_still_running():
@@ -603,6 +612,7 @@ SPEND_CALLS = {
     "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going", "job_id": "job-extend"},
     "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt", "job_id": "job-edit"},
     "agent_send": {"project_id": "P", "message": "hello", "job_id": "job-agent"},
+    "gen_character": {"prompt": "a boat", "project": "P", "characters": ["E"], "job_id": "job-character"},
 }
 
 
@@ -630,6 +640,11 @@ def _spending_backend(monkeypatch, tmp_path):
         reached.append((f"gen_{job.kind}", job.job_id))
         return {"job_id": job.job_id, "outputs": []}
 
+    async def fake_character(session, project_id, **kwargs):
+        reached.append(("gen_character", kwargs.get("job_id")))
+        return {"project": project_id, **kwargs}
+
+    monkeypatch.setattr(ingredients, "generate", fake_character)
     monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
     monkeypatch.setattr(mcp_server.clips_mod, "extend", fake_extend)
     monkeypatch.setattr(mcp_server.clips_mod, "edit", fake_edit)
@@ -1025,6 +1040,103 @@ def test_a_multiline_prompt_is_refused_before_it_can_be_typed_as_enter(monkeypat
     assert [result.is_error for result in results] == [True, True, True]
     assert all("one line" in text for text in _texts(results)), _texts(results)
     assert reached == []
+
+
+def test_gen_character_refuses_a_real_run_without_a_job_id_before_a_browser_opens(monkeypatch, tmp_path):
+    # Its job_id is optional only because a dry_run quotes for free (DECISIONS 2026-09-16); a real run is refused
+    # without one, exactly like every other tool that spends.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    arguments = {key: value for key, value in SPEND_CALLS["gen_character"].items() if key != "job_id"}
+
+    async def fn(s):
+        return [
+            await s.call_tool("gen_character", dict(arguments)),
+            await s.call_tool("gen_character", arguments | {"job_id": "   "}),
+        ]
+
+    results = with_client(fn)
+    assert [result.is_error for result in results] == [True, True]
+    assert all("job_id is required" in text for text in _texts(results)), _texts(results)
+    assert reached == []
+
+
+def test_gen_character_dry_run_quotes_without_a_job_id_while_a_real_run_still_checks_the_ledger(
+    monkeypatch, tmp_path
+):
+    reached = _spending_backend(monkeypatch, tmp_path)
+    gen.Ledger(tmp_path / "ledger.jsonl").append("job-character", "done", kind="character", spent=12)
+    arguments = {key: value for key, value in SPEND_CALLS["gen_character"].items() if key != "job_id"}
+
+    async def fn(s):
+        return [
+            await s.call_tool("gen_character", arguments | {"dry_run": True}),
+            await s.call_tool("gen_character", dict(SPEND_CALLS["gen_character"])),
+        ]
+
+    results = with_client(fn)
+    texts = _texts(results)
+    assert [result.is_error for result in results] == [False, True], texts
+    assert json.loads(texts[0])["dry_run"] is True
+    assert "may already have spent credits" in texts[1], texts[1]
+    assert [step for step in reached if step != "browser"] == [("gen_character", None)]
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"characters": []}, "characters is required"),
+        ({"characters": ["E", "E"]}, "named once"),
+        ({"media_ids": ["E"]}, "named once"),
+        ({"characters": [" "]}, "must not be blank"),
+        ({"media_ids": [""]}, "must not be blank"),
+        ({"model": "veo-quality"}, "model must be one of"),
+        ({"aspect": "1:1"}, "aspect must be one of"),
+        ({"prompt": "   "}, "prompt is required"),
+        ({"project": ""}, "project is required"),
+    ],
+)
+def test_gen_character_refuses_what_it_cannot_price_or_name_before_a_browser_opens(
+    monkeypatch, tmp_path, change, message
+):
+    reached = _spending_backend(monkeypatch, tmp_path)
+
+    async def fn(s):
+        return await s.call_tool("gen_character", SPEND_CALLS["gen_character"] | change)
+
+    result = with_client(fn)
+    text = _texts([result])[0]
+    assert result.is_error and message in text, text
+    assert reached == []
+    assert not (tmp_path / "ledger.jsonl").exists()
+
+
+def test_gen_character_forwards_every_option_to_the_driver(monkeypatch, tmp_path):
+    _spending_backend(monkeypatch, tmp_path)
+    arguments = SPEND_CALLS["gen_character"] | {"media_ids": ["M"], "model": "veo-lite", "aspect": "16:9"}
+
+    async def fn(s):
+        return await s.call_tool("gen_character", arguments)
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])
+    assert json.loads(_texts([result])[0]) == {
+        "project": "P",
+        "prompt": "a boat",
+        "characters": ["E"],
+        "media_ids": ["M"],
+        "model": "veo-lite",
+        "aspect": "16:9",
+        "job_id": "job-character",
+        "out_dir": str(tmp_path),
+        "dry_run": False,
+    }
+
+
+def test_gen_character_shows_the_agent_its_defaults():
+    schema = served_tool_objects()["gen_character"].input_schema["properties"]
+    assert schema["model"].get("default") == "omni-flash"
+    assert schema["aspect"].get("default") == "9:16"
+    assert schema["dry_run"].get("default") is False
 
 
 def _fixture(rpcid):
