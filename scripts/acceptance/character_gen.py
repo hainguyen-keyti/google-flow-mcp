@@ -9,8 +9,8 @@ project: it uploads two small generated images and creates one character from an
 code is 1 when any row is FAIL or missing.
 
 C1 gen_character dry_run with one character: exactly one chip, the entity with that id, read again right before the
-   price check, a prompt box holding the whole prompt at that moment, the omni-flash 8 s price 12, and a composer left
-   with no mention and no text.
+   price check, a prompt box reading exactly the character's name then the prompt at that moment, the omni-flash 8 s
+   price 12, and a composer left with no mention and no text.
 C2 dry_run with the character and an uploaded image: the entity chip, then a media chip naming the image's WORKFLOW id
    (a media chip carries the workflow id, not the media id, measured in T1), price 12.
 C3 dry_run with veo-lite: price 10.
@@ -178,7 +178,7 @@ async def run(project: str, rows: list[dict[str, Any]]) -> None:
             error is None
             and (answer or {}).get("dry_run") is True
             and chips(answer) == [("entity", entity)]
-            and PROMPT in ((answer or {}).get("prompt_text") or "")
+            and " ".join(((answer or {}).get("prompt_text") or "").split()) == f"{name} {PROMPT}"
             and (answer or {}).get("quoted_credits") == PRICES["omni-flash"]
             and left.get("mentions") == 0
             and not (left.get("text") or "").strip(),

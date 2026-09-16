@@ -70,20 +70,15 @@ def _flat(text: str | None) -> str:
 
 def matching_outputs(
     fresh: list[dict[str, Any]], prompt: str, sent: str | None = None
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The new videos whose prompt IS the job's prompt, as typed or as the prompt box read it, and the new videos that
-    only contain its first 40 characters.
+) -> list[dict[str, Any]]:
+    """The new videos whose prompt IS the job's prompt, as typed or as the prompt box read it.
 
     Flow stores a chip's title and the typed text joined by spaces (measured in out/records_now.json), so the box text
     read right before the click is what a record of a job with chips holds. A record that merely contains the prompt,
     a short prompt inside another job's or a style line scenes of one ad share, is never taken (review F3, 2026-09-16).
     """
     exact = {_flat(prompt), _flat(sent)} - {""}
-    videos = [r for r in fresh if r.get("kind") == "video"]
-    matches = [r for r in videos if _flat(r.get("prompt")) in exact]
-    opening = _flat(prompt)[:40]
-    near = [r for r in videos if opening and opening in _flat(r.get("prompt")) and r not in matches]
-    return matches, near
+    return [r for r in fresh if r.get("kind") == "video" and _flat(r.get("prompt")) in exact]
 
 
 def _job_digest(job_id: str | None) -> str:
@@ -381,9 +376,10 @@ async def _submit(
 
     dry_run stops once the price is read: no balance read, no ledger row, no click, and the composer is emptied again.
     watch hears every request of the click window and its report lands in the outcome row. strict_output takes only
-    a new video whose prompt is the prompt, or the `prompt_text` verify read from the box, and never picks between
-    two. Whatever setup returns joins the intent row, and whatever verify returns, read right before the price check,
-    replaces it. click_box=False types the prompt where the caret already is. A refusal before the click empties the composer again; anything that goes wrong
+    a new video whose prompt is the prompt, or the `prompt_text` verify read from the box, never picks between two,
+    and leaves a job it cannot settle while a new video or a moved balance says money may be gone `unknown`, every
+    new video a candidate. Whatever setup returns joins the intent row, and whatever verify returns, read right before
+    the price check, replaces it. click_box=False types the prompt where the caret already is. A refusal before the click empties the composer again; anything that goes wrong
     after the click still writes an outcome row and says credits may be spent.
     """
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
@@ -444,8 +440,8 @@ async def _submit(
         **{**extra, **checked},
     )
     digest = _job_digest(job_id)
-    frames: dict[str, list[Any]] = {}
-    output, candidates, near = None, [], []
+    frames: dict[str, list[Any]] | None = None
+    output, fresh, candidates = None, [], []
     try:
         if watch is not None:
             session.page.on("request", watch.on_request)
@@ -465,7 +461,7 @@ async def _submit(
             rows, _ = await snapshot(session, project_id)
             fresh = clips.new_records(before, rows)
             if strict_output:
-                candidates, near = matching_outputs(fresh, prompt, checked.get("prompt_text"))
+                candidates = matching_outputs(fresh, prompt, checked.get("prompt_text"))
                 output = candidates[0] if len(candidates) == 1 else None
                 if len(candidates) > 1:
                     break
@@ -496,22 +492,26 @@ async def _submit(
             credits_before=credits_before,
             credits_after=credits_now,
             spent=None if credits_now is None else credits_before - credits_now,
-            rpcids=sorted(frames),
+            # None, not []: an empty list is how this repo reads a click that sent nothing (re-review E, 2026-09-17).
+            rpcids=None if frames is None else sorted(frames),
+            **({"body_check": watch.report()} if watch is not None else {}),
         )
+        # The advice leads: an agent sees at most 500 characters and a job_id can be long (re-review A, 2026-09-17).
         raise RuntimeError(
-            f"{job_id}: Start generation was clicked, then {detail}; credits may already be spent, so check "
-            "flow_media and flow_credits and never run this job again under a new job_id"
+            "Start generation was clicked, so credits may already be spent: check flow_media and flow_credits and "
+            f"never run this job again under a new job_id; it then failed with {detail}; job {job_id}"
         ) from exc
 
     spent = credits_before - credits_after
-    unclaimed = candidates if len(candidates) > 1 else near
-    ambiguous = strict_output and output is None and bool(unclaimed)
+    videos = [r for r in fresh if r.get("kind") == "video"]
+    unclaimed = candidates if len(candidates) > 1 else videos
     watched = {"body_check": watch.report()} if watch is not None else {}
     if path:
         status = "done"
     elif output is not None:
         status = "pending"
-    elif ambiguous:
+    elif strict_output and (unclaimed or spent):
+        # A new video or a moved balance is never "nothing was generated" (re-review B, 2026-09-17).
         status = "unknown"
     else:
         status = "failed"
@@ -527,23 +527,29 @@ async def _submit(
         notice=notice or (await _notice(session.page)),
         **watched,
         **({"error": fetch_error} if fetch_error else {}),
-        **({"candidates": [c["id"] for c in unclaimed]} if ambiguous else {}),
+        **({"candidates": [c["id"] for c in unclaimed]} if status == "unknown" else {}),
     )
     if status == "pending":
         why = fetch_error or f"still rendering after {wait:.0f}s"
         raise RuntimeError(
-            f"{job_id}: the clip {output['id']} exists but no file came back ({why}); spent {spent} credits; do "
-            "not run this job again: fetch the clip with flow_download once it has finished"
+            f"do not run this job again: the clip {output['id']} exists but no file came back ({why}); fetch it "
+            f"with flow_download once it has finished; spent {spent} credits; job {job_id}"
+        )
+    if status == "unknown" and unclaimed:
+        raise RuntimeError(
+            "check flow_media and never run this job again under a new job_id: "
+            f"{len(unclaimed)} new records could be this job's clip ({[c['id'] for c in unclaimed]}), so none is "
+            f"taken; spent {spent} credits; job {job_id}"
         )
     if status == "unknown":
         raise RuntimeError(
-            f"{job_id}: {len(unclaimed)} new records could be this job's clip ({[c['id'] for c in unclaimed]}), "
-            f"so none is taken; spent {spent} credits; check flow_media"
+            "check flow_media and flow_credits and never run this job again under a new job_id: no new video showed "
+            f"up within {wait:.0f}s, yet the balance moved by {spent} credits; job {job_id}"
         )
     if status == "failed":
         raise RuntimeError(
-            f"{job_id}: nothing was generated within {wait:.0f}s, spent {spent} credits; rpcids {sorted(frames)}; "
-            f"settings {settings['applied']}; Flow said: {notice or '(no message captured)'}"
+            f"nothing was generated within {wait:.0f}s, spent {spent} credits; rpcids {sorted(frames)}; "
+            f"settings {settings['applied']}; Flow said: {notice or '(no message captured)'}; job {job_id}"
         )
     return {
         "job_id": job_id,

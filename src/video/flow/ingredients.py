@@ -440,7 +440,8 @@ async def generate(
         }
 
     async def verify(active: FlowSession) -> dict[str, Any]:
-        """Read the chips and the prompt again right before the price check, after typing and the confirm pass."""
+        """Read the chips and the prompt box again right before the price check, after typing and the confirm pass:
+        the chips must be the ones attached, and the box must read exactly their names, then the prompt."""
         page = active.page
         on_page = await chips_on(page)
         text = await page.evaluate(_BOX_TEXT_JS, BOX)
@@ -449,10 +450,12 @@ async def generate(
         unbound = [
             chip for chip in on_page if chip.get("kind") == "entity" and chip.get("entity") != chip.get("id")
         ]
-        if found != wanted or unbound or _norm(prompt) not in _norm(text):
+        # Measured on L2 (2026-09-17): the box reads 'Untitled character stands in a sunny bakery ...'.
+        expected = " ".join([*(chip.get("text", "") for chip in on_page), prompt])
+        if found != wanted or unbound or _norm(text) != _norm(expected):
             raise LookupError(
-                f"right before the click the prompt holds {found} and reads {text[:120]!r}, not {wanted} and the "
-                "whole prompt; refusing to spend"
+                f"right before the click the prompt holds {found} and reads {text[:160]!r}, not {wanted} and "
+                f"{expected[:160]!r}; refusing to spend"
             )
         return {
             "chips": [

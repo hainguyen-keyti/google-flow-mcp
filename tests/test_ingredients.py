@@ -7,8 +7,10 @@ from urllib.parse import quote_plus
 import pytest
 from gflow_cli.api.video import Aspect, Mode, VideoModel
 from gflow_cli.errors import UiSelectorDriftError
+from mcp.server.mcpserver.exceptions import ToolError
+from playwright.async_api import Error as PlaywrightError
 
-from video import gen
+from video import gen, mcp_server
 from video.flow import clips, composer, ingredients
 
 ENTITY = "47e5150d-9c4b-4165-a937-4852e9abd194"
@@ -722,11 +724,20 @@ def _video(workflow, prompt, done=True):
 
 
 def _install(
-    monkeypatch, tmp_path, log, *, prices=(12, 12), fresh=(), before=None, poll_error=None, fetch_error=None
+    monkeypatch,
+    tmp_path,
+    log,
+    *,
+    prices=(12, 12),
+    fresh=(),
+    before=None,
+    poll_error=None,
+    fetch_error=None,
+    balance_reads=(200, 188, 188),
 ):
     seen_before = [_video("w-before", "old")] if before is None else before
     listings = iter([seen_before, *([[*seen_before, *fresh]] * 20)])
-    balances = iter([200, 188, 188])
+    balances = iter(balance_reads)
     pre, confirm = prices
 
     async def snapshot(session, project_id, attempts=4):
@@ -868,6 +879,18 @@ def test_submit_dry_run_reports_a_price_that_differs_instead_of_raising(monkeypa
     assert result["quoted_credits"] == 15 and result["price_ok"] is False
 
 
+def test_submit_dry_run_returns_what_verify_read(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    read = {"chips": [{"kind": "entity", "id": ENTITY, "text": "Thu"}], "prompt_text": f"Thu {PROMPT}"}
+
+    async def verify(session):
+        return read
+
+    result = _submit(_SubmitSession(log), tmp_path, log, job_id=None, dry_run=True, verify=verify)
+    assert result["chips"] == read["chips"] and result["prompt_text"] == read["prompt_text"]
+
+
 @pytest.mark.parametrize("live", [15, 6])
 def test_submit_refuses_a_price_above_or_below_the_table_with_no_row_and_an_empty_composer(
     monkeypatch, tmp_path, live
@@ -950,13 +973,61 @@ def test_submit_keeps_the_story_defaults_when_no_new_option_is_given(monkeypatch
     assert not {"chips", "body_check", "candidates", "prompt_text", "error"} & story_keys
 
 
-def test_submit_strict_output_takes_no_record_that_lacks_the_prompt(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "stored",
+    ["a prompt nobody typed", "", "Thu  stands in a sunny bakery, smiling at the camera"],
+    ids=["another prompt", "prompt field empty", "typed text altered"],
+)
+def test_submit_strict_output_leaves_a_paid_job_unknown_when_it_cannot_claim_the_new_video(
+    monkeypatch, tmp_path, stored
+):
+    # Re-review B (2026-09-17): "nothing was generated" beside a new video and a moved balance invites paying twice.
     log = []
-    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", "a prompt nobody typed")])
-    with pytest.raises(RuntimeError, match="nothing was generated"):
-        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", stored)])
+    with pytest.raises(RuntimeError, match="could be this job's clip") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, verify=_reads(f"Thu {PROMPT}"), strict_output=True)
+    assert "nothing was generated" not in str(raised.value)
     assert not any(entry.startswith("fetch") for entry in log)
-    assert [row["status"] for row in gen.Ledger(tmp_path / "ledger.jsonl").rows()] == ["submitted", "failed"]
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert (last["status"], last["candidates"], last["spent"]) == ("unknown", ["m-w-new"], 12)
+
+
+def test_submit_strict_output_leaves_a_job_unknown_when_a_new_video_shows_up_with_the_balance_unmoved(
+    monkeypatch, tmp_path
+):
+    log = []
+    fresh = [_video("w-new", "a prompt nobody typed")]
+    _install(monkeypatch, tmp_path, log, fresh=fresh, balance_reads=(200, 200, 200))
+    with pytest.raises(RuntimeError, match="could be this job's clip"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert (last["status"], last["candidates"], last["spent"]) == ("unknown", ["m-w-new"], 0)
+
+
+def test_submit_keeps_the_story_failure_when_nothing_is_picked(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    with pytest.raises(RuntimeError, match="nothing was generated within 0s, spent 12 credits"):
+        _submit(_SubmitSession(log), tmp_path, log)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert last["status"] == "failed" and "candidates" not in last
+
+
+def test_submit_strict_output_leaves_a_job_unknown_when_the_balance_moved_and_no_video_showed_up(
+    monkeypatch, tmp_path
+):
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    with pytest.raises(RuntimeError, match="balance moved by 12") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert "nothing was generated" not in str(raised.value)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert (last["status"], last["candidates"]) == ("unknown", [])
+
+
+def test_a_promptless_video_never_matches_a_job_whose_box_was_not_read():
+    # Measured in out/records_now.json: an upscale adds a video record whose prompt is ''.
+    assert composer.matching_outputs([_video("w-upscale", "")], PROMPT) == []
 
 
 def test_submit_strict_output_never_picks_between_two_records_carrying_the_prompt(monkeypatch, tmp_path):
@@ -1078,7 +1149,7 @@ def test_submit_strict_output_takes_the_record_whose_prompt_is_the_box_text_as_f
 
 def test_submit_strict_output_never_takes_a_record_that_existed_before_the_click(monkeypatch, tmp_path):
     log = []
-    _install(monkeypatch, tmp_path, log, before=[_video("w-old", PROMPT)])
+    _install(monkeypatch, tmp_path, log, before=[_video("w-old", PROMPT)], balance_reads=(200, 200, 200))
     with pytest.raises(RuntimeError, match="nothing was generated"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     assert not any(entry.startswith("fetch") for entry in log)
@@ -1086,10 +1157,67 @@ def test_submit_strict_output_never_takes_a_record_that_existed_before_the_click
 
 def test_submit_strict_output_never_takes_an_image_record(monkeypatch, tmp_path):
     log = []
-    _install(monkeypatch, tmp_path, log, fresh=[{**_video("w-image", PROMPT), "kind": "image"}])
+    image = {**_video("w-image", PROMPT), "kind": "image"}
+    _install(monkeypatch, tmp_path, log, fresh=[image], balance_reads=(200, 200, 200))
     with pytest.raises(RuntimeError, match="nothing was generated"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     assert not any(entry.startswith("fetch") for entry in log)
+
+
+def test_submit_strict_output_names_the_two_exact_records_as_candidates_beside_other_new_videos(
+    monkeypatch, tmp_path
+):
+    log = []
+    fresh = [_video("w-one", PROMPT), _video("w-two", PROMPT), _video("w-near", f"{PROMPT} by the door")]
+    _install(monkeypatch, tmp_path, log, fresh=fresh)
+    with pytest.raises(RuntimeError, match="2 new records"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert last["status"] == "unknown" and last["candidates"] == ["m-w-one", "m-w-two"]
+
+
+LONG_JOB = "job-" + "x" * 600
+
+
+def _agent_sees(exc):
+    """The error text an agent receives through the MCP server, which cuts every error to 500 characters."""
+    server = mcp_server.TellingServer("probe")
+
+    @server.tool(name="boom")
+    async def boom() -> str:
+        raise exc
+
+    with pytest.raises(ToolError) as raised:
+        asyncio.run(server.call_tool("boom", {}))
+    return str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("world", "advice"),
+    [
+        (
+            {"poll_error": LookupError("rpc Zzl0ze not observed; saw []")},
+            ["credits may already be spent", "never run this job again under a new job_id"],
+        ),
+        ({"fresh": [_video("w-mine", PROMPT, done=False)]}, ["do not run this job again", "flow_download"]),
+        (
+            {"fresh": [_video("w-other", "a prompt nobody typed")]},
+            ["could be this job's clip", "never run this job again under a new job_id"],
+        ),
+        ({}, ["balance moved", "never run this job again under a new job_id"]),
+    ],
+    ids=["failure after the click", "clip still rendering", "a new video it cannot claim", "balance moved"],
+)
+def test_the_advice_after_a_paid_click_reaches_an_agent_whatever_the_job_id_length(
+    monkeypatch, tmp_path, world, advice
+):
+    # Re-review A (2026-09-17): the messages led with the job_id, so a long one pushed the advice past the cut.
+    log = []
+    _install(monkeypatch, tmp_path, log, **world)
+    with pytest.raises(RuntimeError) as raised:
+        _submit(_SubmitSession(log), tmp_path, log, job_id=LONG_JOB, strict_output=True)
+    seen = _agent_sees(raised.value)
+    assert all(phrase in seen for phrase in advice), seen
 
 
 @pytest.mark.parametrize("job_id", ["../escape", "scene-1", "job-" + "x" * 600])
@@ -1117,6 +1245,64 @@ def test_submit_a_failure_after_the_click_writes_an_outcome_row_and_says_credits
     assert [row["status"] for row in rows] == ["submitted", "unknown"]
     assert "LookupError" in rows[-1]["error"] and rows[-1]["spent"] == 12
     assert log.count("click") == 1
+
+
+def test_submit_a_dead_browser_after_the_click_still_writes_unknown_and_guesses_no_spend(
+    monkeypatch, tmp_path
+):
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    closed = PlaywrightError("Target page, context or browser has been closed")
+
+    async def snapshot(session, project_id, attempts=4):
+        log.append("snapshot")
+        if "click" in log:
+            raise closed
+        return [_video("w-before", "old")], set()
+
+    async def credits(session):
+        log.append("credits")
+        if "click" in log:
+            raise closed
+        return {"balance": 200}
+
+    monkeypatch.setattr(composer, "snapshot", snapshot)
+    monkeypatch.setattr(composer.reader, "credits", credits)
+    with pytest.raises(RuntimeError) as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert "credits may already be spent" in str(raised.value)
+    assert "never run this job again under a new job_id" in str(raised.value)
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
+    assert [row["status"] for row in rows] == ["submitted", "unknown"]
+    assert rows[-1]["credits_after"] is None and rows[-1]["spent"] is None
+    assert log.count("click") == 1
+
+
+def test_submit_a_failure_after_the_click_keeps_what_the_watch_heard(monkeypatch, tmp_path):
+    # Re-review E (2026-09-17): the unknown row dropped the body check the watch had already heard.
+    log = []
+    _install(monkeypatch, tmp_path, log, poll_error=LookupError("rpc Zzl0ze not observed; saw []"))
+    watch = _Watch()
+    with pytest.raises(RuntimeError, match="credits may already be spent"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True, watch=watch)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert last["status"] == "unknown" and last["body_check"] == {"ok": True, "heard": 1}
+
+
+def test_submit_a_failure_inside_the_click_window_claims_no_rpcids(monkeypatch, tmp_path):
+    # Re-review E (2026-09-17): rpcids [] is how this repo reads a click that sent nothing.
+    log = []
+    _install(monkeypatch, tmp_path, log)
+
+    async def await_submit(session, click, *, settle=30.0, patience=90.0):
+        await click()
+        raise RuntimeError("Page.wait_for_timeout: Target page, context or browser has been closed")
+
+    monkeypatch.setattr(composer.clips, "_await_submit", await_submit)
+    with pytest.raises(RuntimeError, match="credits may already be spent"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert log.count("click") == 1 and last["status"] == "unknown" and last["rpcids"] is None
 
 
 def test_submit_a_screenshot_that_fails_after_the_click_changes_nothing(monkeypatch, tmp_path):
@@ -1491,8 +1677,16 @@ def test_generate_verify_passes_the_chips_setup_attached_and_reports_the_prompt_
         ([{**ON_PAGE[0], "id": OTHER, "entity": OTHER}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
         ([{**ON_PAGE[0], "entity": ""}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
         ([{**ON_PAGE[0], "entity": OTHER}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
-        ([*ON_PAGE, {"kind": "media", "id": "w-stray", "entity": "", "text": "x.png"}], f"Thu {PROMPT}"),
+        (
+            [*ON_PAGE, {"kind": "media", "id": "w-stray", "entity": "", "text": "x.png"}],
+            f"Thu peobj1.png x.png {PROMPT}",
+        ),
+        ([*ON_PAGE, ON_PAGE[0]], f"Thu peobj1.png Thu {PROMPT}"),
         (ON_PAGE, "Thu peobj1.png stands in a sunny"),
+        (ON_PAGE, f"Thu peobj1.png {PROMPT[: -len(' camera')]}"),
+        (ON_PAGE, f"Thu peobj1.png {PROMPT} {PROMPT}"),
+        (ON_PAGE, f"words an earlier run left Thu peobj1.png {PROMPT}"),
+        (ON_PAGE, f"Thu peobj1.png @peobj1 {PROMPT}"),
     ],
     ids=[
         "a chip went missing",
@@ -1500,16 +1694,29 @@ def test_generate_verify_passes_the_chips_setup_attached_and_reports_the_prompt_
         "entity id not bound",
         "entity id disagrees",
         "a stray chip",
+        "a chip appears twice",
         "prompt cut short",
+        "last word missing",
+        "prompt typed twice",
+        "leftover text",
+        "mention query left as text",
     ],
 )
 def test_generate_verify_refuses_a_prompt_that_changed_after_setup(monkeypatch, at_click, box_text):
+    # Re-review C (2026-09-17): a box that merely CONTAINS the prompt let a doubled prompt or leftover text go out.
     setup, verify, session = _prepared(monkeypatch, [], ON_PAGE)
     asyncio.run(setup(session))
     monkeypatch.setattr(ingredients, "chips_on", lambda page: _async([dict(chip) for chip in at_click]))
     session.page.box_text = box_text
     with pytest.raises(LookupError, match="refusing to spend"):
         asyncio.run(verify(session))
+
+
+def test_generate_verify_compares_the_box_text_with_its_whitespace_collapsed(monkeypatch):
+    box_text = f"Thu  peobj1.png\n{PROMPT} "
+    setup, verify, session = _prepared(monkeypatch, [], ON_PAGE, box_text=box_text)
+    asyncio.run(setup(session))
+    assert asyncio.run(verify(session))["prompt_text"] == box_text
 
 
 async def _async(value):
