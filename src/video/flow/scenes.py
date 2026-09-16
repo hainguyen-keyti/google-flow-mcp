@@ -16,6 +16,40 @@ from video.session import PROJECT_READY, FlowSession
 
 _SCENE_RE = re.compile(r"/scene/([A-Za-z0-9-]+)")
 BUILDER = "flow-scene-builder"
+TILE_WAIT_MS = 15_000
+# U+200B zero width space and U+00AD soft hyphen, built with chr() so this file carries no escape sequence.
+_ZERO_WIDTH = str.maketrans("", "", chr(0x200B) + chr(0xAD))
+
+
+def _tile_text(title: str | None) -> str:
+    """What an exact text selector is compared against: Playwright drops U+200B and U+00AD, collapses runs of
+    whitespace and trims, on the element's text and on the selector alike. A title that comes out empty here
+    would match every tile element that shows no text of its own."""
+    return " ".join((title or "").translate(_ZERO_WIDTH).split())
+
+
+async def _wait_for_tiles(page: Any, tiles: Any, expected: int, where: str, state: str) -> None:
+    """Tiles render over time, so judge titles only once the view holds one tile per listed scene: a late tile is
+    missed otherwise, and a tile the listing does not know can be the only title match before the right one renders."""
+    waited_ms = 0
+    while (shown := await tiles.count()) < expected:
+        if waited_ms >= TILE_WAIT_MS:
+            break
+        await page.wait_for_timeout(1_000)
+        waited_ms += 1_000
+    if shown != expected:
+        raise LookupError(
+            f"the {where} shows {shown} scene tiles for {expected} {state} scenes; not guessing"
+        )
+
+
+def _moved_scenes(before: list[dict[str, Any]], after: list[dict[str, Any]], scene_id: str) -> str:
+    """Tiles carry no scene id, so acting on the wrong one can only be caught afterwards, in the listing."""
+    was = {s["scene_id"]: s["trashed"] for s in before}
+    moved = [
+        s for s in after if s["scene_id"] != scene_id and was.get(s["scene_id"], s["trashed"]) != s["trashed"]
+    ]
+    return ", ".join(f"{s['scene_id']} ({s['title']!r})" for s in moved)
 
 
 def scene_id_from_url(url: str) -> str:
@@ -74,7 +108,10 @@ async def create(session: FlowSession, project_id: str, title: str | None = None
 
 
 async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[str, Any]:
-    """Move a scene to the project's trash; verified by the trashed flag in the listing."""
+    """Move a scene to the project's trash; verified by the trashed flag in the listing.
+
+    Measured 2026-09-16: the grid holds one tile per active scene and none for a trashed one, and a tile carries no
+    scene id, so wait for that many tiles before matching the exact title, as restore does for the trash."""
     page = session.page
     scenes = await list_scenes(session, project_id, include_trashed=True)
     scene = next((s for s in scenes if s["scene_id"] == scene_id), None)
@@ -83,14 +120,16 @@ async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[s
     if scene["trashed"]:
         raise LookupError(f"scene {scene_id} is already in the trash")
     title = scene["title"]
-    if not title:
+    if not _tile_text(title):
         raise LookupError(
-            f"scene {scene_id} has no title, and grid tiles carry no scene id, so trashing it would guess"
+            f"scene {scene_id} has no title to match ({title!r}), and grid tiles carry no scene id, so trashing "
+            "it would guess"
         )
     # Measured 2026-09-16 (plan D T1): the title sits in an element of its own, between two icon ligatures.
-    tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile")).filter(
-        has=page.get_by_text(title, exact=True)
-    )
+    active = sum(1 for s in scenes if not s["trashed"])
+    scene_tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
+    await _wait_for_tiles(page, scene_tiles, active, "grid", "active")
+    tiles = scene_tiles.filter(has=page.get_by_text(title, exact=True))
     matching = await tiles.count()
     if matching == 0:
         raise LookupError(f"scene tile titled {title!r} not found on the grid")
@@ -122,6 +161,9 @@ async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[s
     except PlaywrightTimeoutError:
         await page.wait_for_timeout(2_000)
     after = await list_scenes(session, project_id, include_trashed=True)
+    moved = _moved_scenes(scenes, after, scene_id)
+    if moved:
+        raise RuntimeError(f"delete changed another scene: {moved}; check scene_list with include_trashed")
     state = next((s for s in after if s["scene_id"] == scene_id), None)
     if state is not None and not state["trashed"]:
         raise RuntimeError(f"delete: scene {scene_id} is still active; rpcids {sorted(frames)}")
@@ -148,25 +190,15 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
     if not scene["trashed"]:
         raise LookupError(f"scene {scene_id} is not in the trash")
     title = scene["title"]
-    if not title:
+    if not _tile_text(title):
         raise LookupError(
-            f"scene {scene_id} has no title, and the trash shows no ids, so restoring it would guess"
+            f"scene {scene_id} has no title to match ({title!r}), and the trash shows no ids, so restoring it "
+            "would guess"
         )
     trashed = sum(1 for s in scenes if s["trashed"])
     await session.goto(f"{session.project_url(project_id)}/trash", ready=PROJECT_READY)
     scene_tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
-    # Tiles render over time: match the title only once every trashed scene has one, or a late namesake hides.
-    waited_ms = 0
-    while (shown := await scene_tiles.count()) < trashed:
-        if waited_ms >= 15_000:
-            raise LookupError(
-                f"the trash shows {shown} scene tiles for {trashed} trashed scenes; not guessing"
-            )
-        await page.wait_for_timeout(1_000)
-        waited_ms += 1_000
-    if shown > trashed:
-        # A tile the listing does not know ends the wait early and can be the only title match before the right one renders.
-        raise LookupError(f"the trash shows {shown} scene tiles for {trashed} trashed scenes; not guessing")
+    await _wait_for_tiles(page, scene_tiles, trashed, "trash", "trashed")
     tiles = scene_tiles.filter(has=page.get_by_text(title, exact=True))
     matching = await tiles.count()
     if matching != 1:
@@ -179,13 +211,9 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
     button = tile.get_by_role("button", name=re.compile("^Restore$", re.IGNORECASE)).first
     frames = await capture(session, lambda: button.click(timeout=8_000), settle=5.0)
     after = await list_scenes(session, project_id, include_trashed=True)
-    was = {s["scene_id"]: s["trashed"] for s in scenes}
-    moved = [
-        s for s in after if s["scene_id"] != scene_id and was.get(s["scene_id"], s["trashed"]) != s["trashed"]
-    ]
+    moved = _moved_scenes(scenes, after, scene_id)
     if moved:
-        names = ", ".join(f"{s['scene_id']} ({s['title']!r})" for s in moved)
-        raise RuntimeError(f"restore changed another scene: {names}; check scene_list with include_trashed")
+        raise RuntimeError(f"restore changed another scene: {moved}; check scene_list with include_trashed")
     state = next((s for s in after if s["scene_id"] == scene_id), None)
     if state is None or state["trashed"]:
         raise RuntimeError(f"restore: scene {scene_id} is still in the trash; rpcids {sorted(frames)}")

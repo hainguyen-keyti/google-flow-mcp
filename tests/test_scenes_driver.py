@@ -21,15 +21,30 @@ def _listing(*entries):
     return {"Zzl0ze": [[None, None, None, None, list(entries)]]}
 
 
+# U+200B zero width space and U+00AD soft hyphen, built with chr() so this file carries no escape sequence.
+_ZERO_WIDTH = str.maketrans("", "", chr(0x200B) + chr(0xAD))
+# A title Playwright's normalization turns into nothing at all.
+BLANK_TITLE = " " + chr(0x200B) + " "
+
+
+def _normalized(text):
+    # Playwright's normalizeWhiteSpace (driver/package/lib/coreBundle.js): drop U+200B and U+00AD, collapse runs of
+    # whitespace, trim. It runs on the element's text AND on the exact string, so the two meet normalized.
+    return " ".join(text.translate(_ZERO_WIDTH).split())
+
+
 class _Text:
-    """page.get_by_text: exact means an element's whole text is the string, otherwise a case-insensitive part of it."""
+    """page.get_by_text: exact means an element's whole text IS the string, both normalized; otherwise the string is a
+    case-insensitive part of it."""
 
     def __init__(self, text, exact):
         self.text = text
         self.exact = exact
 
     def fits(self, title):
-        return title == self.text if self.exact else self.text.lower() in title.lower()
+        if self.exact:
+            return _normalized(title) == _normalized(self.text)
+        return self.text.lower() in title.lower()
 
 
 class _Button:
@@ -264,6 +279,22 @@ def test_restore_refuses_a_scene_without_a_title(monkeypatch):
     assert session.page.restored == []
 
 
+def test_restore_refuses_a_title_that_is_only_whitespace_or_zero_width(monkeypatch):
+    # Review of plan D (2026-09-16, finding 1): Playwright normalizes an exact text selector, so a title of spaces and
+    # zero-width characters becomes "" and matches every tile element that shows no text of its own.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, BLANK_TITLE, True)),
+        RESTORED,
+        _listing(_entry(SCENE, BLANK_TITLE, False)),
+    )
+    session = _Session([BLANK_TITLE])
+
+    with pytest.raises(LookupError, match="has no title"):
+        asyncio.run(scenes.restore(session, PROJECT, SCENE))
+    assert session.page.restored == []
+
+
 def test_restore_gives_up_when_the_trash_never_shows_every_trashed_scene(monkeypatch):
     _flow_answers(monkeypatch, _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", True)))
     session = _Session(["alpha"])
@@ -388,14 +419,105 @@ def test_delete_refuses_a_scene_without_a_title(monkeypatch):
 
 
 def test_delete_says_so_when_no_tile_shows_the_exact_title(monkeypatch):
+    # The grid holds one tile per active scene, so `alphabet` is the trashed one here: without it the run would stop at
+    # the tile count and never reach the exact match this case is named after (rule 10, the early-branch false green).
     _flow_answers(
         monkeypatch,
-        _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "alphabet", False)),
+        _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "alphabet", True)),
         TRASHED,
-        _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "alphabet", False)),
+        _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "alphabet", True)),
     )
     session = _Session(["alphabet"], _GridPage)
 
     with pytest.raises(LookupError, match="not found on the grid"):
         asyncio.run(scenes.delete(session, PROJECT, SCENE))
     assert session.page.trashed == []
+
+
+def test_delete_waits_for_the_grid_to_show_every_active_scene_then_trashes_the_exact_title(monkeypatch):
+    # L2 on 2026-09-16 failed with "not found on the grid" on a scene the listing already had. The grid was measured the
+    # same day to hold exactly one tile per active scene and none for a trashed one, so wait for that many, as restore
+    # does for the trash, instead of judging the first paint.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "Scene 1", False), _entry(OTHER, "Scene 10", False)),
+        TRASHED,
+        _listing(_entry(SCENE, "Scene 1", True), _entry(OTHER, "Scene 10", False)),
+    )
+    session = _Session({"Scene 10": 0, "Scene 1": 2_500}, _GridPage)
+
+    assert asyncio.run(scenes.delete(session, PROJECT, SCENE))["trashed"] is True
+    assert session.page.trashed == ["Scene 1"]
+    assert session.page.elapsed_ms >= 2_500
+
+
+def test_delete_gives_up_when_the_grid_never_shows_every_active_scene(monkeypatch):
+    _flow_answers(monkeypatch, _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "bravo", False)))
+    session = _Session(["bravo"], _GridPage)
+
+    with pytest.raises(LookupError, match="grid shows 1 scene tiles for 2 active scenes"):
+        asyncio.run(scenes.delete(session, PROJECT, SCENE))
+    assert session.page.trashed == []
+
+
+def test_delete_refuses_when_the_grid_shows_more_scene_tiles_than_active_scenes(monkeypatch):
+    # A tile the listing does not know would end the wait early and can be the only title match before the right one
+    # renders, which is how restore once restored a namesake.
+    _flow_answers(monkeypatch, _listing(_entry(SCENE, "Scene 1", False)))
+    session = _Session({"Scene 1 draft": 0, "bravo": 0, "Scene 1": 2_000}, _GridPage)
+
+    with pytest.raises(LookupError, match="grid shows 2 scene tiles for 1 active scenes"):
+        asyncio.run(scenes.delete(session, PROJECT, SCENE))
+    assert session.page.trashed == []
+
+
+def test_delete_counts_a_tile_that_appears_during_the_last_wait(monkeypatch):
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "bravo", False)),
+        TRASHED,
+        _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", False)),
+    )
+    session = _Session({"alpha": 0, "bravo": 15_000}, _GridPage)
+
+    assert asyncio.run(scenes.delete(session, PROJECT, SCENE))["trashed"] is True
+    assert session.page.trashed == ["alpha"]
+    assert session.page.elapsed_ms >= 15_000
+
+
+def test_delete_refuses_a_title_that_is_only_whitespace_or_zero_width(monkeypatch):
+    # Review of plan D (2026-09-16, finding 1): Playwright normalizes an exact text selector, so this title becomes ""
+    # and matches every tile element that shows no text of its own.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, BLANK_TITLE, False), _entry(OTHER, "kept", False)),
+        TRASHED,
+        _listing(_entry(SCENE, BLANK_TITLE, True), _entry(OTHER, "kept", False)),
+    )
+    session = _Session(["kept", BLANK_TITLE], _GridPage)
+
+    with pytest.raises(LookupError, match="has no title"):
+        asyncio.run(scenes.delete(session, PROJECT, SCENE))
+    assert session.page.trashed == []
+
+
+def test_delete_refuses_a_scene_that_is_already_in_the_trash(monkeypatch):
+    _flow_answers(monkeypatch, _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", False)))
+    session = _Session(["bravo"], _GridPage)
+
+    with pytest.raises(LookupError, match="already in the trash"):
+        asyncio.run(scenes.delete(session, PROJECT, SCENE))
+    assert session.page.trashed == []
+
+
+def test_delete_names_another_scene_whose_trash_flag_changed(monkeypatch):
+    # Grid tiles carry no ids, so a wrong tile can only be caught afterwards, in the listing: say which one moved.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "bravo", False)),
+        TRASHED,
+        _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", True)),
+    )
+
+    with pytest.raises(RuntimeError, match=f"{OTHER} \\('bravo'\\)"):
+        asyncio.run(scenes.delete(_Session(["alpha", "bravo"], _GridPage), PROJECT, SCENE))
