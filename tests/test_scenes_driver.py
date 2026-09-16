@@ -568,6 +568,13 @@ class _Clickable:
     async def inner_text(self):
         return self.pair[1] if self.pair else None
 
+    async def is_disabled(self):
+        # Measured 2026-09-16: Flow keeps 'Download scene' disabled until the editor really holds a clip, and a
+        # freshly loaded page does not restore the timeline thumbnails at all.
+        if self.pair and self.pair[0] == "Download scene":
+            return not self.page.download_ready()
+        return False
+
     async def click(self, timeout=None):
         self.page.click(self.pair, self.kind)
 
@@ -643,9 +650,11 @@ class _Expect:
 
 
 class _ScenePage:
-    def __init__(self, titles, *, clips=0, toolbar=None, builds_after=0, adds=True):
+    def __init__(self, titles, *, clips=0, toolbar=None, builds_after=0, adds=True, saves=True):
         self.titles = list(titles)
         self.adds = adds
+        self.saves = saves
+        self.saved = clips > 0
         self.timeline = clips * THUMBS_PER_CLIP
         self.overlay = None
         self.toolbar = list(TOOLBAR if toolbar is None else toolbar)
@@ -685,9 +694,13 @@ class _ScenePage:
             self.added.append(text)
             if self.adds:
                 self.timeline += THUMBS_PER_CLIP
+                self.saved = self.saves
             self.overlay = None
         elif kind == "toolbar" and "Download scene" in aria:
             self.downloaded = "pB-probe_20260916.mp4"
+
+    def download_ready(self):
+        return bool(self.timeline and self.saved)
 
     def get_by_role(self, role, name=None):
         assert role == "button"
@@ -864,6 +877,18 @@ def test_add_clip_says_so_when_the_click_landed_but_the_timeline_did_not_grow(mo
         asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
 
 
+def test_add_clip_says_so_when_the_clip_does_not_survive_a_reload(monkeypatch):
+    # Measured 2026-09-16: an add that looked fine in the editor came back as an empty scene after a reload, while the
+    # same add survived when a slower read sat in between. An add nobody can open again is not an add.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], saves=False)
+
+    with pytest.raises(LookupError, match="did not stick"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.elapsed_ms >= scenes.SAVE_WAIT_MS
+
+
 def test_download_saves_the_film_under_the_scene_id(monkeypatch, tmp_path):
     media = [_media(SCENE, "Model sailboat on wooden desk")]
     _scene_answers(monkeypatch, media)
@@ -872,7 +897,7 @@ def test_download_saves_the_film_under_the_scene_id(monkeypatch, tmp_path):
     result = asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=tmp_path))
 
     assert Path(result["path"]).exists() and Path(result["path"]).name.startswith("scene-1")
-    assert result["clips"] == 2 * THUMBS_PER_CLIP
+    assert result["bytes"] == len(b"film") and result["suggested"].endswith(".mp4")
 
 
 def test_download_refuses_a_scene_with_nothing_on_the_timeline(monkeypatch, tmp_path):

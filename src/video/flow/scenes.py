@@ -21,6 +21,7 @@ TILE_WAIT_MS = 15_000
 TOOLBAR_MIN = 20
 TOOLBAR_WAIT_MS = 15_000
 THUMBS = "flow-scene-timeline video, flow-scene-timeline img"
+SAVE_WAIT_MS = 20_000
 OVERLAY = ".cdk-overlay-pane button, [role=dialog] button"
 # Add clip's menu offers Extend (Veo 3.1 - Lite), 10 credits, right next to the item this driver wants.
 PAID_WORDS = ("extend", "generate", "upscale")
@@ -129,6 +130,29 @@ async def _open_scene(session: FlowSession, project_id: str, scene_id: str) -> N
         waited += 1_000
 
 
+async def _holds_a_clip(page: Any) -> bool:
+    """Flow's own judgment about whether the editor has a scene to work with.
+
+    Measured 2026-09-16: on a freshly loaded page the timeline thumbnails are not restored, so counting them says
+    nothing, while 'Download scene' stays disabled until the editor really holds a clip.
+    """
+    button = page.get_by_role("button", name=re.compile("Download scene", re.IGNORECASE))
+    matching = await button.count()
+    if matching != 1:
+        raise LookupError(f"{matching} Download scene buttons on the scene page; not guessing")
+    return not await button.first.is_disabled()
+
+
+async def _wait_until_it_holds_a_clip(page: Any, scene_id: str, complaint: str) -> int:
+    waited = 0
+    while not await _holds_a_clip(page):
+        if waited >= SAVE_WAIT_MS:
+            raise LookupError(f"{complaint} (scene {scene_id}, waited {waited // 1000}s)")
+        await page.wait_for_timeout(2_000)
+        waited += 2_000
+    return waited
+
+
 async def _click_one(page: Any, found: Any, what: str) -> str:
     """Click the single control that matches, and never one that spends: labels sit next to paid actions here."""
     matching = await found.count()
@@ -210,12 +234,20 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
     after = await page.locator(THUMBS).count()
     if after <= before:
         raise RuntimeError(f"add_clip: the timeline still shows {after} thumbnails; nothing was added")
+    # Measured 2026-09-16: reloading right after the add can bring back an empty scene, while the same add survived
+    # once a slower read sat in between. So the add counts only once a freshly loaded page still holds it; this is
+    # CLAUDE.md rule 9 in another dress, leaving the page too early loses what was just done.
+    await _open_scene(session, project_id, scene_id)
+    saved_ms = await _wait_until_it_holds_a_clip(
+        page, scene_id, "add_clip: the clip did not stick, the scene came back empty after a reload"
+    )
     return {
         "scene_id": scene_id,
         "media_id": media_id,
         "title": title,
         "clips_before": before,
         "clips_after": after,
+        "saved_after_ms": saved_ms,
         "rpcids": sorted(frames),
     }
 
@@ -228,9 +260,7 @@ async def download(session: FlowSession, project_id: str, scene_id: str, *, out_
     """
     page = session.page
     await _open_scene(session, project_id, scene_id)
-    clips = await page.locator(THUMBS).count()
-    if clips == 0:
-        raise LookupError(f"scene {scene_id} has no clip on its timeline to download")
+    await _wait_until_it_holds_a_clip(page, scene_id, "there is no clip on this scene's timeline to download")
     # Same as Add clip: the label is the aria-label, the text is just the ligature "download".
     button = page.get_by_role("button", name=re.compile("Download scene", re.IGNORECASE))
     async with page.expect_download(timeout=600_000) as info:
@@ -244,7 +274,6 @@ async def download(session: FlowSession, project_id: str, scene_id: str, *, out_
     return {
         "scene_id": scene_id,
         "path": str(target),
-        "clips": clips,
         "suggested": handed.suggested_filename,
         "bytes": target.stat().st_size,
     }
