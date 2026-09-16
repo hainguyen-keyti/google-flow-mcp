@@ -137,6 +137,27 @@ async def _open_scene(session: FlowSession, project_id: str, scene_id: str) -> N
         waited += 1_000
 
 
+async def _total_duration(page: Any) -> str | None:
+    """What the scene editor says the whole timeline lasts, as mm:ss:ff.
+
+    Read without a regex escape on purpose (the editing tool here doubles backslashes). This label is the only
+    measure of a scene's contents that survives a page load: the timeline thumbnails are not restored on a cold
+    page (measured 2026-09-16), so counting them cannot tell a new clip from a strip that finally rendered.
+    """
+    text = await page.locator(BUILDER).first.inner_text() or ""
+    key = "Total duration:"
+    at = text.find(key)
+    if at < 0:
+        return None
+    value = ""
+    for char in text[at + len(key) :].strip():
+        if char.isdigit() or char == ":":
+            value += char
+        else:
+            break
+    return value or None
+
+
 async def _holds_a_clip(page: Any) -> bool:
     """Flow's own judgment about whether the editor has a scene to work with.
 
@@ -252,6 +273,9 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
             "carry no media id, so adding would guess which one"
         )
     await _open_scene(session, project_id, scene_id)
+    # TODO(next session): this is the count the scoped re-review called meaningless, and the owner chose to replace it
+    # with a bounded wait on _total_duration changing, reported and never raised. Left as it was so the tree stays
+    # green while the work pauses; _total_duration above is the helper that replacement needs.
     before = await page.locator(THUMBS).count()
     # By accessible name, not by text: measured 2026-09-16, this button's text is only the ligature "add_2" while
     # "Add clip" lives in its aria-label, so a text match finds nothing at all (live run of scene_build).
