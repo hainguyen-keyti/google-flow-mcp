@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, unquote_plus, urlsplit
 
 from gflow_cli.api.transports import migrated_composer as mc
 from gflow_cli.api.video import Aspect, GenerateVideoRequest, Mode, VideoModel, reference_cap_for
+from gflow_cli.errors import UiSelectorDriftError
 
 from video.flow import agent, composer, parsers
 from video.flow.reader import capture, one
@@ -215,7 +216,13 @@ async def attach(page: Any, reference: Reference) -> dict[str, str]:
 
 
 async def apply_settings(page: Any, model: str, aspect: str, references: list[Reference]) -> None:
-    """References mode, model and aspect through gflow's own radios, which read every choice back."""
+    """References mode, model and aspect through gflow's own radios, which read every choice back.
+
+    Measured 2026-09-16 (L2 run 1, then a $0 diagnosis): right after the composer's own settings pass the pane was
+    closed, yet gflow's first open of it showed no option groups while a second open worked, the toggle the
+    composer's `_open_settings` already retries once. Opening the pane spends nothing, so that one failure gets one
+    more open.
+    """
     entities = [reference for reference in references if reference.kind == "entity"]
     request = GenerateVideoRequest(
         prompt="character references",
@@ -225,7 +232,13 @@ async def apply_settings(page: Any, model: str, aspect: str, references: list[Re
         reference_entities=tuple(reference.id for reference in entities),
         reference_entity_names=tuple(reference.title for reference in entities),
     )
-    await mc.MigratedComposer().apply_video_settings(page, request)
+    settings = mc.MigratedComposer()
+    try:
+        await settings.apply_video_settings(page, request)
+    except UiSelectorDriftError as exc:
+        if "rendered no option groups" not in str(exc):
+            raise
+        await settings.apply_video_settings(page, request)
 
 
 async def pin_duration(page: Any) -> str:

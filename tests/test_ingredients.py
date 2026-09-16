@@ -4,6 +4,7 @@ import re
 from urllib.parse import quote_plus
 
 import pytest
+from gflow_cli.errors import UiSelectorDriftError
 
 from video import gen
 from video.flow import clips, composer, ingredients
@@ -310,6 +311,52 @@ def test_body_check_ignores_requests_that_are_not_a_submit():
     check.on_request(_request("WuwhI", ENTITY))
     check.on_request(_request("nzlxg"))
     assert check.report() == {"rpcid": None, "model_keys": [], "missing": [ENTITY], "ok": False}
+
+
+# the settings pass
+
+
+class _Composer:
+    def __init__(self, failures):
+        self.failures = list(failures)
+        self.calls = 0
+
+    async def apply_video_settings(self, page, request):
+        self.calls += 1
+        if self.failures:
+            raise self.failures.pop(0)
+
+
+def _drift(detail):
+    return UiSelectorDriftError(detail=detail)
+
+
+EMPTY_PANE = "migrated host: the settings pane opened but rendered no option groups ([role='radiogroup'])"
+
+
+def test_apply_settings_opens_the_pane_a_second_time_when_the_first_open_showed_no_option_groups(monkeypatch):
+    # Measured 2026-09-16 (L2 run 1, then a $0 diagnosis): right after the composer's own settings pass, gflow's first
+    # open of the pane showed no option groups while a second open worked. Opening the pane spends nothing.
+    fake = _Composer([_drift(EMPTY_PANE)])
+    monkeypatch.setattr(ingredients.mc, "MigratedComposer", lambda: fake)
+    asyncio.run(ingredients.apply_settings(object(), "omni-flash", "9:16", [THU]))
+    assert fake.calls == 2
+
+
+def test_apply_settings_retries_that_one_failure_only_once(monkeypatch):
+    fake = _Composer([_drift(EMPTY_PANE), _drift(EMPTY_PANE)])
+    monkeypatch.setattr(ingredients.mc, "MigratedComposer", lambda: fake)
+    with pytest.raises(UiSelectorDriftError, match="no option groups"):
+        asyncio.run(ingredients.apply_settings(object(), "omni-flash", "9:16", [THU]))
+    assert fake.calls == 2
+
+
+def test_apply_settings_never_retries_another_settings_failure(monkeypatch):
+    fake = _Composer([_drift("migrated host: no 'aspect' radio offering 'crop_9_16' in the settings pane")])
+    monkeypatch.setattr(ingredients.mc, "MigratedComposer", lambda: fake)
+    with pytest.raises(UiSelectorDriftError, match="aspect"):
+        asyncio.run(ingredients.apply_settings(object(), "omni-flash", "9:16", [THU]))
+    assert fake.calls == 1
 
 
 # the duration pin
