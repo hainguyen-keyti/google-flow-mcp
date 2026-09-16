@@ -971,6 +971,29 @@ def test_submit_strict_output_never_picks_between_two_records_carrying_the_promp
     assert rows[-1]["candidates"] == ["m-w-one", "m-w-two"]
 
 
+def test_submit_strict_output_stops_waiting_once_two_records_carry_the_prompt(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-one", PROMPT), _video("w-two", PROMPT)])
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(composer.asyncio, "sleep", sleep)
+    with pytest.raises(RuntimeError, match="2 new records"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True, wait=600.0)
+    assert slept == []
+
+
+def test_submit_strict_output_lists_candidates_only_on_a_job_it_could_not_settle(monkeypatch, tmp_path):
+    log = []
+    near = _video("w-other", "stands in a sunny bakery and smiles at the door")
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-mine", PROMPT), near])
+    assert _submit(_SubmitSession(log), tmp_path, log, strict_output=True)["media_id"] == "m-w-mine"
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert last["status"] == "done" and "candidates" not in last
+
+
 def test_submit_strict_output_takes_the_one_record_carrying_the_prompt(monkeypatch, tmp_path):
     log = []
     fresh = [_video("w-other", "someone else's prompt"), _video("w-mine", PROMPT)]
@@ -1467,6 +1490,7 @@ def test_generate_verify_passes_the_chips_setup_attached_and_reports_the_prompt_
         (ON_PAGE[1:], f"peobj1.png {PROMPT}"),
         ([{**ON_PAGE[0], "id": OTHER, "entity": OTHER}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
         ([{**ON_PAGE[0], "entity": ""}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
+        ([{**ON_PAGE[0], "entity": OTHER}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
         ([*ON_PAGE, {"kind": "media", "id": "w-stray", "entity": "", "text": "x.png"}], f"Thu {PROMPT}"),
         (ON_PAGE, "Thu peobj1.png stands in a sunny"),
     ],
@@ -1474,6 +1498,7 @@ def test_generate_verify_passes_the_chips_setup_attached_and_reports_the_prompt_
         "a chip went missing",
         "another character",
         "entity id not bound",
+        "entity id disagrees",
         "a stray chip",
         "prompt cut short",
     ],
