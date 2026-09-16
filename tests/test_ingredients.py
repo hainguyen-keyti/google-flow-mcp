@@ -225,6 +225,12 @@ def test_attach_refuses_a_chip_of_the_wrong_kind():
         asyncio.run(ingredients.attach(page, THU))
 
 
+def test_attach_refuses_an_entity_chip_for_an_image_even_when_it_names_the_image_workflow():
+    page = _MentionPage([_option("peobj1.png", "Image", _chip("entity", WORKFLOW, text="peobj1.png"))])
+    with pytest.raises(LookupError, match="refusing"):
+        asyncio.run(ingredients.attach(page, IMAGE))
+
+
 def test_attach_refuses_a_chip_that_names_another_entity():
     page = _MentionPage([_option("Thu", "Character", _chip("entity", OTHER, OTHER))])
     with pytest.raises(LookupError, match="refusing"):
