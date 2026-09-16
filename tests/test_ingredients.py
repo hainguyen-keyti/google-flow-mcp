@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from pathlib import Path
 from urllib.parse import quote_plus
 
 import pytest
@@ -46,6 +47,15 @@ def test_resolve_names_each_character_then_each_image_with_the_ids_their_chips_c
     assert references[0].mention_ids == {ENTITY}
     # An image chip names the image's workflow id, never its media id (measured in T1).
     assert references[1].mention_ids == {WORKFLOW, "w-older"}
+
+
+def test_resolve_names_an_image_by_its_own_workflows_only():
+    second = _image(media=OTHER, title="other.png")
+    records = [_record(), _record(media=OTHER, workflow="w-other")]
+    references = ingredients.resolve(
+        [_character()], [_image(), second], records, [ENTITY], [MEDIA], "omni-flash"
+    )
+    assert references[1].mention_ids == {WORKFLOW}
 
 
 def test_resolve_refuses_an_entity_that_is_not_a_character_of_the_project():
@@ -257,6 +267,13 @@ def test_attach_clicks_the_one_option_of_that_title_and_kind_and_never_presses_e
     assert "Enter" not in page.keyboard.pressed
 
 
+def test_attach_counts_only_the_options_it_can_see():
+    hidden = {**_option("Thu", "Character", _chip("entity", ENTITY, ENTITY)), "visible": False}
+    page = _MentionPage([hidden, _option("Thu", "Character", _chip("entity", ENTITY, ENTITY))])
+    assert asyncio.run(ingredients.attach(page, THU))["id"] == ENTITY
+    assert page.clicked == [("Thu", "Character"), "Add to prompt"]
+
+
 def test_attach_commits_the_active_first_option_with_its_click_alone():
     page = _MentionPage([_option("Thu", "Character", _chip("entity", ENTITY, ENTITY))])
     assert asyncio.run(ingredients.attach(page, THU))["id"] == ENTITY
@@ -404,6 +421,13 @@ def test_body_check_fails_a_submit_that_is_not_references_to_video():
     request.post_data = request.post_data.replace("r2v", "t2v")
     check.on_request(request)
     assert check.report()["ok"] is False
+
+
+def test_body_check_judges_the_first_submit_and_ignores_a_later_one():
+    check = ingredients.SubmitBodyCheck([THU, IMAGE])
+    check.on_request(_request("MZZa6b", ENTITY, WORKFLOW))
+    check.on_request(_request("MZZa6b", ENTITY))
+    assert check.report()["ok"] is True and check.report()["missing"] == []
 
 
 def test_body_check_ignores_requests_that_are_not_a_submit():
@@ -567,6 +591,54 @@ def test_pin_duration_refuses_a_radio_that_will_not_stay_checked(no_settings_pan
         asyncio.run(ingredients.pin_duration(page))
 
 
+# composer._type_prompt
+
+
+class _TypedBox:
+    def __init__(self, page):
+        self.page = page
+
+    async def click(self, timeout=None):
+        self.page.log.append("box click")
+
+    async def inner_text(self):
+        return self.page.text
+
+
+class _TypingPage:
+    def __init__(self, lands=True):
+        self.log = []
+        self.text = ""
+        self.lands = lands
+        self.keyboard = self
+
+    async def insert_text(self, text):
+        self.log.append("insert")
+        if self.lands:
+            self.text += text
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+def test_type_prompt_without_a_click_inserts_once_where_the_caret_already_is():
+    page = _TypingPage()
+    assert asyncio.run(composer._type_prompt(page, _TypedBox(page), PROMPT, click=False)) is True
+    assert page.log == ["insert"]
+
+
+def test_type_prompt_without_a_click_never_inserts_a_second_copy_when_the_first_did_not_land():
+    page = _TypingPage(lands=False)
+    assert asyncio.run(composer._type_prompt(page, _TypedBox(page), PROMPT, click=False)) is False
+    assert page.log == ["insert"]
+
+
+def test_type_prompt_by_default_clicks_the_box_before_each_attempt():
+    page = _TypingPage(lands=False)
+    assert asyncio.run(composer._type_prompt(page, _TypedBox(page), PROMPT)) is False
+    assert page.log == ["box click", "insert"] * 3
+
+
 # composer._submit
 
 
@@ -590,6 +662,9 @@ class _SubmitPage:
     def __init__(self, log):
         self.log = log
         self.listeners = []
+        self.mentions = 0
+        self.shots = []
+        self.screenshot_error = None
 
     async def wait_for_timeout(self, ms):
         return None
@@ -602,7 +677,9 @@ class _SubmitPage:
         return _Start(self.log)
 
     async def screenshot(self, path=None):
-        return None
+        self.shots.append(path)
+        if self.screenshot_error is not None:
+            raise self.screenshot_error
 
     def on(self, event, listener):
         assert event == "request"
@@ -615,7 +692,8 @@ class _SubmitPage:
 
     async def evaluate(self, script, arg=None):
         assert script == composer._LEFT_JS
-        return {"mentions": 0, "text": ""}
+        self.log.append("left read")
+        return {"mentions": self.mentions, "text": ""}
 
 
 class _SubmitSession:
@@ -643,13 +721,20 @@ def _video(workflow, prompt, done=True):
     }
 
 
-def _install(monkeypatch, tmp_path, log, *, price=12, fresh=()):
-    listings = iter([[_video("w-before", "old")], *([[_video("w-before", "old"), *fresh]] * 20)])
-    balances = iter([200, 188])
+def _install(
+    monkeypatch, tmp_path, log, *, prices=(12, 12), fresh=(), before=None, poll_error=None, fetch_error=None
+):
+    seen_before = [_video("w-before", "old")] if before is None else before
+    listings = iter([seen_before, *([[*seen_before, *fresh]] * 20)])
+    balances = iter([200, 188, 188])
+    pre, confirm = prices
 
     async def snapshot(session, project_id, attempts=4):
         log.append("snapshot")
-        return next(listings), set()
+        rows = next(listings)
+        if poll_error is not None and "click" in log:
+            raise poll_error
+        return rows, set()
 
     async def credits(session):
         log.append("credits")
@@ -661,14 +746,15 @@ def _install(monkeypatch, tmp_path, log, *, price=12, fresh=()):
 
     async def clear_prompt(session):
         log.append("clear")
+        session.page.mentions = 0
         return {"chips": 0, "thumbs": 0, "text": 0}
 
     async def configure(session, *, mode="Ingredients", aspect="9:16", count="x1", label="settings"):
         log.append(f"configure {label}")
-        return {"applied": {}, "price": price, "settings_text": ""}
+        return {"applied": {}, "price": pre if label == "pre" else confirm, "settings_text": ""}
 
-    async def type_prompt(page, box, prompt, attempts=3):
-        log.append("type")
+    async def type_prompt(page, box, prompt, attempts=3, *, click=True):
+        log.append(f"type click={click}")
         return True
 
     async def await_submit(session, click, *, settle=30.0, patience=90.0):
@@ -683,7 +769,9 @@ def _install(monkeypatch, tmp_path, log, *, price=12, fresh=()):
         return ""
 
     async def fetch_720(session, record, stem, attempts=6):
-        log.append(f"fetch {record['workflow_id']}")
+        log.append(f"fetch {record['workflow_id']} into {stem.name}")
+        if fetch_error is not None:
+            raise fetch_error
         return tmp_path / "clip.mp4"
 
     monkeypatch.setattr(composer, "snapshot", snapshot)
@@ -697,9 +785,10 @@ def _install(monkeypatch, tmp_path, log, *, price=12, fresh=()):
     monkeypatch.setattr(composer, "fetch_720", fetch_720)
 
 
-def _setup(log, result=None):
+def _setup(log, result=None, mentions=0):
     async def setup(session):
         log.append("setup")
+        session.page.mentions = mentions
         return result
 
     return setup
@@ -731,19 +820,31 @@ def test_submit_writes_the_intent_row_before_the_click_and_the_outcome_after(mon
         "clear",
         "configure pre",
         "setup",
-        "type",
+        "type click=True",
         "configure confirm",
         "ledger at click ['submitted']",
         "click",
     ]
-    assert [row["status"] for row in gen.Ledger(tmp_path / "ledger.jsonl").rows()] == ["submitted", "done"]
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
+    assert [row["status"] for row in rows] == ["submitted", "done"]
+    assert rows[0]["credits_before"] == 200
+    assert (rows[1]["credits_before"], rows[1]["credits_after"], rows[1]["spent"]) == (200, 188, 12)
     assert result["spent"] == 12 and result["media_id"] == "m-w-new"
+
+
+def test_submit_refuses_a_job_id_that_is_already_done_before_reading_anything(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    gen.Ledger(tmp_path / "ledger.jsonl").append("job-1", "done", kind="character", spent=12)
+    with pytest.raises(gen.AlreadySubmitted):
+        _submit(_SubmitSession(log), tmp_path, log)
+    assert log == []
 
 
 def test_submit_dry_run_never_clicks_never_reads_the_balance_and_writes_no_ledger(monkeypatch, tmp_path):
     log = []
     _install(monkeypatch, tmp_path, log)
-    setup = _setup(log, {"chips": [{"kind": "entity", "id": ENTITY, "text": "Thu"}]})
+    setup = _setup(log, {"chips": [{"kind": "entity", "id": ENTITY, "text": "Thu"}]}, mentions=1)
     result = _submit(_SubmitSession(log), tmp_path, log, job_id=None, dry_run=True, setup=setup)
     assert result == {
         "dry_run": True,
@@ -755,24 +856,86 @@ def test_submit_dry_run_never_clicks_never_reads_the_balance_and_writes_no_ledge
         "chips": [{"kind": "entity", "id": ENTITY, "text": "Thu"}],
     }
     assert "click" not in log and "snapshot" not in log and "credits" not in log
-    assert log.count("clear") == 2 and log[-1] == "clear"
+    # The emptiness it reports is read after it emptied the composer, never before.
+    assert log[-2:] == ["clear", "left read"]
     assert not (tmp_path / "ledger.jsonl").exists()
 
 
 def test_submit_dry_run_reports_a_price_that_differs_instead_of_raising(monkeypatch, tmp_path):
     log = []
-    _install(monkeypatch, tmp_path, log, price=15)
+    _install(monkeypatch, tmp_path, log, prices=(12, 15))
     result = _submit(_SubmitSession(log), tmp_path, log, job_id=None, dry_run=True)
     assert result["quoted_credits"] == 15 and result["price_ok"] is False
 
 
-def test_submit_refuses_a_price_that_differs_before_any_ledger_row(monkeypatch, tmp_path):
+@pytest.mark.parametrize("live", [15, 6])
+def test_submit_refuses_a_price_above_or_below_the_table_with_no_row_and_an_empty_composer(
+    monkeypatch, tmp_path, live
+):
     log = []
-    _install(monkeypatch, tmp_path, log, price=15)
-    with pytest.raises(RuntimeError, match="composer says 15"):
-        _submit(_SubmitSession(log), tmp_path, log)
+    _install(monkeypatch, tmp_path, log, prices=(12, live))
+    session = _SubmitSession(log)
+    with pytest.raises(RuntimeError, match=f"composer says {live}"):
+        _submit(session, tmp_path, log, setup=_setup(log, mentions=2))
     assert "click" not in log
     assert gen.Ledger(tmp_path / "ledger.jsonl").rows() == []
+    # Review F4 (2026-09-16): a refused run must not leave its chips in the project's shared composer.
+    assert log[-1] == "clear" and session.page.mentions == 0
+
+
+def test_submit_prices_the_run_on_the_read_taken_after_the_prompt_was_built(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, prices=(15, 12), fresh=[_video("w-new", f"Thu {PROMPT}")])
+    assert _submit(_SubmitSession(log), tmp_path, log)["spent"] == 12
+    log.clear()
+    second = tmp_path / "second"
+    _install(monkeypatch, second, log, prices=(12, 15))
+    with pytest.raises(RuntimeError, match="composer says 15"):
+        _submit(_SubmitSession(log), second, log)
+
+
+def test_submit_records_what_verify_reads_right_before_the_intent_row(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", f"Thu {PROMPT}")])
+    at_setup = [{"kind": "entity", "id": ENTITY, "text": "as setup saw it"}]
+    at_click = [{"kind": "entity", "id": ENTITY, "text": "Thu"}]
+
+    async def verify(session):
+        log.append("verify")
+        return {"chips": at_click, "prompt_text": f"Thu {PROMPT}"}
+
+    result = _submit(
+        _SubmitSession(log), tmp_path, log, setup=_setup(log, {"chips": at_setup}), verify=verify
+    )
+    assert log.index("configure confirm") < log.index("verify") < log.index("ledger at click ['submitted']")
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
+    assert rows[0]["chips"] == at_click and rows[0]["prompt_text"] == f"Thu {PROMPT}"
+    assert result["chips"] == at_click
+
+
+def test_submit_refuses_a_prompt_that_changed_before_the_click_with_no_row_and_an_empty_composer(
+    monkeypatch, tmp_path
+):
+    # Review F1 (2026-09-16): the chips were judged at setup, then typing and the confirm pass still ran.
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    session = _SubmitSession(log)
+
+    async def verify(active):
+        raise LookupError("right before the click the prompt holds [('media', 'w')]; refusing to spend")
+
+    with pytest.raises(LookupError, match="refusing to spend"):
+        _submit(session, tmp_path, log, setup=_setup(log, mentions=2), verify=verify)
+    assert "click" not in log
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows() == []
+    assert log[-1] == "clear" and session.page.mentions == 0
+
+
+def test_submit_can_type_the_prompt_without_clicking_the_box(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", PROMPT)])
+    _submit(_SubmitSession(log), tmp_path, log, click_box=False, strict_output=True)
+    assert "type click=False" in log and "type click=True" not in log
 
 
 def test_submit_keeps_the_story_defaults_when_no_new_option_is_given(monkeypatch, tmp_path):
@@ -781,9 +944,10 @@ def test_submit_keeps_the_story_defaults_when_no_new_option_is_given(monkeypatch
     result = _submit(_SubmitSession(log), tmp_path, log)
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
     assert [row["status"] for row in rows] == ["submitted", "done"]
-    assert "fetch w-new" in log, "without strict_output the newest video is still taken, as story expects"
-    assert "listen" not in log
-    assert not {"chips", "body_check", "candidates"} & (set(rows[0]) | set(rows[1]) | set(result))
+    assert any(entry.startswith("fetch w-new") for entry in log), "story still takes the newest video"
+    assert "listen" not in log and "type click=True" in log
+    story_keys = set(rows[0]) | set(rows[1]) | set(result)
+    assert not {"chips", "body_check", "candidates", "prompt_text", "error"} & story_keys
 
 
 def test_submit_strict_output_takes_no_record_that_lacks_the_prompt(monkeypatch, tmp_path):
@@ -797,7 +961,7 @@ def test_submit_strict_output_takes_no_record_that_lacks_the_prompt(monkeypatch,
 
 def test_submit_strict_output_never_picks_between_two_records_carrying_the_prompt(monkeypatch, tmp_path):
     log = []
-    fresh = [_video("w-one", f"Thu {PROMPT}"), _video("w-two", f"Thu {PROMPT}")]
+    fresh = [_video("w-one", PROMPT), _video("w-two", PROMPT)]
     _install(monkeypatch, tmp_path, log, fresh=fresh)
     with pytest.raises(RuntimeError, match="2 new records"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
@@ -809,10 +973,165 @@ def test_submit_strict_output_never_picks_between_two_records_carrying_the_promp
 
 def test_submit_strict_output_takes_the_one_record_carrying_the_prompt(monkeypatch, tmp_path):
     log = []
-    fresh = [_video("w-other", "someone else's prompt"), _video("w-mine", f"Thu {PROMPT}")]
+    fresh = [_video("w-other", "someone else's prompt"), _video("w-mine", PROMPT)]
     _install(monkeypatch, tmp_path, log, fresh=fresh)
     result = _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     assert result["media_id"] == "m-w-mine"
+
+
+STYLE = "Cinematic vertical shot, soft daylight, "
+
+
+def test_submit_strict_output_never_takes_a_record_sharing_only_the_prompts_first_40_characters(
+    monkeypatch, tmp_path
+):
+    # Review F3 (2026-09-16): scenes of one ad often open with the same style line, exactly 40 characters here.
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-scene-3", STYLE + "Thu opens the bakery door")])
+    with pytest.raises(RuntimeError, match="could be this job's clip"):
+        _submit(
+            _SubmitSession(log), tmp_path, log, prompt=STYLE + "Thu tastes a croissant", strict_output=True
+        )
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
+    assert rows[-1]["status"] == "unknown" and rows[-1]["candidates"] == ["m-w-scene-3"]
+    assert not any(entry.startswith("fetch") for entry in log)
+
+
+def _reads(text):
+    async def verify(session):
+        return {"prompt_text": text}
+
+    return verify
+
+
+def test_submit_strict_output_never_takes_a_record_whose_prompt_only_contains_the_prompt(
+    monkeypatch, tmp_path
+):
+    # Review F3 (2026-09-16): a short prompt sits inside another job's prompt.
+    log = []
+    _install(
+        monkeypatch, tmp_path, log, fresh=[_video("w-earlier-job", "Thu smiles at the camera by the door")]
+    )
+    with pytest.raises(RuntimeError, match="could be this job's clip"):
+        _submit(
+            _SubmitSession(log),
+            tmp_path,
+            log,
+            prompt="smiles",
+            verify=_reads("Thu smiles"),
+            strict_output=True,
+        )
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
+    assert rows[-1]["status"] == "unknown" and rows[-1]["candidates"] == ["m-w-earlier-job"]
+    assert not any(entry.startswith("fetch") for entry in log)
+
+
+def test_submit_strict_output_never_takes_another_characters_clip_with_the_same_words(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-lan", "Lan smiles")])
+    with pytest.raises(RuntimeError, match="could be this job's clip"):
+        _submit(
+            _SubmitSession(log),
+            tmp_path,
+            log,
+            prompt="smiles",
+            verify=_reads("Thu smiles"),
+            strict_output=True,
+        )
+    assert not any(entry.startswith("fetch") for entry in log)
+
+
+def test_submit_strict_output_takes_the_record_whose_prompt_is_the_box_text_as_flow_stores_it(
+    monkeypatch, tmp_path
+):
+    # Measured in out/records_now.json: a chip's title, then the typed text, joined with two spaces.
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-mine", f"Thu  peobj1.png  {PROMPT}")])
+    result = _submit(
+        _SubmitSession(log), tmp_path, log, verify=_reads(f"Thu peobj1.png {PROMPT}"), strict_output=True
+    )
+    assert result["media_id"] == "m-w-mine"
+
+
+def test_submit_strict_output_never_takes_a_record_that_existed_before_the_click(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, before=[_video("w-old", PROMPT)])
+    with pytest.raises(RuntimeError, match="nothing was generated"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert not any(entry.startswith("fetch") for entry in log)
+
+
+def test_submit_strict_output_never_takes_an_image_record(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[{**_video("w-image", PROMPT), "kind": "image"}])
+    with pytest.raises(RuntimeError, match="nothing was generated"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert not any(entry.startswith("fetch") for entry in log)
+
+
+@pytest.mark.parametrize("job_id", ["../escape", "scene-1", "job-" + "x" * 600])
+def test_submit_names_no_file_after_the_job_id(monkeypatch, tmp_path, job_id):
+    # Review F2 (2026-09-16): a job_id naming an existing file, or too long for the disk, crashed after the click.
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", PROMPT)])
+    session = _SubmitSession(log)
+    assert _submit(session, tmp_path, log, job_id=job_id, strict_output=True)["media_id"] == "m-w-new"
+    names = [Path(shot).name for shot in session.page.shots]
+    names += [entry.split(" into ")[1] for entry in log if entry.startswith("fetch")]
+    assert len(names) == 2 and all(job_id not in name for name in names), names
+    assert all(Path(shot).parent == tmp_path for shot in session.page.shots)
+
+
+def test_submit_a_failure_after_the_click_writes_an_outcome_row_and_says_credits_may_be_spent(
+    monkeypatch, tmp_path
+):
+    log = []
+    _install(monkeypatch, tmp_path, log, poll_error=LookupError("rpc Zzl0ze not observed; saw []"))
+    with pytest.raises(RuntimeError, match="credits may already be spent") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert "Zzl0ze" in str(raised.value)
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
+    assert [row["status"] for row in rows] == ["submitted", "unknown"]
+    assert "LookupError" in rows[-1]["error"] and rows[-1]["spent"] == 12
+    assert log.count("click") == 1
+
+
+def test_submit_a_screenshot_that_fails_after_the_click_changes_nothing(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", PROMPT)])
+    session = _SubmitSession(log)
+    session.page.screenshot_error = OSError(63, "File name too long")
+    assert _submit(session, tmp_path, log, strict_output=True)["media_id"] == "m-w-new"
+    assert [row["status"] for row in gen.Ledger(tmp_path / "ledger.jsonl").rows()] == ["submitted", "done"]
+
+
+def test_submit_a_finished_clip_that_cannot_be_downloaded_is_pending_not_failed(monkeypatch, tmp_path):
+    log = []
+    _install(
+        monkeypatch,
+        tmp_path,
+        log,
+        fresh=[_video("w-new", PROMPT)],
+        fetch_error=FileExistsError("out/m-w-new.mp4"),
+    )
+    with pytest.raises(RuntimeError, match="do not run this job again"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert (
+        last["status"] == "pending" and last["media_id"] == "m-w-new" and "FileExistsError" in last["error"]
+    )
+
+
+def test_submit_a_clip_still_rendering_at_the_deadline_is_pending_not_nothing_generated(
+    monkeypatch, tmp_path
+):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-mine", PROMPT, done=False)])
+    with pytest.raises(RuntimeError, match="still rendering") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert "nothing was generated" not in str(raised.value)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert (last["status"], last["media_id"], last["spent"]) == ("pending", "m-w-mine", 12)
 
 
 class _Watch:
@@ -830,7 +1149,7 @@ def test_submit_watch_hears_the_click_window_only_and_its_report_lands_in_the_ou
     monkeypatch, tmp_path
 ):
     log = []
-    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", f"Thu {PROMPT}")])
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", PROMPT)])
     watch = _Watch()
     result = _submit(_SubmitSession(log), tmp_path, log, watch=watch, strict_output=True)
     assert log.index("configure confirm") < log.index("listen") < log.index("click") < log.index("unlisten")
@@ -843,7 +1162,7 @@ def test_submit_watch_hears_the_click_window_only_and_its_report_lands_in_the_ou
 
 def test_submit_merges_what_setup_returns_into_the_intent_row_and_the_result(monkeypatch, tmp_path):
     log = []
-    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", f"Thu {PROMPT}")])
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", PROMPT)])
     extra = {"model": "omni-flash", "chips": [{"kind": "entity", "id": ENTITY, "text": "Thu"}]}
     result = _submit(_SubmitSession(log), tmp_path, log, setup=_setup(log, extra), strict_output=True)
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
@@ -855,8 +1174,10 @@ def test_submit_merges_what_setup_returns_into_the_intent_row_and_the_result(mon
 
 
 class _GeneratePage:
-    def __init__(self, log):
+    def __init__(self, log, *, box_text="", caret_lands=True):
         self.log = log
+        self.box_text = box_text
+        self.caret_lands = caret_lands
 
     def locator(self, selector):
         log = self.log
@@ -866,6 +1187,15 @@ class _GeneratePage:
                 log.append(f"click {selector}")
 
         return type("Found", (), {"first": _First()})()
+
+    async def evaluate(self, script, arg=None):
+        assert arg == ingredients.BOX
+        if script == ingredients._CARET_END_JS:
+            self.log.append("caret end")
+            return self.caret_lands
+        if script == ingredients._BOX_TEXT_JS:
+            return self.box_text
+        raise AssertionError(f"unexpected script {script[:40]!r}")
 
 
 def _generate_world(monkeypatch, log, *, was=False, chips_on_page=None):
@@ -920,6 +1250,8 @@ def test_generate_prices_by_model_and_asks_for_strict_output_and_the_body_check(
     )
     assert captured["expected_credits"] == 10
     assert captured["strict_output"] is True and captured["dry_run"] is False
+    # Review F1 (2026-09-16): no click on a box that holds chips, and the chips are read again at the click.
+    assert captured["click_box"] is False and callable(captured["verify"])
     assert (
         captured["kind"] == "character" and captured["mode"] == "Ingredients" and captured["aspect"] == "16:9"
     )
@@ -940,6 +1272,43 @@ def test_generate_puts_agent_mode_back_the_way_it_found_it_even_when_the_submit_
     with pytest.raises(RuntimeError):
         asyncio.run(ingredients.generate(object(), "p-1", prompt=PROMPT, characters=[ENTITY], job_id="job-1"))
     assert log == ["listing", "agent False", "submit", "agent True"]
+
+
+def test_a_failed_agent_mode_restore_never_hides_why_the_run_failed(monkeypatch):
+    # Review F2 (2026-09-16): a TimeoutError from the restore replaced "spent 12 credits".
+    log = []
+    _generate_world(monkeypatch, log, was=True)
+
+    async def failing(session, project_id, **kwargs):
+        raise RuntimeError("job-1: nothing was generated within 360s, spent 12 credits")
+
+    async def set_mode(session, project_id, enabled):
+        log.append(f"agent {enabled}")
+        if enabled:
+            raise TimeoutError("waiting for the agent chip")
+        return {"was": True}
+
+    monkeypatch.setattr(ingredients.composer, "_submit", failing)
+    monkeypatch.setattr(ingredients.agent, "set_mode", set_mode)
+    with pytest.raises(RuntimeError, match="spent 12 credits"):
+        asyncio.run(ingredients.generate(object(), "p-1", prompt=PROMPT, characters=[ENTITY], job_id="job-1"))
+    assert log == ["listing", "agent False", "agent True"]
+
+
+def test_a_failed_agent_mode_restore_after_a_finished_run_is_reported_not_raised(monkeypatch):
+    log = []
+    _generate_world(monkeypatch, log, was=True)
+
+    async def set_mode(session, project_id, enabled):
+        if enabled:
+            raise TimeoutError("waiting for the agent chip")
+        return {"was": True}
+
+    monkeypatch.setattr(ingredients.agent, "set_mode", set_mode)
+    result = asyncio.run(
+        ingredients.generate(object(), "p-1", prompt=PROMPT, characters=[ENTITY], job_id="job-1")
+    )
+    assert result["ok"] is True and result["agent_mode_restored"] == "no: TimeoutError"
 
 
 @pytest.mark.parametrize(
@@ -999,6 +1368,7 @@ def test_generate_setup_sets_the_model_pins_8s_and_attaches_every_reference_in_o
         f"click {ingredients.BOX}",
         f"attach {ENTITY}",
         f"attach {MEDIA}",
+        "caret end",
     ]
     assert extra == {
         "model": "omni-flash",
@@ -1033,6 +1403,92 @@ def test_generate_setup_refuses_a_prompt_holding_more_chips_than_references(monk
     session = type("Session", (), {"page": _GeneratePage(log)})()
     with pytest.raises(LookupError, match="2 chips for 1 references"):
         asyncio.run(captured["setup"](session))
+
+
+def _prepared(monkeypatch, log, on_page, *, box_text=f"Thu peobj1.png {PROMPT}", caret_lands=True):
+    """Run generate as a dry run against a stubbed _submit, then return its setup, verify and a page to run them on."""
+    captured = _generate_world(monkeypatch, log)
+
+    async def nothing(*args):
+        return "pinned"
+
+    async def attach(page, reference):
+        return {"kind": reference.kind, "id": min(reference.mention_ids), "text": reference.title}
+
+    async def chips_on(page):
+        return [dict(chip) for chip in on_page]
+
+    monkeypatch.setattr(ingredients, "apply_settings", nothing)
+    monkeypatch.setattr(ingredients, "pin_duration", nothing)
+    monkeypatch.setattr(ingredients, "attach", attach)
+    monkeypatch.setattr(ingredients, "chips_on", chips_on)
+    asyncio.run(
+        ingredients.generate(
+            object(), "p-1", prompt=PROMPT, characters=[ENTITY], media_ids=[MEDIA], dry_run=True
+        )
+    )
+    page = _GeneratePage(log, box_text=box_text, caret_lands=caret_lands)
+    return captured["setup"], captured["verify"], type("Session", (), {"page": page})()
+
+
+ON_PAGE = [
+    {"kind": "entity", "id": ENTITY, "entity": ENTITY, "text": "Thu"},
+    {"kind": "media", "id": WORKFLOW, "entity": "", "text": "peobj1.png"},
+]
+
+
+def test_generate_setup_refuses_a_prompt_holding_fewer_chips_than_references(monkeypatch):
+    setup, _, session = _prepared(monkeypatch, [], ON_PAGE[:1])
+    with pytest.raises(LookupError, match="1 chips for 2 references"):
+        asyncio.run(setup(session))
+
+
+def test_generate_setup_refuses_a_box_it_cannot_put_the_caret_at_the_end_of(monkeypatch):
+    setup, _, session = _prepared(monkeypatch, [], ON_PAGE, caret_lands=False)
+    with pytest.raises(LookupError, match="caret"):
+        asyncio.run(setup(session))
+
+
+def test_generate_verify_passes_the_chips_setup_attached_and_reports_the_prompt_it_will_send(monkeypatch):
+    setup, verify, session = _prepared(monkeypatch, [], ON_PAGE)
+    asyncio.run(setup(session))
+    assert asyncio.run(verify(session)) == {
+        "chips": [
+            {"kind": "entity", "id": ENTITY, "text": "Thu"},
+            {"kind": "media", "id": WORKFLOW, "text": "peobj1.png"},
+        ],
+        "prompt_text": f"Thu peobj1.png {PROMPT}",
+    }
+
+
+@pytest.mark.parametrize(
+    ("at_click", "box_text"),
+    [
+        (ON_PAGE[1:], f"peobj1.png {PROMPT}"),
+        ([{**ON_PAGE[0], "id": OTHER, "entity": OTHER}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
+        ([{**ON_PAGE[0], "entity": ""}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
+        ([*ON_PAGE, {"kind": "media", "id": "w-stray", "entity": "", "text": "x.png"}], f"Thu {PROMPT}"),
+        (ON_PAGE, "Thu peobj1.png stands in a sunny"),
+    ],
+    ids=[
+        "a chip went missing",
+        "another character",
+        "entity id not bound",
+        "a stray chip",
+        "prompt cut short",
+    ],
+)
+def test_generate_verify_refuses_a_prompt_that_changed_after_setup(monkeypatch, at_click, box_text):
+    setup, verify, session = _prepared(monkeypatch, [], ON_PAGE)
+    asyncio.run(setup(session))
+    monkeypatch.setattr(ingredients, "chips_on", lambda page: _async([dict(chip) for chip in at_click]))
+    session.page.box_text = box_text
+    with pytest.raises(LookupError, match="refusing to spend"):
+        asyncio.run(verify(session))
+
+
+async def _async(value):
+    return value
 
 
 def test_the_option_script_reads_title_and_kind_and_the_chip_script_reads_kind_and_mention_id():

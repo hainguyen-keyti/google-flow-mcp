@@ -17,6 +17,7 @@ Measured 2026-09-16 (plan character-generation T1, out/character_mentions_202609
 
 from __future__ import annotations
 
+import contextlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,6 +60,21 @@ _CHIPS_JS = """(sel) => [...document.querySelectorAll(sel)].map(c => ({
   entity: c.getAttribute('data-entity-id') || '',
   text: (c.textContent || '').trim(),
 }))"""
+
+_CARET_END_JS = """(sel) => {
+  const box = document.querySelector(sel);
+  if (!box) return false;
+  box.focus();
+  const range = document.createRange();
+  range.selectNodeContents(box);
+  range.collapse(false);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return document.activeElement === box || box.contains(document.activeElement);
+}"""
+
+_BOX_TEXT_JS = "(sel) => ((document.querySelector(sel) || {}).innerText || '').trim()"
 
 
 def _norm(text: str | None) -> str:
@@ -399,17 +415,22 @@ async def generate(
         model,
     )
 
+    attached: list[dict[str, str]] = []
+
     async def setup(active: FlowSession) -> dict[str, Any]:
         page = active.page
         await apply_settings(page, model, aspect, references)
         duration = await pin_duration(page)
         await page.locator(BOX).first.click(timeout=8_000)
-        attached = [await attach(page, reference) for reference in references]
+        attached[:] = [await attach(page, reference) for reference in references]
         on_page = await chips_on(page)
         if len(on_page) != len(references):
             raise LookupError(
                 f"the prompt holds {len(on_page)} chips for {len(references)} references; refusing to generate"
             )
+        # The prompt goes in after the chips without a click, which could land on a chip (review F1, 2026-09-16).
+        if not await page.evaluate(_CARET_END_JS, BOX):
+            raise LookupError("could not put the caret at the end of the prompt box; refusing to generate")
         return {
             "model": model,
             "aspect": aspect,
@@ -418,9 +439,32 @@ async def generate(
             "chips": attached,
         }
 
-    found = await agent.set_mode(session, project_id, False)
+    async def verify(active: FlowSession) -> dict[str, Any]:
+        """Read the chips and the prompt again right before the price check, after typing and the confirm pass."""
+        page = active.page
+        on_page = await chips_on(page)
+        text = await page.evaluate(_BOX_TEXT_JS, BOX)
+        wanted = sorted((chip["kind"], chip["id"]) for chip in attached)
+        found = sorted((chip.get("kind", ""), chip.get("id", "")) for chip in on_page)
+        unbound = [
+            chip for chip in on_page if chip.get("kind") == "entity" and chip.get("entity") != chip.get("id")
+        ]
+        if found != wanted or unbound or _norm(prompt) not in _norm(text):
+            raise LookupError(
+                f"right before the click the prompt holds {found} and reads {text[:120]!r}, not {wanted} and the "
+                "whole prompt; refusing to spend"
+            )
+        return {
+            "chips": [
+                {"kind": chip.get("kind", ""), "id": chip.get("id", ""), "text": chip.get("text", "")}
+                for chip in on_page
+            ],
+            "prompt_text": text,
+        }
+
+    was = (await agent.set_mode(session, project_id, False)).get("was")
     try:
-        return await composer._submit(
+        result = await composer._submit(
             session,
             project_id,
             prompt=prompt,
@@ -435,7 +479,18 @@ async def generate(
             dry_run=dry_run,
             watch=SubmitBodyCheck(references),
             strict_output=True,
+            verify=verify,
+            click_box=False,
         )
-    finally:
-        if found.get("was"):
+    except BaseException:
+        # A restore that fails must never replace why the run failed, which may say credits were spent.
+        if was:
+            with contextlib.suppress(Exception):
+                await agent.set_mode(session, project_id, True)
+        raise
+    if was:
+        try:
             await agent.set_mode(session, project_id, True)
+        except Exception as exc:  # noqa: BLE001
+            result["agent_mode_restored"] = f"no: {type(exc).__name__}"
+    return result

@@ -8,8 +8,9 @@ The default run never clicks Start generation (every gen_character call is a dry
 project: it uploads two small generated images and creates one character from an existing character's portrait. Exit
 code is 1 when any row is FAIL or missing.
 
-C1 gen_character dry_run with one character: exactly one chip, the entity with that id, the omni-flash 8 s price 12,
-   and a composer left with no mention and no text.
+C1 gen_character dry_run with one character: exactly one chip, the entity with that id, read again right before the
+   price check, a prompt box holding the whole prompt at that moment, the omni-flash 8 s price 12, and a composer left
+   with no mention and no text.
 C2 dry_run with the character and an uploaded image: the entity chip, then a media chip naming the image's WORKFLOW id
    (a media chip carries the workflow id, not the media id, measured in T1), price 12.
 C3 dry_run with veo-lite: price 10.
@@ -177,11 +178,12 @@ async def run(project: str, rows: list[dict[str, Any]]) -> None:
             error is None
             and (answer or {}).get("dry_run") is True
             and chips(answer) == [("entity", entity)]
+            and PROMPT in ((answer or {}).get("prompt_text") or "")
             and (answer or {}).get("quoted_credits") == PRICES["omni-flash"]
             and left.get("mentions") == 0
             and not (left.get("text") or "").strip(),
-            f"{took:.1f}s chips={chips(answer)} quoted={(answer or {}).get('quoted_credits')} left={left} "
-            f"error={error}",
+            f"{took:.1f}s chips={chips(answer)} prompt_text={(answer or {}).get('prompt_text')!r} "
+            f"quoted={(answer or {}).get('quoted_credits')} left={left} error={error}",
         )
 
         arguments = {**base, "media_ids": [uploaded["media_id"]]}

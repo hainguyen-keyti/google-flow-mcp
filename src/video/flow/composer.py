@@ -13,6 +13,8 @@ Two money guards, both measured the hard way in Plan 1 and T2:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -62,12 +64,31 @@ def pick_output(fresh: list[dict[str, Any]], prompt: str) -> dict[str, Any] | No
     return max(videos, key=lambda r: r.get("created") or 0)
 
 
-def matching_outputs(fresh: list[dict[str, Any]], prompt: str) -> list[dict[str, Any]]:
-    """The new videos carrying the job's prompt; a record Flow prefixes with the chips' names still matches."""
-    needle = prompt.strip()[:40].lower()
-    return [
-        r for r in fresh if r.get("kind") == "video" and needle and needle in (r.get("prompt") or "").lower()
-    ]
+def _flat(text: str | None) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().casefold()
+
+
+def matching_outputs(
+    fresh: list[dict[str, Any]], prompt: str, sent: str | None = None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The new videos whose prompt IS the job's prompt, as typed or as the prompt box read it, and the new videos that
+    only contain its first 40 characters.
+
+    Flow stores a chip's title and the typed text joined by spaces (measured in out/records_now.json), so the box text
+    read right before the click is what a record of a job with chips holds. A record that merely contains the prompt,
+    a short prompt inside another job's or a style line scenes of one ad share, is never taken (review F3, 2026-09-16).
+    """
+    exact = {_flat(prompt), _flat(sent)} - {""}
+    videos = [r for r in fresh if r.get("kind") == "video"]
+    matches = [r for r in videos if _flat(r.get("prompt")) in exact]
+    opening = _flat(prompt)[:40]
+    near = [r for r in videos if opening and opening in _flat(r.get("prompt")) and r not in matches]
+    return matches, near
+
+
+def _job_digest(job_id: str | None) -> str:
+    """A job's files are named from this, never from the job_id an agent chose (review F2, 2026-09-16)."""
+    return hashlib.sha1((job_id or "").encode("utf-8")).hexdigest()[:12]
 
 
 async def _click_option(page: Any, label: str) -> bool:
@@ -230,16 +251,20 @@ _STATE_JS = """() => ({
 })"""
 
 
-async def _type_prompt(page: Any, box: Any, prompt: str, attempts: int = 3) -> bool:
+async def _type_prompt(page: Any, box: Any, prompt: str, attempts: int = 3, *, click: bool = True) -> bool:
     """Type the prompt and prove it is really in the box.
 
     An attached ingredient chip is enough to enable Start generation on its own, so a prompt that never
     landed submits an empty job: a request goes out, nothing is generated and nothing is billed
     (measured 2026-09-13 on tryon2-01, twice).
+
+    click=False types once where the caret already is: a box holding chips is never clicked, since the click can
+    land on a chip, and a second attempt without a click would only type the prompt twice.
     """
     needle = prompt.strip()[:40]
-    for _ in range(attempts):
-        await box.click(timeout=8_000)
+    for _ in range(attempts if click else 1):
+        if click:
+            await box.click(timeout=8_000)
         await page.keyboard.insert_text(prompt)
         await page.wait_for_timeout(2_000)
         if needle.lower() in (await box.inner_text()).lower():
@@ -349,12 +374,17 @@ async def _submit(
     dry_run: bool = False,
     watch: Any = None,
     strict_output: bool = False,
+    verify: Any = None,
+    click_box: bool = True,
 ) -> dict[str, Any]:
     """The one money path: every mode goes through the same price guard, single click and ledger.
 
     dry_run stops once the price is read: no balance read, no ledger row, no click, and the composer is emptied again.
     watch hears every request of the click window and its report lands in the outcome row. strict_output takes only
-    a new video carrying the prompt and never picks between two. Whatever setup returns joins the intent row.
+    a new video whose prompt is the prompt, or the `prompt_text` verify read from the box, and never picks between
+    two. Whatever setup returns joins the intent row, and whatever verify returns, read right before the price check,
+    replaces it. click_box=False types the prompt where the caret already is. A refusal before the click empties the composer again; anything that goes wrong
+    after the click still writes an outcome row and says credits may be spent.
     """
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
     before: set[str] = set()
@@ -370,28 +400,36 @@ async def _submit(
     await session.goto(session.project_url(project_id), ready=PROJECT_READY)
     await session.page.wait_for_timeout(2_500)
     left_over = await clear_prompt(session)
-    settings = await configure(session, mode=mode, aspect=aspect, label="pre")
-    extra = await setup(session) or {}
-    box = session.page.locator("flow-prompt-box [contenteditable='true']").first
-    landed = await _type_prompt(session.page, box, prompt)
-    if not landed:
-        raise RuntimeError(
-            f"{job_id}: the prompt never reached the composer box, refusing to submit an empty job"
-        )
+    try:
+        settings = await configure(session, mode=mode, aspect=aspect, label="pre")
+        extra = await setup(session) or {}
+        box = session.page.locator("flow-prompt-box [contenteditable='true']").first
+        landed = await _type_prompt(session.page, box, prompt, click=click_box)
+        if not landed:
+            raise RuntimeError(
+                f"{job_id}: the prompt never reached the composer box, refusing to submit an empty job"
+            )
+        confirm = await configure(session, mode=mode, aspect=aspect, label="confirm")
+        checked = await verify(session) if verify is not None else {}
+        if dry_run:
+            await clear_prompt(session)
+            return {
+                "dry_run": True,
+                "kind": kind,
+                "quoted_credits": confirm["price"],
+                "expected_credits": expected_credits,
+                "price_ok": confirm["price"] == expected_credits,
+                "composer_left": await session.page.evaluate(_LEFT_JS),
+                **extra,
+                **checked,
+            }
+        ensure_price(confirm["price"], expected_credits)
+    except Exception:
+        # Nothing was clicked: leave the shared composer as empty as this run found it (review F4, 2026-09-16).
+        with contextlib.suppress(Exception):
+            await clear_prompt(session)
+        raise
 
-    confirm = await configure(session, mode=mode, aspect=aspect, label="confirm")
-    if dry_run:
-        await clear_prompt(session)
-        return {
-            "dry_run": True,
-            "kind": kind,
-            "quoted_credits": confirm["price"],
-            "expected_credits": expected_credits,
-            "price_ok": confirm["price"] == expected_credits,
-            "composer_left": await session.page.evaluate(_LEFT_JS),
-            **extra,
-        }
-    ensure_price(confirm["price"], expected_credits)
     start = session.page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
     ledger.append(
         job_id,
@@ -403,45 +441,80 @@ async def _submit(
         credits_before=credits_before,
         left_over=left_over,
         prompt_landed=landed,
-        **extra,
+        **{**extra, **checked},
     )
-    if watch is not None:
-        session.page.on("request", watch.on_request)
+    digest = _job_digest(job_id)
+    frames: dict[str, list[Any]] = {}
+    output, candidates, near = None, [], []
     try:
-        frames = await clips._await_submit(session, lambda: start.click(timeout=8_000))
-    finally:
         if watch is not None:
-            session.page.remove_listener("request", watch.on_request)
-    notice = await _notice(session.page)
-    # Flow can take the click, fire the rpcids, create nothing and charge nothing; the only way to see
-    # why is to look at the screen while the refusal is still on it (measured 2026-09-13 on tryon2-04).
-    await session.page.screenshot(path=str(out_dir / f"{job_id}_submitted.png"))
+            session.page.on("request", watch.on_request)
+        try:
+            frames = await clips._await_submit(session, lambda: start.click(timeout=8_000))
+        finally:
+            if watch is not None:
+                session.page.remove_listener("request", watch.on_request)
+        notice = await _notice(session.page)
+        # Flow can take the click, fire the rpcids, create nothing and charge nothing; the only way to see
+        # why is to look at the screen while the refusal is still on it (measured 2026-09-13 on tryon2-04).
+        with contextlib.suppress(Exception):
+            await session.page.screenshot(path=str(out_dir / f"submitted_{digest}.png"))
 
-    output, fresh, candidates = None, [], []
-    deadline = asyncio.get_running_loop().time() + wait
-    while True:
-        rows, _ = await snapshot(session, project_id)
-        fresh = clips.new_records(before, rows)
-        if strict_output:
-            candidates = matching_outputs(fresh, prompt)
-            output = candidates[0] if len(candidates) == 1 else None
-            if len(candidates) > 1:
+        deadline = asyncio.get_running_loop().time() + wait
+        while True:
+            rows, _ = await snapshot(session, project_id)
+            fresh = clips.new_records(before, rows)
+            if strict_output:
+                candidates, near = matching_outputs(fresh, prompt, checked.get("prompt_text"))
+                output = candidates[0] if len(candidates) == 1 else None
+                if len(candidates) > 1:
+                    break
+            else:
+                output = pick_output(fresh, prompt)
+            if output is not None and clips.is_done(output):
                 break
-        else:
-            output = pick_output(fresh, prompt)
-        if output is not None and clips.is_done(output):
-            break
-        if asyncio.get_running_loop().time() >= deadline:
-            break
-        await asyncio.sleep(15)
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(15)
 
-    credits_after = (await reader.credits(session))["balance"]
-    path = None
-    if output is not None and clips.is_done(output):
-        path = str(await fetch_720(session, output, out_dir / job_id))
-    ambiguous = strict_output and len(candidates) > 1
-    checked = {"body_check": watch.report()} if watch is not None else {}
-    status = "done" if path else "unknown" if ambiguous else "failed"
+        credits_after = (await reader.credits(session))["balance"]
+        path, fetch_error = None, None
+        if output is not None and clips.is_done(output):
+            try:
+                path = str(await fetch_720(session, output, out_dir / f"{output['id']}_{digest[:8]}"))
+            except Exception as exc:  # noqa: BLE001
+                fetch_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+    except Exception as exc:
+        credits_now = None
+        with contextlib.suppress(Exception):
+            credits_now = (await reader.credits(session))["balance"]
+        detail = f"{type(exc).__name__}: {str(exc).split('Call log:')[0].strip()[:200]}"
+        ledger.append(
+            job_id,
+            "unknown",
+            error=detail,
+            credits_before=credits_before,
+            credits_after=credits_now,
+            spent=None if credits_now is None else credits_before - credits_now,
+            rpcids=sorted(frames),
+        )
+        raise RuntimeError(
+            f"{job_id}: Start generation was clicked, then {detail}; credits may already be spent, so check "
+            "flow_media and flow_credits and never run this job again under a new job_id"
+        ) from exc
+
+    spent = credits_before - credits_after
+    unclaimed = candidates if len(candidates) > 1 else near
+    ambiguous = strict_output and output is None and bool(unclaimed)
+    watched = {"body_check": watch.report()} if watch is not None else {}
+    if path:
+        status = "done"
+    elif output is not None:
+        status = "pending"
+    elif ambiguous:
+        status = "unknown"
+    else:
+        status = "failed"
     ledger.append(
         job_id,
         status,
@@ -449,21 +522,27 @@ async def _submit(
         path=path,
         credits_before=credits_before,
         credits_after=credits_after,
-        spent=credits_before - credits_after,
+        spent=spent,
         rpcids=sorted(frames),
         notice=notice or (await _notice(session.page)),
-        **checked,
-        **({"candidates": [c["id"] for c in candidates]} if ambiguous else {}),
+        **watched,
+        **({"error": fetch_error} if fetch_error else {}),
+        **({"candidates": [c["id"] for c in unclaimed]} if ambiguous else {}),
     )
-    if ambiguous:
+    if status == "pending":
+        why = fetch_error or f"still rendering after {wait:.0f}s"
         raise RuntimeError(
-            f"{job_id}: {len(candidates)} new records carry this prompt ({[c['id'] for c in candidates]}), so "
-            f"none is taken as this job's clip; spent {credits_before - credits_after} credits; check flow_media"
+            f"{job_id}: the clip {output['id']} exists but no file came back ({why}); spent {spent} credits; do "
+            "not run this job again: fetch the clip with flow_download once it has finished"
         )
-    if not path:
+    if status == "unknown":
         raise RuntimeError(
-            f"{job_id}: nothing was generated within {wait:.0f}s, spent "
-            f"{credits_before - credits_after} credits; rpcids {sorted(frames)}; "
+            f"{job_id}: {len(unclaimed)} new records could be this job's clip ({[c['id'] for c in unclaimed]}), "
+            f"so none is taken; spent {spent} credits; check flow_media"
+        )
+    if status == "failed":
+        raise RuntimeError(
+            f"{job_id}: nothing was generated within {wait:.0f}s, spent {spent} credits; rpcids {sorted(frames)}; "
             f"settings {settings['applied']}; Flow said: {notice or '(no message captured)'}"
         )
     return {
@@ -474,9 +553,10 @@ async def _submit(
         "quoted_credits": confirm["price"],
         "credits_before": credits_before,
         "credits_after": credits_after,
-        "spent": credits_before - credits_after,
+        "spent": spent,
         **extra,
         **checked,
+        **watched,
     }
 
 
