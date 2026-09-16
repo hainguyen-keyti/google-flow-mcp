@@ -4,6 +4,7 @@ import re
 from urllib.parse import quote_plus
 
 import pytest
+from gflow_cli.api.video import Aspect, Mode, VideoModel
 from gflow_cli.errors import UiSelectorDriftError
 
 from video import gen
@@ -132,8 +133,11 @@ class _Option:
     async def click(self, timeout=None):
         option = self.page.shown()[self.index]
         self.page.clicked.append((option["title"], option["kind"]))
-        if option.get("chip") is not None:
-            self.page.chips.append(dict(option["chip"]))
+        # Measured 2026-09-16: a click commits the ACTIVE option; any other option only becomes the active one.
+        if self.index == self.page.active:
+            self.page.commit(self.index)
+        elif not self.page.active_sticks:
+            self.page.active = self.index
 
 
 class _Options:
@@ -147,34 +151,72 @@ class _Options:
         return _Option(self.page, index)
 
 
-class _MentionPage:
-    """The @ picker as T1 measured it: options only once '@' is typed, no id on them, and a click inserts the chip."""
+class _Confirm:
+    def __init__(self, page, index):
+        self.page = page
+        self.index = index
 
-    def __init__(self, options, *, shows_after_ms=0, chips=()):
+    async def count(self):
+        return self.page.confirms if self.page.shown() else 0
+
+    def nth(self, index):
+        return _Confirm(self.page, index)
+
+    async def is_visible(self):
+        return True
+
+    async def click(self, timeout=None):
+        self.page.clicked.append("Add to prompt")
+        self.page.commit(self.page.active)
+
+
+class _MentionPage:
+    """The @ picker as measured on 2026-09-16: options only once '@' is typed, no id on them; a click commits the
+    active option (the first one to begin with) and only activates any other, which 'Add to prompt' then commits."""
+
+    def __init__(self, options, *, shows_after_ms=0, chips=(), confirms=1, active_sticks=False):
         self.options = options
         self.shows_after_ms = shows_after_ms
         self.chips = [dict(chip) for chip in chips]
+        self.confirms = confirms
+        self.active_sticks = active_sticks
+        self.active = 0
+        self.closed = False
         self.clicked = []
         self.clock = 0
         self.keyboard = _Keyboard()
 
     def shown(self):
-        if "@" not in self.keyboard.typed or self.clock < self.shows_after_ms:
+        if self.closed or "@" not in self.keyboard.typed or self.clock < self.shows_after_ms:
             return []
         return self.options
+
+    def commit(self, index):
+        chip = self.options[index].get("chip")
+        if chip is not None:
+            self.chips.append(dict(chip))
+        self.closed = True
 
     async def wait_for_timeout(self, ms):
         self.clock += ms
 
     def locator(self, selector):
-        assert selector == ingredients.OPTION
-        return _Options(self)
+        if selector == ingredients.OPTION:
+            return _Options(self)
+        if selector == ingredients.CONFIRM:
+            return _Confirm(self, 0)
+        raise AssertionError(f"unexpected locator {selector}")
 
     async def evaluate(self, script, arg=None):
         if script == ingredients._OPTIONS_JS:
             return [
-                {"title": o["title"], "kind": o["kind"], "visible": o.get("visible", True)}
-                for o in self.shown()
+                {
+                    "title": option["title"],
+                    "kind": option["kind"],
+                    "visible": option.get("visible", True),
+                    "active": index == self.active,
+                }
+                for index, option in enumerate(self.shown())
             ]
         if script == ingredients._CHIPS_JS:
             return [dict(chip) for chip in self.chips]
@@ -198,9 +240,45 @@ def test_attach_clicks_the_one_option_of_that_title_and_kind_and_never_presses_e
     )
     chip = asyncio.run(ingredients.attach(page, THU))
     assert chip == {"kind": "entity", "id": ENTITY, "text": "Thu"}
-    assert page.clicked == [("Thu", "Character")]
+    # L2 run 2 (2026-09-16): the character sat second, behind an image named after it, so the click only made it the
+    # active option and 'Add to prompt' committed it.
+    assert page.clicked == [("Thu", "Character"), "Add to prompt"]
     assert page.keyboard.typed == "@Thu"
     assert "Enter" not in page.keyboard.pressed
+
+
+def test_attach_commits_the_active_first_option_with_its_click_alone():
+    page = _MentionPage([_option("Thu", "Character", _chip("entity", ENTITY, ENTITY))])
+    assert asyncio.run(ingredients.attach(page, THU))["id"] == ENTITY
+    assert page.clicked == [("Thu", "Character")]
+
+
+def test_attach_never_presses_add_to_prompt_while_another_option_is_active():
+    page = _MentionPage(
+        [
+            _option("Thu", "Image", _chip("media", "w-namesake", text="Thu")),
+            _option("Thu", "Character", _chip("entity", ENTITY, ENTITY)),
+        ],
+        active_sticks=True,
+    )
+    with pytest.raises(LookupError, match="active"):
+        asyncio.run(ingredients.attach(page, THU))
+    assert "Add to prompt" not in page.clicked
+    assert page.chips == []
+
+
+@pytest.mark.parametrize("confirms", [0, 2])
+def test_attach_refuses_to_guess_between_add_to_prompt_buttons(confirms):
+    page = _MentionPage(
+        [
+            _option("Thu", "Image", _chip("media", "w-namesake", text="Thu")),
+            _option("Thu", "Character", _chip("entity", ENTITY, ENTITY)),
+        ],
+        confirms=confirms,
+    )
+    with pytest.raises(LookupError, match=f"{confirms} visible 'Add to prompt' buttons"):
+        asyncio.run(ingredients.attach(page, THU))
+    assert page.chips == []
 
 
 def test_attach_refuses_when_no_option_is_that_title_and_kind_and_erases_its_query():
@@ -261,7 +339,7 @@ def test_attach_judges_only_the_chip_its_own_click_added():
 
 def test_attach_refuses_a_click_that_adds_no_chip():
     page = _MentionPage([_option("Thu", "Character", None)])
-    with pytest.raises(LookupError, match="refusing"):
+    with pytest.raises(LookupError, match="added no chip and closed the picker; refusing"):
         asyncio.run(ingredients.attach(page, THU))
 
 
@@ -332,6 +410,27 @@ def _drift(detail):
 
 
 EMPTY_PANE = "migrated host: the settings pane opened but rendered no option groups ([role='radiogroup'])"
+
+
+def test_apply_settings_asks_for_ingredients_by_its_characters_and_leaves_the_length_to_pin_duration(
+    monkeypatch,
+):
+    # Measured 2026-09-16 (L2 run 2): with an r2v request gflow pins 8 s itself, and for veo-lite it counted the Omni
+    # 8s radio just before switching the model removed that row, then raised. A t2v request carrying the characters
+    # still selects Ingredients (migrated_composer.py:947) and leaves the length to pin_duration.
+    seen = []
+
+    class Recording:
+        async def apply_video_settings(self, page, request):
+            seen.append(request)
+
+    monkeypatch.setattr(ingredients.mc, "MigratedComposer", Recording)
+    asyncio.run(ingredients.apply_settings(object(), "veo-lite", "16:9", [THU, IMAGE]))
+    request = seen[0]
+    assert request.mode is Mode.T2V
+    assert request.reference_entities == (ENTITY,) and request.reference_entity_names == ("Thu",)
+    assert request.duration is None
+    assert request.model is VideoModel.VEO_3_1_LITE and request.aspect is Aspect.LANDSCAPE
 
 
 def test_apply_settings_opens_the_pane_a_second_time_when_the_first_open_showed_no_option_groups(monkeypatch):

@@ -38,9 +38,11 @@ LABELS = {"entity": "Character", "media": "Image"}
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 BOX = "flow-prompt-box [contenteditable='true']"
 OPTION = "button.asset-item[role=option]"
+CONFIRM = "button.detail-add-to-prompt-btn"
 CHIP = "flow-prompt-box .mention-chip"
 RADIO = ".cdk-overlay-pane [role=radio]"
 OPTION_WAIT_MS = 12_000
+COMMIT_WAIT_MS = 2_500
 CHIP_WAIT_MS = 5_000
 RADIO_WAIT_MS = 10_000
 
@@ -48,6 +50,7 @@ _OPTIONS_JS = """(sel) => [...document.querySelectorAll(sel)].map(o => ({
   title: ((o.querySelector('.asset-title') || {}).textContent || '').trim(),
   kind: ((o.querySelector('.type-subtitle') || {}).textContent || '').trim(),
   visible: !!(o.offsetWidth || o.offsetHeight),
+  active: o.classList.contains('asset-item-active'),
 }))"""
 
 _CHIPS_JS = """(sel) => [...document.querySelectorAll(sel)].map(c => ({
@@ -161,11 +164,33 @@ async def _options(page: Any) -> list[dict[str, Any]]:
     return await page.evaluate(_OPTIONS_JS, OPTION)
 
 
+def _is(option: dict[str, Any], reference: Reference) -> bool:
+    return (
+        bool(option.get("visible"))
+        and _norm(option.get("title")) == _norm(reference.title)
+        and _norm(option.get("kind")) == _norm(LABELS[reference.kind])
+    )
+
+
+async def _chips_after(page: Any, before: list[dict[str, str]], wait_ms: int) -> list[dict[str, str]]:
+    after = await chips_on(page)
+    waited = 0
+    while len(after) <= len(before) and waited < wait_ms:
+        await page.wait_for_timeout(500)
+        waited += 500
+        after = await chips_on(page)
+    return after
+
+
 async def attach(page: Any, reference: Reference) -> dict[str, str]:
     """Mention one reference by clicking its one option, then prove the chip that landed is that reference.
 
     Never Enter: with no picker open, Enter in the prompt box may send the prompt (gflow types prompts with
     insert_text for that reason), and a submit here would spend with no ledger row.
+
+    Measured 2026-09-16 (L2 run 2 and a $0 diagnosis): a click commits only the ACTIVE option, which is the first one
+    until something else is chosen; any other option just becomes active, and the picker's 'Add to prompt' commits
+    it. So when a click adds no chip, 'Add to prompt' is pressed only once the wanted option is the active one.
     """
     label = LABELS[reference.kind]
     before = await chips_on(page)
@@ -174,13 +199,7 @@ async def attach(page: Any, reference: Reference) -> dict[str, str]:
     await page.wait_for_timeout(2_200)
     await page.keyboard.type(query, delay=100)
     options = await _options(page)
-    matches = [
-        index
-        for index, option in enumerate(options)
-        if option.get("visible")
-        and _norm(option.get("title")) == _norm(reference.title)
-        and _norm(option.get("kind")) == _norm(label)
-    ]
+    matches = [index for index, option in enumerate(options) if _is(option, reference)]
     if len(matches) != 1:
         for _ in range(len(query) + 1):
             await page.keyboard.press("Backspace")
@@ -191,12 +210,29 @@ async def attach(page: Any, reference: Reference) -> dict[str, str]:
         )
     await page.locator(OPTION).nth(matches[0]).click(timeout=8_000)
 
-    after = await chips_on(page)
-    waited = 0
-    while len(after) <= len(before) and waited < CHIP_WAIT_MS:
-        await page.wait_for_timeout(500)
-        waited += 500
-        after = await chips_on(page)
+    after = await _chips_after(page, before, COMMIT_WAIT_MS)
+    if len(after) <= len(before):
+        now = [option for option in await page.evaluate(_OPTIONS_JS, OPTION) if option.get("visible")]
+        if not now:
+            raise LookupError(
+                f"clicking the {label.lower()} {reference.title!r} added no chip and closed the picker; "
+                "refusing to generate with the wrong reference"
+            )
+        active = [option for option in now if option.get("active")]
+        if len(active) != 1 or not _is(active[0], reference):
+            shown = [f"{o.get('title')} ({o.get('kind')})" for o in active]
+            raise LookupError(
+                f"clicking the {label.lower()} {reference.title!r} left {shown} active; refusing to commit another "
+                "option"
+            )
+        confirm = page.locator(CONFIRM)
+        visible = [index for index in range(await confirm.count()) if await confirm.nth(index).is_visible()]
+        if len(visible) != 1:
+            raise LookupError(
+                f"{len(visible)} visible 'Add to prompt' buttons while {reference.title!r} is active; not guessing"
+            )
+        await confirm.nth(visible[0]).click(timeout=8_000)
+        after = await _chips_after(page, before, CHIP_WAIT_MS)
     added = list(after)
     for chip in before:
         if chip in added:
@@ -222,11 +258,15 @@ async def apply_settings(page: Any, model: str, aspect: str, references: list[Re
     closed, yet gflow's first open of it showed no option groups while a second open worked, the toggle the
     composer's `_open_settings` already retries once. Opening the pane spends nothing, so that one failure gets one
     more open.
+
+    The request is t2v carrying the characters, not r2v: gflow still selects Ingredients for a request with
+    characters (migrated_composer.py:947), while its r2v duration pin raised on veo-lite in L2 run 2, having counted
+    the Omni 8s radio just before the model switch removed that row. pin_duration sets the length instead.
     """
     entities = [reference for reference in references if reference.kind == "entity"]
     request = GenerateVideoRequest(
         prompt="character references",
-        mode=Mode.R2V,
+        mode=Mode.T2V,
         aspect=ASPECTS[aspect],
         model=VideoModel.from_cli(model),
         reference_entities=tuple(reference.id for reference in entities),
