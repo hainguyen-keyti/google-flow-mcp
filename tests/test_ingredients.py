@@ -1647,6 +1647,77 @@ def test_flow_replies_cancel_a_read_still_pending_at_their_bound(monkeypatch):
     assert flow["heard"] == ["jwpduf"] and cancelled == [True]
 
 
+SIGNED_URL = "https://flow-content.google/video/p?Expires=1789608354&KeyName=labs-flow-prod-cdn-key&Signature=MOP4fXq9Tz"
+
+
+class _EscapedReply(_FlowReply):
+    """A reply whose inner JSON string escapes '=' and '&' the way Google's batchexecute bodies often do."""
+
+    def __init__(self, rpcid, payload):
+        super().__init__(rpcid, payload)
+        self.body = self.body.replace("=", "\\u003d").replace("&", "\\u0026")
+
+
+def test_flow_replies_keep_no_signed_query_an_escaped_reply_naming_the_job_carries(monkeypatch, tmp_path):
+    # Re-review H1 (2026-09-17): the excerpt was cut from the raw body, where = hid the query from the redaction.
+    log = []
+    naming = _EscapedReply("Kp2Wfd", [[JOB_MEDIA, "poster", SIGNED_URL]])
+    _install(
+        monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY, naming]}
+    )
+    with pytest.raises(RuntimeError, match="nothing was generated"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    excerpt = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]["named_by"]["Kp2Wfd"]
+    ledger_text = (tmp_path / "ledger.jsonl").read_text(encoding="utf-8")
+    assert JOB_MEDIA in excerpt and "MOP4fXq9Tz" not in ledger_text
+
+
+@pytest.mark.parametrize("before", ["z" * 50, ""], ids=["cut at the excerpt edge", "beside the job id"])
+def test_flow_replies_turn_a_long_token_near_the_job_id_into_a_placeholder(before):
+    token = "B" * 300
+    naming = _FlowReply("Kp2Wfd", [["https://lh3.googleusercontent.com/" + token, before, JOB_MEDIA]])
+    excerpt = _judged([SUBMIT_REPLY, naming])["named_by"]["Kp2Wfd"]
+    assert "B" * 40 not in excerpt and "<token>" in excerpt
+
+
+def test_flow_replies_credit_this_job_only_with_the_code_paired_with_its_own_id():
+    # Re-review H2 (2026-09-17): a reply pairing codes with two workflows credited both to this job.
+    notice = _FlowReply(
+        "Xq9Tzb",
+        [["PUBLIC_ERROR_UNSAFE_FACE", OTHER_WORKFLOW], ["PUBLIC_ERROR_UNSAFE_CONTENT", JOB_WORKFLOW]],
+    )
+    flow = _judged([SUBMIT_REPLY, notice])
+    assert (flow["reasons"], flow["reasons_elsewhere"]) == (
+        ["PUBLIC_ERROR_UNSAFE_CONTENT"],
+        ["PUBLIC_ERROR_UNSAFE_FACE"],
+    )
+
+
+def test_flow_replies_call_any_last_status_outside_the_measured_ones_unmeasured():
+    # Re-review H3 (2026-09-17): statuses 6, 4, 5 read "last reported status 5 ... after unmeasured status 4".
+    said = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(4), _status_reply(5)]))
+    assert said.startswith(
+        f"Flow last reported unmeasured status 5 for workflow {JOB_WORKFLOW} after unmeasured status 4"
+    )
+
+
+@pytest.mark.parametrize(
+    ("reply", "field", "expected"),
+    [
+        (
+            _FlowReply("Zzl0ze", [["x" * 30_000, ["PUBLIC_ERROR_UNSAFE_FACE", JOB_WORKFLOW]]]),
+            "reasons",
+            ["PUBLIC_ERROR_UNSAFE_FACE"],
+        ),
+        (_FlowReply("jwpduf", [None, 1, [_flow_record(2, extra=["y" * 30_000])]]), "statuses", [6, 2]),
+    ],
+    ids=["a large reply carrying a code", "a large status reply"],
+)
+def test_flow_replies_keep_a_large_reply_that_matters(reply, field, expected):
+    assert len(reply.body) > composer.SMALL_REPLY
+    assert _judged([SUBMIT_REPLY, reply])[field] == expected
+
+
 def test_submit_a_screenshot_that_fails_after_the_click_changes_nothing(monkeypatch, tmp_path):
     log = []
     _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", PROMPT)])

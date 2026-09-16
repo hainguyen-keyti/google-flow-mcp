@@ -96,7 +96,10 @@ SMALL_REPLY = 20_000
 MEASURED_STATUSES = (STATUS_DONE, STATUS_RUNNING, STATUS_SUBMITTED)
 _REASON_RE = re.compile(r"PUBLIC_ERROR_[A-Z0-9_]+")
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+_ANY_UUID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 _LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{120,}")
+# The same signed-query rule as gflow's data/redaction.py, applied to a whole text rather than its first 500 characters.
+_SIGNED_RE = re.compile(r"\S*(?:signature=|x-goog-signature=|x-goog-credential=|expires=)\S*", re.IGNORECASE)
 
 
 def _records_in(node: Any) -> list[list[Any]]:
@@ -119,8 +122,34 @@ def _status_of(record: list[Any]) -> int | None:
     return cell[0] if cell and isinstance(cell[0], int) else None
 
 
+def _redacted(text: str) -> str:
+    return _SIGNED_RE.sub("<redacted:url>", _LONG_TOKEN_RE.sub("<token>", text))
+
+
 def _head(text: str) -> str:
-    return redact_error_detail(_LONG_TOKEN_RE.sub("<token>", text))
+    return redact_error_detail(_redacted(text))
+
+
+def _decoded(text: str) -> str:
+    """A reply as its decoded frames, so an escape like \\u003d cannot hide a signed query from the redaction."""
+    frames = parse_frames(text)
+    return " ".join(json.dumps(payload) for _, payload in frames) if frames else text
+
+
+def _job_codes(node: Any, job: set[str], known: set[str], mine: bool = False) -> set[str]:
+    """PUBLIC_ERROR codes in the parts of a reply about the job: a list or string whose ids include the job's and no id
+    beyond the job's workflow, media and project; a part with no id belongs to the nearest one that has ids."""
+    if isinstance(node, str):
+        ids = set(_ANY_UUID_RE.findall(node))
+        if ids:
+            mine = bool(ids & job) and ids <= known
+        return set(_REASON_RE.findall(node)) if mine else set()
+    if not isinstance(node, list):
+        return set()
+    ids = {item for item in node if isinstance(item, str) and _UUID_RE.match(item)}
+    if ids:
+        mine = bool(ids & job) and ids <= known
+    return {code for child in node for code in _job_codes(child, job, known, mine)}
 
 
 def _about_the_job(rpcids: str) -> bool:
@@ -181,6 +210,8 @@ class FlowReplies:
         ]
         submitted = next((record for rpcid, record in replies if rpcid in mc.SUBMIT_RPCS), None)
         workflow, media = (submitted[0], submitted[2]) if submitted else (None, None)
+        job = {ident for ident in (workflow, media) if ident}
+        known = {*job, *((submitted[1],) if submitted else ())}
         statuses: list[int | None] = []
         unmeasured = None
         reasons: set[str] = set()
@@ -196,15 +227,18 @@ class FlowReplies:
                 unmeasured = {"rpcid": rpcid, "status": status, "head": _head(dumped)}
         named_by: dict[str, str] = {}
         for rpcids, text in bodies:
-            hits = [text.find(ident) for ident in (workflow, media) if ident]
-            first = min((hit for hit in hits if hit >= 0), default=-1)
-            if first < 0:
+            if not any(ident in text for ident in job):
                 continue
-            workflows = {record[0] for _, payload in parse_frames(text) for record in _records_in(payload)}
-            if not workflows - {workflow}:
-                reasons.update(_REASON_RE.findall(text))
+            decoded = _decoded(text)
+            if set(_ANY_UUID_RE.findall(decoded)) <= known:
+                reasons.update(_REASON_RE.findall(decoded))
+            else:
+                for _, payload in parse_frames(text):
+                    reasons.update(_job_codes(payload, job, known))
             if not _about_the_job(rpcids):
-                named_by.setdefault(rpcids, _head(text[max(0, first - 150) : first + 350]))
+                safe = _redacted(decoded)
+                first = min((at for at in (safe.find(ident) for ident in job) if at >= 0), default=0)
+                named_by.setdefault(rpcids, redact_error_detail(safe[max(0, first - 150) : first + 350]))
         heard = {code for _, text in bodies for code in _REASON_RE.findall(text)}
         return {
             "workflow_id": workflow,
@@ -227,7 +261,7 @@ def _flow_said(flow: dict[str, Any]) -> str:
     elif flow.get("statuses"):
         last = flow["statuses"][-1]
         odd = (flow.get("unmeasured") or {}).get("status")
-        prefix = "unmeasured " if last == odd else ""
+        prefix = "unmeasured " if last is not None and last not in MEASURED_STATUSES else ""
         said = f"Flow last reported {prefix}status {last} for workflow {workflow}"
         if odd is not None and odd != last:
             said += f" after unmeasured status {odd}"
