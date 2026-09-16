@@ -16,6 +16,12 @@ B2 and B4 measure the film instead of reading the page: the page's own 'Total du
 behind the timeline on 2026-09-16, while the downloaded file never was. Both compare against the SOURCE clip, which
 this script downloads once for free: a check of the shape "the second film is twice the first" is scale free, so a
 driver that puts every clip on twice, or adds the wrong clip every time, would pass it (review 2026-09-16).
+
+What this gate does NOT cover, so nobody reads more into a green run than it earned:
+- It compares LENGTHS, so it catches a double add and an add that did nothing, but not an add of the wrong clip
+  unless that clip has a different length. On the draft project it cannot catch that at all: the project holds a
+  single video, so `videos[0]` is the only thing there is to add.
+- `out/scene_build_<stamp>/` is left behind on purpose, films included; nothing here prunes it.
 """
 
 from __future__ import annotations

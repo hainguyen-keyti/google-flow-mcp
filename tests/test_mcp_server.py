@@ -1,4 +1,5 @@
 import asyncio
+import importlib.util
 import json
 import re
 import threading
@@ -1469,6 +1470,31 @@ def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():
     assert "omni-flash" in text
 
 
+def _smoke_module():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "acceptance" / "mcp_smoke.py"
+    spec = importlib.util.spec_from_file_location("mcp_smoke", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_no_tool_that_says_it_can_spend_is_classified_as_free_by_the_smoke():
+    # The smoke's buckets are one claim about money and the descriptions are another; they must not disagree. Found
+    # by the scoped review 2026-09-16: clip_download sat under "free for Flow" while its own description says the 4k
+    # rendition may spend. Harmless while neither bucket is called, dangerous the day someone trusts the bucket name.
+    smoke = _smoke_module()
+    free = {*smoke.READ_ONLY_NO_ARGS, *smoke.READ_ONLY_PER_PROJECT, *smoke.MUTATING, *smoke.DOWNLOADING}
+    tools = mcp_server.server._tool_manager._tools
+    says_it_spends = {
+        name
+        for name, tool in tools.items()
+        if any(
+            phrase in (tool.description or "").lower() for phrase in ("spends credits", "may spend credits")
+        )
+    }
+    assert sorted(says_it_spends & free) == []
+
+
 @pytest.mark.parametrize("bad", ["elsewhere", "out/../elsewhere", "out/x/LEDGER.JSONL"])
 def test_a_scene_download_out_dir_outside_the_out_folder_is_refused_before_a_browser_opens(
     monkeypatch, tmp_path, bad
@@ -1524,6 +1550,7 @@ def test_a_scene_download_retries_once_when_the_film_never_lands(monkeypatch, tm
     result = with_client(fn)
     assert not result.is_error, _texts([result])[0]
     assert len(sessions) == 2
+    assert json.loads(_texts([result])[0])["attempts"] == 2
 
 
 def test_a_scene_download_does_not_retry_another_kind_of_failure(monkeypatch, tmp_path):

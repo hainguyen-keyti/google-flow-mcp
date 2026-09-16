@@ -223,9 +223,11 @@ class Backend:
         flaky = ("has been closed", 'waiting for event "download"')
         for attempt in range(2):
             try:
-                return await self._with(
+                film = await self._with(
                     lambda s: scenes_mod.download(s, project_id, scene_id, out_dir=target)
                 )
+                # Reported, so a retry is not invisible to the agent reading the result (review 2026-09-16).
+                return {**film, "attempts": attempt + 1}
             except Exception as exc:
                 if attempt or not any(mark in str(exc) for mark in flaky):
                     raise
@@ -617,7 +619,8 @@ async def scene_add_clip(project_id: str, scene_id: str, media_id: str) -> str:
         "Download a scene as ONE film, the whole timeline rather than a single clip: two 8 s clips came back as "
         "one 16.0 s mp4 (measured 2026-09-16). A scene with nothing on its timeline is refused, and out_dir must "
         "sit inside out/. A scene offers no quality choice, so use clip_download for a single media and its "
-        "270p, 720p, 1080p or 4k renditions. Free."
+        "270p, 720p, 1080p or 4k renditions. The result carries attempts: 2 means the first try died as the film "
+        "landed and it was fetched again in a fresh session. Free."
     ),
 )
 async def scene_download(project_id: str, scene_id: str, out_dir: str | None = None) -> str:

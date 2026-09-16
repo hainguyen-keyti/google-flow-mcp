@@ -59,7 +59,12 @@ MUTATING = (
 )
 
 # Free for Flow but they write a file on this machine, so they are not called here either.
-DOWNLOADING = ("flow_download", "clip_download", "scene_download")
+DOWNLOADING = ("flow_download", "scene_download")
+
+# clip_download at 1080p was measured free, but its 4k rendition is a Flow upscale whose price has never been
+# measured, and its own description says so. Filing it with the plainly free ones was a claim the tool contradicts
+# (review 2026-09-16); a test in tests/test_mcp_server.py keeps the two from drifting apart again.
+MAYBE_SPENDING = ("clip_download",)
 
 # Real money. Never called here, and the roster row insists they stay declared rather than quietly vanish.
 SPENDING = ("gen_t2v", "gen_i2v", "gen_r2v", "clip_extend", "clip_edit", "agent_send")
@@ -67,7 +72,14 @@ SPENDING = ("gen_t2v", "gen_i2v", "gen_r2v", "clip_extend", "clip_edit", "agent_
 # One source for the roster contract: a tool that exists must be classified above, and a name declared above must
 # still be served. The count used to be typed here as well, so adding three tools left this gate red while the unit
 # test was green (review of plan scene-timeline-tools, 2026-09-16).
-CLASSIFIED = (*READ_ONLY_NO_ARGS, *READ_ONLY_PER_PROJECT, *MUTATING, *DOWNLOADING, *SPENDING)
+CLASSIFIED = (
+    *READ_ONLY_NO_ARGS,
+    *READ_ONLY_PER_PROJECT,
+    *MUTATING,
+    *DOWNLOADING,
+    *MAYBE_SPENDING,
+    *SPENDING,
+)
 
 
 def payload_of(result):
