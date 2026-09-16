@@ -1493,6 +1493,50 @@ def test_a_scene_download_out_dir_outside_the_out_folder_is_refused_before_a_bro
     assert reached == []
 
 
+def test_a_scene_download_retries_once_when_the_browser_dies_as_the_film_lands(monkeypatch, tmp_path):
+    # Measured three times on 2026-09-16: the page can be gone by the time save_as runs. The download changes nothing,
+    # so a second session is safe; a different failure must still come straight out.
+    sessions = []
+
+    async def fake_with(self, fn):
+        sessions.append(len(sessions))
+        if len(sessions) == 1:
+            raise RuntimeError("Download.save_as: Target page, context or browser has been closed")
+        return await fn(object())
+
+    async def fake_download(session, project_id, scene_id, *, out_dir):
+        return {"scene_id": scene_id, "path": str(out_dir / "film.mp4")}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.scenes_mod, "download", fake_download)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        return await s.call_tool("scene_download", {"project_id": "P", "scene_id": "S"})
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])[0]
+    assert len(sessions) == 2
+
+
+def test_a_scene_download_does_not_retry_another_kind_of_failure(monkeypatch, tmp_path):
+    sessions = []
+
+    async def fake_with(self, fn):
+        sessions.append(len(sessions))
+        raise LookupError("there is no clip on this scene's timeline to download")
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        return await s.call_tool("scene_download", {"project_id": "P", "scene_id": "S"})
+
+    result = with_client(fn)
+    assert result.is_error and "no clip" in _texts([result])[0]
+    assert len(sessions) == 1
+
+
 def test_a_scene_download_folder_inside_out_reaches_the_driver(monkeypatch, tmp_path):
     seen = {}
 

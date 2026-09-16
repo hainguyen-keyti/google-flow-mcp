@@ -216,7 +216,18 @@ class Backend:
         self, project_id: str, scene_id: str, out_dir: str | None = None
     ) -> dict[str, Any]:
         target = self._editor_out_dir(out_dir)
-        return await self._with(lambda s: scenes_mod.download(s, project_id, scene_id, out_dir=target))
+        # Measured three times on 2026-09-16: the browser can die just as the film lands, and save_as then fails on a
+        # page that is already gone. Downloading a scene changes nothing in Flow and spends nothing, so one retry in a
+        # fresh session is safe; any other failure is passed straight through.
+        for attempt in range(2):
+            try:
+                return await self._with(
+                    lambda s: scenes_mod.download(s, project_id, scene_id, out_dir=target)
+                )
+            except Exception as exc:
+                if attempt or "has been closed" not in str(exc):
+                    raise
+        raise AssertionError("unreachable")
 
     async def scene_rename(self, project_id: str, scene_id: str, title: str) -> dict[str, Any]:
         return await self._with(lambda s: scenes_mod.rename(s, project_id, scene_id, title))
