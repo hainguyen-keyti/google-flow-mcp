@@ -1587,10 +1587,10 @@ def test_flow_replies_credit_this_job_with_a_code_its_own_reply_carries(reply):
 
 def test_flow_replies_call_an_unmeasured_status_unmeasured_and_speak_of_the_last_one():
     # Re-review G2 (2026-09-17): a status gflow never saw is not proof of a failure when the job keeps running.
-    flow = _judged([SUBMIT_REPLY, _status_reply(4), _status_reply(2)])
+    flow = _judged([SUBMIT_REPLY, _status_reply(7), _status_reply(2)])
     said = composer._flow_said(flow)
-    assert flow["statuses"] == [6, 4, 2] and flow["unmeasured"]["status"] == 4
-    assert "last reported status 2" in said and "unmeasured status 4" in said and "failed" not in said
+    assert flow["statuses"] == [6, 7, 2] and flow["unmeasured"]["status"] == 7
+    assert "last reported status 2" in said and "unmeasured status 7" in said and "failed" not in said
     last_odd = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(5)]))
     assert last_odd.startswith(f"Flow last reported unmeasured status 5 for workflow {JOB_WORKFLOW}")
 
@@ -1728,11 +1728,75 @@ def test_flow_replies_credit_codes_by_the_ids_beside_them():
 
 
 def test_flow_replies_call_any_last_status_outside_the_measured_ones_unmeasured():
-    # Re-review H3 (2026-09-17): statuses 6, 4, 5 read "last reported status 5 ... after unmeasured status 4".
-    said = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(4), _status_reply(5)]))
+    # Re-review H3 (2026-09-17): statuses 6, 7, 5 read "last reported status 5 ... after unmeasured status 7".
+    said = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(7), _status_reply(5)]))
     assert said.startswith(
-        f"Flow last reported unmeasured status 5 for workflow {JOB_WORKFLOW} after unmeasured status 4"
+        f"Flow last reported unmeasured status 5 for workflow {JOB_WORKFLOW} after unmeasured status 7"
     )
+
+
+def test_flow_replies_call_status_4_a_failure_with_the_reason_it_carried():
+    # Measured 2026-09-17 (plan E, L4): statuses 6, 2, 4 with PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED, 0 credits.
+    filtered = _status_reply(4, extra=[["PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"]])
+    flow = _judged([SUBMIT_REPLY, _status_reply(2), filtered])
+    assert (flow["statuses"], flow["unmeasured"]) == ([6, 2, 4], None)
+    assert composer._flow_said(flow).startswith(
+        f"Flow failed workflow {JOB_WORKFLOW} (status 4) with PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"
+    )
+
+
+def test_flow_replies_never_call_a_statusless_last_record_unmeasured():
+    said = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(2), _status_reply(None)]))
+    assert said.startswith(f"Flow last reported status None for workflow {JOB_WORKFLOW}")
+    assert "unmeasured" not in said
+
+
+CHARACTER = "c6a1d67c-fe9b-486c-bc36-4116288ac8f5"
+
+
+def test_flow_replies_count_the_references_the_jobs_own_record_names_as_the_jobs():
+    # Re-review F1 (2026-09-17): the failed L4 record names its character and image; a code beside them is the job's.
+    notice = _FlowReply(
+        "Xq9Tzb", [[JOB_WORKFLOW, CHARACTER, "PUBLIC_ERROR_UNSAFE_FACE"], ["note", OTHER_WORKFLOW]]
+    )
+    flow = _judged([SUBMIT_REPLY, _status_reply(2, extra=[[[CHARACTER]]]), notice])
+    assert (flow["reasons"], flow["reasons_elsewhere"]) == (["PUBLIC_ERROR_UNSAFE_FACE"], [])
+
+
+def test_flow_replies_redact_a_long_unspaced_reply_in_linear_time():
+    # Re-review F2 (2026-09-17): \S*(...)\S* took 22 s on 40,000 unspaced characters, after a paid click.
+    # Base64-like text: '+' and '/' break the long-token rule, so the signed-query rule sees the whole run.
+    naming = _FlowReply("Kp2Wfd", [[JOB_MEDIA, "ab+/" * 4_750]])
+    assert len(naming.body) <= composer.SMALL_REPLY
+    started = asyncio.run(_timed(lambda: _judged([SUBMIT_REPLY, naming])))
+    assert started < 2.0
+
+
+async def _timed(run):
+    loop = asyncio.get_running_loop()
+    begin = loop.time()
+    await asyncio.to_thread(run)
+    return loop.time() - begin
+
+
+def test_flow_replies_redact_an_escaped_signed_query_in_a_reply_without_frames():
+    # Re-review F3 (2026-09-17): a body with no wrb.fr frame was redacted raw, where = hid the query.
+    body = ')]}\'\n\n[["er", null, "' + JOB_MEDIA + " " + SIGNED_URL.replace("=", "\\u003d") + '"]]'
+    raw = _FlowReply("Kp2Wfd", [])
+    raw.body = body
+    assert composer.parse_frames(body) == []
+    excerpt = _judged([SUBMIT_REPLY, raw])["named_by"]["Kp2Wfd"]
+    assert JOB_MEDIA in excerpt and "MOP4fXq9Tz" not in excerpt
+
+
+def test_flow_replies_read_every_frame_of_a_reply():
+    reply = _FlowReply("Kp2Wfd", [["unrelated"]])
+    second = json.dumps([[JOB_MEDIA, "PUBLIC_ERROR_UNSAFE_FACE"]])
+    frame = f'["wrb.fr", "Kp2Wfd", {json.dumps(second)}, null, null, null, "generic"]'
+    reply.body = reply.body.rstrip("]") + "], " + frame + "]"
+    assert len(composer.parse_frames(reply.body)) == 2
+    flow = _judged([SUBMIT_REPLY, reply])
+    assert flow["reasons"] == ["PUBLIC_ERROR_UNSAFE_FACE"] and JOB_MEDIA in flow["named_by"]["Kp2Wfd"]
 
 
 @pytest.mark.parametrize(

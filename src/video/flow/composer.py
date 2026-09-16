@@ -93,13 +93,16 @@ def _job_digest(job_id: str | None) -> str:
 
 REPLY_READ_S = 10.0
 SMALL_REPLY = 20_000
-MEASURED_STATUSES = (STATUS_DONE, STATUS_RUNNING, STATUS_SUBMITTED)
+# Measured 2026-09-17 (plan E, L4): statuses 6, 2, 4 with PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED, no charge.
+STATUS_FAILED = 4
+MEASURED_STATUSES = (STATUS_DONE, STATUS_RUNNING, STATUS_SUBMITTED, STATUS_FAILED)
 _REASON_RE = re.compile(r"PUBLIC_ERROR_[A-Z0-9_]+")
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 _ANY_UUID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 _LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{120,}")
-# The same signed-query rule as gflow's data/redaction.py, applied to a whole text rather than its first 500 characters.
-_SIGNED_RE = re.compile(r"\S*(?:signature=|x-goog-signature=|x-goog-credential=|expires=)\S*", re.IGNORECASE)
+# gflow's data/redaction.py signed-query rule, tested token by token: its \S*(...)\S* is quadratic on unspaced text.
+_SIGNED_KEY_RE = re.compile(r"signature=|x-goog-signature=|x-goog-credential=|expires=", re.IGNORECASE)
+_WORD_RE = re.compile(r"\S+")
 
 
 def _records_in(node: Any) -> list[list[Any]]:
@@ -123,7 +126,10 @@ def _status_of(record: list[Any]) -> int | None:
 
 
 def _redacted(text: str) -> str:
-    return _SIGNED_RE.sub("<redacted:url>", _LONG_TOKEN_RE.sub("<token>", text))
+    return _WORD_RE.sub(
+        lambda word: "<redacted:url>" if _SIGNED_KEY_RE.search(word.group()) else word.group(),
+        _LONG_TOKEN_RE.sub("<token>", text),
+    )
 
 
 def _head(text: str) -> str:
@@ -133,7 +139,9 @@ def _head(text: str) -> str:
 def _decoded(text: str) -> str:
     """A reply as its decoded frames, so an escape like \\u003d cannot hide a signed query from the redaction."""
     frames = parse_frames(text)
-    return " ".join(json.dumps(payload) for _, payload in frames) if frames else text
+    if frames:
+        return " ".join(json.dumps(payload) for _, payload in frames)
+    return text.replace("\\u003d", "=").replace("\\u0026", "&")
 
 
 def _job_codes(node: Any, job: set[str], known: set[str], mine: bool = False) -> set[str]:
@@ -211,7 +219,9 @@ class FlowReplies:
         submitted = next((record for rpcid, record in replies if rpcid in mc.SUBMIT_RPCS), None)
         workflow, media = (submitted[0], submitted[2]) if submitted else (None, None)
         job = {ident for ident in (workflow, media) if ident}
-        known = {*job, *((submitted[1],) if submitted else ())}
+        # The job's own records name its project and references too (the failed L4 record held its character and image).
+        own = [record for _, record in replies if record[0] == workflow]
+        known = job | {ident for record in own for ident in _ANY_UUID_RE.findall(json.dumps(record))}
         statuses: list[int | None] = []
         unmeasured = None
         reasons: set[str] = set()
@@ -261,8 +271,11 @@ def _flow_said(flow: dict[str, Any]) -> str:
     elif flow.get("statuses"):
         last = flow["statuses"][-1]
         odd = (flow.get("unmeasured") or {}).get("status")
-        prefix = "unmeasured " if last is not None and last not in MEASURED_STATUSES else ""
-        said = f"Flow last reported {prefix}status {last} for workflow {workflow}"
+        if last == STATUS_FAILED:
+            said = f"Flow failed workflow {workflow} (status {last})"
+        else:
+            prefix = "unmeasured " if last is not None and last not in MEASURED_STATUSES else ""
+            said = f"Flow last reported {prefix}status {last} for workflow {workflow}"
         if odd is not None and odd != last:
             said += f" after unmeasured status {odd}"
     else:
