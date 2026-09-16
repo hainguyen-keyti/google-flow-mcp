@@ -584,7 +584,10 @@ async def scene_restore(project_id: str, scene_id: str) -> str:
         "Put one of the project's clips onto a scene's timeline, which is how a scene becomes a film made of "
         "several clips. The picker rows carry no media id, only the media's title, so the media id is resolved "
         "to its title through the listing: a media whose title is blank, and a title more than one row shows, "
-        "are refused rather than guessed. The add is confirmed by the timeline growing. Free."
+        "are refused rather than guessed. The add is confirmed by the timeline growing. The result also carries "
+        "confirmed_after_reload: false means only that a reload in the same session did not show the clip yet, "
+        "which is common, so check with scene_download before adding again, since a retry puts the same clip on "
+        "the timeline twice. Free."
     ),
 )
 async def scene_add_clip(project_id: str, scene_id: str, media_id: str) -> str:

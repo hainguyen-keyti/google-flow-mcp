@@ -6,6 +6,7 @@ under the project's Trash view. The scene editor's own 'Move to trash' button di
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -234,20 +235,25 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
     after = await page.locator(THUMBS).count()
     if after <= before:
         raise RuntimeError(f"add_clip: the timeline still shows {after} thumbnails; nothing was added")
-    # Measured 2026-09-16: reloading right after the add can bring back an empty scene, while the same add survived
-    # once a slower read sat in between. So the add counts only once a freshly loaded page still holds it; this is
-    # CLAUDE.md rule 9 in another dress, leaving the page too early loses what was just done.
+    # Measured 2026-09-16: a reload in the same session often does not show the clip yet, while a later call in a
+    # fresh session downloads the film just fine, so this confirmation is reported, never raised. Raising would tell
+    # an agent the add failed when it worked, and the retry would put the clip on the timeline twice.
     await _open_scene(session, project_id, scene_id)
-    saved_ms = await _wait_until_it_holds_a_clip(
-        page, scene_id, "add_clip: the clip did not stick, the scene came back empty after a reload"
-    )
+    confirmed = False
+    waited = 0
+    while waited <= SAVE_WAIT_MS:
+        if await _holds_a_clip(page):
+            confirmed = True
+            break
+        await page.wait_for_timeout(2_000)
+        waited += 2_000
     return {
         "scene_id": scene_id,
         "media_id": media_id,
         "title": title,
         "clips_before": before,
         "clips_after": after,
-        "saved_after_ms": saved_ms,
+        "confirmed_after_reload": confirmed,
         "rpcids": sorted(frames),
     }
 
@@ -266,7 +272,10 @@ async def download(session: FlowSession, project_id: str, scene_id: str, *, out_
     async with page.expect_download(timeout=600_000) as info:
         await _click_one(page, button, "the Download scene button")
     handed = await info.value
-    target = Path(out_dir) / f"{scene_id}{Path(handed.suggested_filename).suffix or '.mp4'}"
+    # Stamped, because downloading the same scene again after adding a clip is the normal way to work and a name
+    # made of the scene id alone collides with the film taken a minute earlier (CLAUDE.md rule 5: never overwrite).
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    target = Path(out_dir) / f"{scene_id}_{stamp}{Path(handed.suggested_filename).suffix or '.mp4'}"
     if target.exists():
         raise FileExistsError(target)
     Path(out_dir).mkdir(parents=True, exist_ok=True)

@@ -782,6 +782,7 @@ def test_add_clip_adds_the_media_whose_title_is_exactly_the_one_asked_for(monkey
 
     assert page.added == ["Model sailboat on wooden desk"]
     assert result["clips_before"] == 0 and result["clips_after"] == THUMBS_PER_CLIP
+    assert result["confirmed_after_reload"] is True
 
 
 def test_add_clip_goes_through_the_menu_when_the_scene_already_holds_a_clip(monkeypatch):
@@ -877,16 +878,34 @@ def test_add_clip_says_so_when_the_click_landed_but_the_timeline_did_not_grow(mo
         asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
 
 
-def test_add_clip_says_so_when_the_clip_does_not_survive_a_reload(monkeypatch):
-    # Measured 2026-09-16: an add that looked fine in the editor came back as an empty scene after a reload, while the
-    # same add survived when a slower read sat in between. An add nobody can open again is not an add.
+def test_add_clip_reports_a_reload_that_does_not_show_the_clip_yet_instead_of_failing(monkeypatch):
+    # Live run 2026-09-16: add_clip raised "did not stick" after 20 s and the very next call downloaded the 8.0 s
+    # film anyway. Raising tells an agent the add failed when it worked, and the retry puts the clip on twice.
     media = [_media(SCENE, "Model sailboat on wooden desk")]
     _scene_answers(monkeypatch, media)
     page = _ScenePage(["Model sailboat on wooden desk"], saves=False)
 
-    with pytest.raises(LookupError, match="did not stick"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert result["confirmed_after_reload"] is False
+    assert page.added == ["Model sailboat on wooden desk"]
     assert page.elapsed_ms >= scenes.SAVE_WAIT_MS
+
+
+def test_two_downloads_of_one_scene_do_not_collide(monkeypatch, tmp_path):
+    # Downloading a scene again after adding another clip is the normal way to work, so the film carries a stamp.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], clips=2)
+    stamps = iter(["20260916_120000", "20260916_120500"])
+    monkeypatch.setattr(scenes.time, "strftime", lambda fmt: next(stamps))
+    session = _SceneSession(page, media)
+
+    first = asyncio.run(scenes.download(session, PROJECT, "scene-1", out_dir=tmp_path))
+    second = asyncio.run(scenes.download(session, PROJECT, "scene-1", out_dir=tmp_path))
+
+    assert first["path"] != second["path"]
+    assert Path(first["path"]).exists() and Path(second["path"]).exists()
 
 
 def test_download_saves_the_film_under_the_scene_id(monkeypatch, tmp_path):
