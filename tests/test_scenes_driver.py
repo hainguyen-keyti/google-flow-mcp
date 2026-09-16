@@ -664,10 +664,13 @@ class _ScenePage:
         adds=True,
         saves=True,
         title_boxes=1,
+        stray_boxes=0,
         label_lag_ms=0,
     ):
         self.titles = list(titles)
         self.title_boxes = title_boxes
+        # An editable text that is NOT the scene title, which is what the header anchor exists to step around.
+        self.stray_boxes = stray_boxes
         self.menu_items = None
         self.adds = adds
         self.saves = saves
@@ -687,6 +690,7 @@ class _ScenePage:
         self.elapsed_ms = 0
         self.clicked = []
         self.keys = []
+        self.url = ""
         self.typed = None
         self.downloaded = None
         self.added = []
@@ -718,6 +722,8 @@ class _ScenePage:
             return []
         if kind == "title_box":
             return [("", "title")] * self.title_boxes
+        if kind == "any_editable":
+            return [("", "title")] * self.title_boxes + [("", "stray")] * self.stray_boxes
         return []
 
     def click(self, pair, kind):
@@ -725,7 +731,12 @@ class _ScenePage:
             raise AssertionError("clicked nothing")
         aria, text = pair
         self.clicked.append(aria or text)
-        if kind == "toolbar" and "Add clip" in aria:
+        if kind == "toolbar" and "Add media" in aria:
+            self.overlay = "menu"
+        elif kind == "overlay" and "New scene" in text:
+            self.url = f"{FlowSession.project_url(PROJECT)}/scene/made-1"
+            self.overlay = None
+        elif kind == "toolbar" and "Add clip" in aria:
             self.overlay = "menu" if self.clips else "picker"
         elif kind == "overlay" and "Add clip" in text:
             self.overlay = "picker"
@@ -754,8 +765,11 @@ class _ScenePage:
             return _Matches(self, "builder")
         if "overlay" in selector or "dialog" in selector:
             return _Matches(self, "overlay")
-        if "flow-editable-text" in selector:
+        if selector == scenes.TITLE_BOX:
             return _Matches(self, "title_box")
+        if "flow-editable-text" in selector:
+            # A wider selector reaches every editable text on the page, the composer's included.
+            return _Matches(self, "any_editable")
         raise AssertionError(f"unexpected selector {selector!r}")
 
     def get_by_text(self, text, exact=False):
@@ -904,9 +918,9 @@ def test_add_clip_gives_up_when_the_scene_page_never_finishes_building(monkeypat
         asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
 
 
-def test_add_clip_never_clicks_the_paid_item_of_the_add_clip_menu(monkeypatch):
+def test_add_clip_refuses_a_menu_that_offers_only_the_paid_item(monkeypatch):
     # The Add clip menu's second item is Extend (Veo 3.1 - Lite), 10 credits, and a scene that already holds a clip
-    # opens that menu before the picker.
+    # opens that menu before the picker. This pins the route, not the guard: the menu filter never matches Extend.
     media = [_media(SCENE, "Model sailboat on wooden desk")]
     _scene_answers(monkeypatch, media)
     page = _ScenePage(["Model sailboat on wooden desk"], clips=1)
@@ -916,6 +930,80 @@ def test_add_clip_never_clicks_the_paid_item_of_the_add_clip_menu(monkeypatch):
         asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
     assert page.added == []
     assert not any("Extend" in label for label in page.clicked)
+
+
+def test_add_clip_refuses_a_menu_item_whose_paid_name_is_only_in_its_text(monkeypatch):
+    # Scoped re-review 2026-09-16: the text half of the label is the load bearing half here, because overlay items
+    # carry no aria-label, and this is the very menu that holds the 10 credit Extend.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], clips=1)
+    page.menu_items = [("", "add Add clip and extend this shot (Veo 3.1 - Lite)")]
+
+    with pytest.raises(RuntimeError, match="spends credits"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.added == []
+
+
+def test_add_clip_refuses_a_namesake_that_differs_only_by_an_invisible_character(monkeypatch):
+    # Scoped re-review 2026-09-16: without the normalization on both sides, the clash goes unseen and the driver
+    # clicks the row of the OTHER media while still reporting the media_id it was asked for.
+    media = [_media(SCENE, "alpha"), _media(OTHER, "al" + chr(0x200B) + "pha", "image")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["alpha"])
+
+    with pytest.raises(RuntimeError, match="2 media in this project are titled"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.added == []
+
+
+def test_create_types_the_title_into_the_one_editable_box_of_the_header(monkeypatch):
+    # Scoped re-review 2026-09-16: scenes.create had no test at all, so reverting it to `.first` of the old union
+    # selector broke nothing, on a page whose buttons include Start generation.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage([], toolbar=[("Add media", "add"), *TOOLBAR])
+    page.menu_items = [("", "movie_edit New scene")]
+    session = _SceneSession(page, media)
+
+    result = asyncio.run(scenes.create(session, PROJECT, "a name"))
+
+    assert result["scene_id"] == "made-1" and result["title"] == "a name"
+    assert page.typed == "a name" and "Enter" in page.keys
+
+
+def test_create_ignores_an_editable_text_that_is_not_the_scene_title(monkeypatch):
+    # The anchor is the point: the scene page also carries a composer, and a wider selector would count it, then
+    # either refuse or, worse, type the title into it next to a Start generation button.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage([], toolbar=[("Add media", "add"), *TOOLBAR], stray_boxes=1)
+    page.menu_items = [("", "movie_edit New scene")]
+
+    result = asyncio.run(scenes.create(_SceneSession(page, media), PROJECT, "a name"))
+
+    assert result["title"] == "a name" and page.typed == "a name"
+
+
+def test_rename_ignores_an_editable_text_that_is_not_the_scene_title(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media, listing_after=[{"scene_id": "scene-1", "title": "new name"}])
+    page = _ScenePage([], stray_boxes=1)
+
+    result = asyncio.run(scenes.rename(_SceneSession(page, media), PROJECT, "scene-1", "new name"))
+
+    assert result["title"] == "new name" and page.typed == "new name"
+
+
+def test_create_refuses_when_the_page_shows_more_than_one_editable_title(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage([], toolbar=[("Add media", "add"), *TOOLBAR], title_boxes=2)
+    page.menu_items = [("", "movie_edit New scene")]
+
+    with pytest.raises(LookupError, match="2 editable titles"):
+        asyncio.run(scenes.create(_SceneSession(page, media), PROJECT, "a name"))
+    assert page.typed is None
 
 
 def test_add_clip_reports_a_duration_that_never_changed_instead_of_failing(monkeypatch):
