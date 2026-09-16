@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import re
 from pathlib import Path
@@ -664,6 +665,7 @@ class _SubmitPage:
     def __init__(self, log):
         self.log = log
         self.listeners = []
+        self.responders = []
         self.mentions = 0
         self.shots = []
         self.screenshot_error = None
@@ -684,13 +686,24 @@ class _SubmitPage:
             raise self.screenshot_error
 
     def on(self, event, listener):
-        assert event == "request"
+        assert event in ("request", "response")
+        if event == "response":
+            self.responders.append(listener)
+            return
         self.listeners.append(listener)
         self.log.append("listen")
 
     def remove_listener(self, event, listener):
+        if event == "response":
+            self.responders.remove(listener)
+            return
         self.listeners.remove(listener)
         self.log.append("unlisten")
+
+    def answer(self, responses):
+        for response in responses:
+            for responder in list(self.responders):
+                responder(response)
 
     async def evaluate(self, script, arg=None):
         assert script == composer._LEFT_JS
@@ -734,15 +747,19 @@ def _install(
     poll_error=None,
     fetch_error=None,
     balance_reads=(200, 188, 188),
+    replies=None,
 ):
     seen_before = [_video("w-before", "old")] if before is None else before
     listings = iter([seen_before, *([[*seen_before, *fresh]] * 20)])
     balances = iter(balance_reads)
     pre, confirm = prices
+    replies = replies or {}
 
     async def snapshot(session, project_id, attempts=4):
         log.append("snapshot")
         rows = next(listings)
+        if "click" in log:
+            session.page.answer(replies.get("poll", ()))
         if poll_error is not None and "click" in log:
             raise poll_error
         return rows, set()
@@ -774,6 +791,7 @@ def _install(
         for listener in list(session.page.listeners):
             listener("request during the click")
         await click()
+        session.page.answer(replies.get("click", ()))
         return {"MZZa6b": [[]]}
 
     async def notice(page):
@@ -1332,6 +1350,169 @@ def test_submit_a_failure_after_the_click_window_names_the_rpcids_it_heard(
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
     assert last["status"] == "unknown" and last["rpcids"] == rpcids
+
+
+JOB_WORKFLOW = "5b0c9a6e-7a41-4f8e-9d1b-2c3e4f5a6b7c"
+JOB_MEDIA = "8d2e4f60-1b3c-4d5e-8f70-9a1b2c3d4e5f"
+OTHER_WORKFLOW = "0f1e2d3c-4b5a-4968-8776-655443322110"
+FLOW_PROJECT = "118aece2-f6f3-4121-8d11-2b36037d9b36"
+
+
+class _FlowReply:
+    def __init__(self, rpcid, payload, *, error=None):
+        self.url = f"https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute?rpcids={rpcid}&rt=c"
+        self.body = ")]}'\n\n" + json.dumps(
+            [["wrb.fr", rpcid, json.dumps(payload), None, None, None, "generic"]]
+        )
+        self.error = error
+
+    async def text(self):
+        if self.error is not None:
+            raise self.error
+        return self.body
+
+
+def _flow_record(status, *, workflow=JOB_WORKFLOW, extra=()):
+    """A generation record the way gflow's batchexecute.py reads it: DETAILS[8] holds the status."""
+    details = [[1789582830, 0], None, None, None, None, None, None, None, [status], None, None, *extra]
+    return [workflow, FLOW_PROJECT, JOB_MEDIA, "CAE", None, details, None, [[None] * 13]]
+
+
+def _status_reply(status, **record):
+    return _FlowReply("jwpduf", [None, 1, [_flow_record(status, **record)]])
+
+
+SUBMIT_REPLY = _FlowReply("MZZa6b", [None, 1, [[JOB_MEDIA]], [_flow_record(6)]])
+
+
+def test_submit_records_what_flow_replied_about_the_job_it_submitted(monkeypatch, tmp_path):
+    # Measured 2026-09-17 (plan E, L3): Flow rendered the job to 23%, then dropped it with no record, no charge and
+    # nothing left on the page, so its own replies are the only place a reason can show up.
+    log = []
+    replies = {
+        "click": [SUBMIT_REPLY, _status_reply(2)],
+        "poll": [
+            _status_reply(7, workflow=OTHER_WORKFLOW),
+            _status_reply(5, extra=[["PUBLIC_ERROR_UNSAFE_FACE"]]),
+        ],
+    }
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
+    with pytest.raises(RuntimeError, match="nothing was generated") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
+    assert (flow["workflow_id"], flow["media_id"], flow["statuses"]) == (JOB_WORKFLOW, JOB_MEDIA, [6, 2, 5])
+    assert flow["failed"]["status"] == 5 and flow["reasons_heard"] == ["PUBLIC_ERROR_UNSAFE_FACE"]
+    assert "status 5" in str(raised.value) and "PUBLIC_ERROR_UNSAFE_FACE" in str(raised.value)
+
+
+def test_submit_says_what_flow_last_reported_when_no_failure_reply_came(monkeypatch, tmp_path):
+    log = []
+    replies = {"click": [SUBMIT_REPLY, _status_reply(2)]}
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
+    with pytest.raises(RuntimeError, match="nothing was generated") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
+    assert (flow["statuses"], flow["failed"], flow["reasons_heard"]) == ([6, 2], None, [])
+    assert "status 2" in str(raised.value)
+
+
+def test_submit_keeps_what_flow_replied_on_the_unknown_row_after_a_failure(monkeypatch, tmp_path):
+    log = []
+    poll_error = LookupError("rpc Zzl0ze not observed; saw []")
+    _install(monkeypatch, tmp_path, log, poll_error=poll_error, replies={"click": [SUBMIT_REPLY]})
+    with pytest.raises(RuntimeError, match="credits may already be spent"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert last["status"] == "unknown" and last["flow"]["workflow_id"] == JOB_WORKFLOW
+
+
+@pytest.mark.parametrize("poll_error", [None, LookupError("rpc Zzl0ze not observed; saw []")])
+def test_submit_stops_hearing_flow_once_the_outcome_is_written(monkeypatch, tmp_path, poll_error):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", PROMPT)], poll_error=poll_error)
+    session = _SubmitSession(log)
+    with contextlib.suppress(RuntimeError):
+        _submit(session, tmp_path, log, strict_output=True)
+    assert session.page.responders == []
+    assert "flow" in gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+
+
+def test_submit_skips_a_reply_whose_body_cannot_be_read(monkeypatch, tmp_path):
+    log = []
+    broken = _status_reply(5)
+    broken.error = PlaywrightError("Response body is unavailable for redirect responses")
+    _install(
+        monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY, broken]}
+    )
+    with pytest.raises(RuntimeError, match="nothing was generated"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
+    assert (flow["workflow_id"], flow["statuses"], flow["failed"]) == (JOB_WORKFLOW, [6], None)
+
+
+def test_submit_reads_every_record_of_a_status_reply_not_only_the_first(monkeypatch, tmp_path):
+    log = []
+    both = _FlowReply("jwpduf", [None, 1, [_flow_record(2, workflow=OTHER_WORKFLOW), _flow_record(5)]])
+    _install(
+        monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY, both]}
+    )
+    with pytest.raises(RuntimeError, match="status 5"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]["statuses"] == [6, 5]
+
+
+def test_submit_hears_a_failure_reason_that_another_rpc_carries(monkeypatch, tmp_path):
+    log = []
+    notice = _FlowReply("Xq9Tzb", [["PUBLIC_ERROR_UNSAFE_IDENTITY", JOB_WORKFLOW]])
+    _install(
+        monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY, notice]}
+    )
+    with pytest.raises(RuntimeError, match="PUBLIC_ERROR_UNSAFE_IDENTITY"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
+    assert flow["reasons_heard"] == ["PUBLIC_ERROR_UNSAFE_IDENTITY"] and "Xq9Tzb" in flow["heard"]
+
+
+def test_submit_never_waits_past_its_bound_for_a_reply_body(monkeypatch, tmp_path):
+    log = []
+
+    class _Stuck(_FlowReply):
+        async def text(self):
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(composer, "REPLY_READ_S", 0.05)
+    stuck = _Stuck("jwpduf", [])
+    _install(
+        monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY, stuck]}
+    )
+    with pytest.raises(RuntimeError, match="nothing was generated"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]["statuses"] == [6]
+
+
+def test_submit_writes_the_outcome_row_even_when_flows_replies_cannot_be_judged(monkeypatch, tmp_path):
+    log = []
+
+    def broken(self, texts):
+        raise ValueError("a reply shape nobody measured")
+
+    monkeypatch.setattr(composer.FlowReplies, "_judge", broken)
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY]})
+    with pytest.raises(RuntimeError, match="could not be read"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert last["status"] == "failed" and "ValueError" in last["flow"]["error"]
+
+
+def test_submit_keeps_no_signed_url_from_a_failed_reply(monkeypatch, tmp_path):
+    log = []
+    signed = "https://flow-content.google/video/x?Expires=1789608354&KeyName=labs-flow-prod-cdn-key&Signature=MOP4f"
+    replies = {"click": [SUBMIT_REPLY, _status_reply(5, extra=[signed])]}
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
+    with pytest.raises(RuntimeError, match="nothing was generated"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    head = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]["failed"]["head"]
+    assert JOB_WORKFLOW in head and "Signature=" not in head and "Expires=" not in head
 
 
 def test_submit_a_screenshot_that_fails_after_the_click_changes_nothing(monkeypatch, tmp_path):

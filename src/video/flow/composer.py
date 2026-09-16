@@ -15,10 +15,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
+from gflow_cli.api.transports import migrated_composer as mc
+from gflow_cli.api.transports.batchexecute import STATUS_DONE, STATUS_RUNNING, STATUS_SUBMITTED, parse_frames
+from gflow_cli.data.redaction import redact_error_detail
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen
@@ -84,6 +89,124 @@ def matching_outputs(
 def _job_digest(job_id: str | None) -> str:
     """A job's files are named from this, never from the job_id an agent chose (review F2, 2026-09-16)."""
     return hashlib.sha1((job_id or "").encode("utf-8")).hexdigest()[:12]
+
+
+REPLY_READ_S = 30.0
+_REASON_RE = re.compile(r"PUBLIC_ERROR_[A-Z0-9_]+")
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+_LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{120,}")
+
+
+def _records_in(node: Any) -> list[list[Any]]:
+    """Every generation record in a reply, shaped [workflow_id, project_id, media_id, "CAE", ...] (gflow
+    batchexecute.py), where gflow's own parser returns only the first."""
+    if not isinstance(node, list):
+        return []
+    if (
+        len(node) >= 6
+        and node[3] == "CAE"
+        and all(isinstance(node[i], str) and _UUID_RE.match(node[i]) for i in (0, 1, 2))
+    ):
+        return [node]
+    return [record for child in node for record in _records_in(child)]
+
+
+def _status_of(record: list[Any]) -> int | None:
+    details = record[5] if isinstance(record[5], list) else []
+    cell = details[8] if len(details) > 8 and isinstance(details[8], list) and details[8] else None
+    return cell[0] if cell and isinstance(cell[0], int) else None
+
+
+class FlowReplies:
+    """What Flow's own replies said about the submitted job, heard from the click until its outcome row is written.
+
+    The submit reply names the job's workflow and the status replies carry its status (gflow batchexecute.py: 6
+    submitted, 2 running, 3 done; gflow has never captured a failure, so any other status counts as one). Measured
+    2026-09-17 (plan E, L3): Flow rendered a job to 23%, then dropped it with no record, no charge and nothing left on
+    the page, so these replies are the only place a reason can show up.
+    """
+
+    def __init__(self) -> None:
+        self.heard: set[str] = set()
+        self._reads: list[asyncio.Future[str]] = []
+        self._closed = False
+
+    def on_response(self, response: Any) -> None:
+        url = str(getattr(response, "url", "") or "")
+        if self._closed or "batchexecute" not in url:
+            return
+        rpcids = [rpcid for rpcid in parse_qs(urlsplit(url).query).get("rpcids", [""])[0].split(",") if rpcid]
+        self.heard.update(rpcids)
+        wanted = any(rpcid in mc.SUBMIT_RPCS or rpcid in mc.STATUS_RPCS for rpcid in rpcids)
+        self._reads.append(asyncio.ensure_future(self._keep(response, wanted)))
+
+    @staticmethod
+    async def _keep(response: Any, wanted: bool) -> str:
+        try:
+            text = await response.text()
+        except Exception:  # noqa: BLE001
+            return ""
+        return text if wanted or "PUBLIC_ERROR" in text else ""
+
+    async def report(self) -> dict[str, Any]:
+        """Never raises: it runs after a paid click, where an exception would cost the outcome row."""
+        self._closed = True
+        try:
+            texts: list[str] = []
+            if self._reads:
+                done, pending = await asyncio.wait(self._reads, timeout=REPLY_READ_S)
+                for read in pending:
+                    read.cancel()
+                texts = [read.result() for read in self._reads if read in done and not read.cancelled()]
+            return self._judge([text for text in texts if text])
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"{type(exc).__name__}: {str(exc)[:160]}", "heard": sorted(self.heard)}
+
+    def _judge(self, texts: list[str]) -> dict[str, Any]:
+        replies = [
+            (rpcid, record)
+            for text in texts
+            for rpcid, payload in parse_frames(text)
+            for record in _records_in(payload)
+        ]
+        submitted = next((record for rpcid, record in replies if rpcid in mc.SUBMIT_RPCS), None)
+        workflow = submitted[0] if submitted else None
+        statuses: list[int | None] = []
+        failed = None
+        for rpcid, record in replies:
+            if workflow is None or record[0] != workflow:
+                continue
+            status = _status_of(record)
+            if not statuses or statuses[-1] != status:
+                statuses.append(status)
+            if (
+                failed is None
+                and status is not None
+                and status not in (STATUS_DONE, STATUS_RUNNING, STATUS_SUBMITTED)
+            ):
+                head = redact_error_detail(_LONG_TOKEN_RE.sub("<token>", json.dumps(record)))
+                failed = {"rpcid": rpcid, "status": status, "head": head}
+        return {
+            "workflow_id": workflow,
+            "media_id": submitted[2] if submitted else None,
+            "statuses": statuses,
+            "failed": failed,
+            "reasons_heard": sorted({code for text in texts for code in _REASON_RE.findall(text)}),
+            "heard": sorted(self.heard),
+        }
+
+
+def _flow_said(flow: dict[str, Any]) -> str:
+    reasons = f" ({', '.join(flow['reasons_heard'])})" if flow.get("reasons_heard") else ""
+    if flow.get("error"):
+        return f"Flow's replies could not be read ({flow['error']})"
+    if flow.get("failed"):
+        return f"Flow failed workflow {flow['workflow_id']} with status {flow['failed']['status']}{reasons}"
+    if flow.get("statuses"):
+        return f"Flow last reported status {flow['statuses'][-1]} for workflow {flow['workflow_id']}{reasons}"
+    if flow.get("workflow_id"):
+        return f"Flow named workflow {flow['workflow_id']} and sent no status{reasons}"
+    return f"no submit reply from Flow was heard{reasons}"
 
 
 async def _click_option(page: Any, label: str) -> bool:
@@ -442,6 +565,8 @@ async def _submit(
     digest = _job_digest(job_id)
     frames: dict[str, list[Any]] | None = None
     output, fresh, candidates = None, [], []
+    replies = FlowReplies()
+    session.page.on("response", replies.on_response)
     try:
         if watch is not None:
             session.page.on("request", watch.on_request)
@@ -481,10 +606,12 @@ async def _submit(
             except Exception as exc:  # noqa: BLE001
                 fetch_error = f"{type(exc).__name__}: {str(exc)[:160]}"
     except Exception as exc:
+        session.page.remove_listener("response", replies.on_response)
         credits_now = None
         with contextlib.suppress(Exception):
             credits_now = (await reader.credits(session))["balance"]
         detail = f"{type(exc).__name__}: {str(exc).split('Call log:')[0].strip()[:200]}"
+        flow = await replies.report()
         ledger.append(
             job_id,
             "unknown",
@@ -495,12 +622,16 @@ async def _submit(
             # None, not []: an empty list is how this repo reads a click that sent nothing (re-review E, 2026-09-17).
             rpcids=None if frames is None else sorted(frames),
             **({"body_check": watch.report()} if watch is not None else {}),
+            flow=flow,
         )
         # The advice leads: an agent sees at most 500 characters and a job_id can be long (re-review A, 2026-09-17).
         raise RuntimeError(
             "Start generation was clicked, so credits may already be spent: check flow_media and flow_credits and "
-            f"never run this job again under a new job_id; it then failed with {detail}; job {job_id}"
+            f"never run this job again under a new job_id; it then failed with {detail}; {_flow_said(flow)}; "
+            f"job {job_id}"
         ) from exc
+    session.page.remove_listener("response", replies.on_response)
+    flow = await replies.report()
 
     spent = credits_before - credits_after
     videos = [r for r in fresh if r.get("kind") == "video"]
@@ -528,6 +659,7 @@ async def _submit(
         **watched,
         **({"error": fetch_error} if fetch_error else {}),
         **({"candidates": [c["id"] for c in unclaimed]} if status == "unknown" else {}),
+        flow=flow,
     )
     if status == "pending":
         why = fetch_error or f"still rendering after {wait:.0f}s"
@@ -539,17 +671,18 @@ async def _submit(
         raise RuntimeError(
             "check flow_media and never run this job again under a new job_id: "
             f"{len(unclaimed)} new records could be this job's clip ({[c['id'] for c in unclaimed]}), so none is "
-            f"taken; spent {spent} credits; job {job_id}"
+            f"taken; spent {spent} credits; {_flow_said(flow)}; job {job_id}"
         )
     if status == "unknown":
         raise RuntimeError(
             "check flow_media and flow_credits and never run this job again under a new job_id: no new video showed "
-            f"up within {wait:.0f}s, yet the balance moved by {spent} credits; job {job_id}"
+            f"up within {wait:.0f}s, yet the balance moved by {spent} credits; {_flow_said(flow)}; job {job_id}"
         )
     if status == "failed":
         raise RuntimeError(
-            f"nothing was generated within {wait:.0f}s, spent {spent} credits; rpcids {sorted(frames)}; "
-            f"settings {settings['applied']}; Flow said: {notice or '(no message captured)'}; job {job_id}"
+            f"nothing was generated within {wait:.0f}s, spent {spent} credits; {_flow_said(flow)}; rpcids "
+            f"{sorted(frames)}; settings {settings['applied']}; Flow said: {notice or '(no message captured)'}; "
+            f"job {job_id}"
         )
     return {
         "job_id": job_id,
