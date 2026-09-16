@@ -186,9 +186,11 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
         )
     await _open_scene(session, project_id, scene_id)
     before = await page.locator(THUMBS).count()
+    # By accessible name, not by text: measured 2026-09-16, this button's text is only the ligature "add_2" while
+    # "Add clip" lives in its aria-label, so a text match finds nothing at all (live run of scene_build).
     await _click_one(
         page,
-        page.locator("button").filter(has_text=re.compile("Add clip", re.IGNORECASE)),
+        page.get_by_role("button", name=re.compile("Add clip", re.IGNORECASE)),
         "the Add clip button",
     )
     await page.wait_for_timeout(1_500)
@@ -229,7 +231,8 @@ async def download(session: FlowSession, project_id: str, scene_id: str, *, out_
     clips = await page.locator(THUMBS).count()
     if clips == 0:
         raise LookupError(f"scene {scene_id} has no clip on its timeline to download")
-    button = page.locator("button").filter(has_text=re.compile("Download scene", re.IGNORECASE))
+    # Same as Add clip: the label is the aria-label, the text is just the ligature "download".
+    button = page.get_by_role("button", name=re.compile("Download scene", re.IGNORECASE))
     async with page.expect_download(timeout=600_000) as info:
         await _click_one(page, button, "the Download scene button")
     handed = await info.value

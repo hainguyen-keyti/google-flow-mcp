@@ -528,31 +528,34 @@ def test_delete_names_another_scene_whose_trash_flag_changed(monkeypatch):
 # "Add clip add_2" and "Download scene download"; an empty scene answers Add clip with the media picker while a scene
 # that already holds a clip answers with a menu (Add clip, Extend) and the picker is one click further in; a picker row
 # carries NO media id, only the media's title; clicking the row is the add, and the picker closes itself.
+# Each button is (accessible name, text content). Keeping them apart matters: measured 2026-09-16, the timeline's
+# button carries aria-label "Add clip" while its text is only the ligature "add_2", so a text match finds nothing and
+# a name match finds it. An earlier version of this fake merged the two and made a driver that could never work pass.
 TOOLBAR = [
-    "Back button to go to previous page",
-    "Favorite",
-    "Download scene download",
-    "Move to trash",
-    "More options",
-    "Done editing scene",
-    "Toggle aspect ratio",
-    "Mute",
-    "Play",
-    "Full screen",
-    "Disable loop",
-    "Add clip add_2",
-    "Zoom out",
-    "Zoom in",
-    "Settings trigger",
-] + [f"filler {n}" for n in range(12)]
+    ("Back button to go to previous page", "arrow_back"),
+    ("Favorite", "favorite"),
+    ("Download scene", "download"),
+    ("Move to trash", "delete"),
+    ("More options", "more_vert"),
+    ("Done editing scene", "Done"),
+    ("Toggle aspect ratio", "crop_landscape 16:9"),
+    ("Mute", "volume_up"),
+    ("Play", "play_arrow"),
+    ("Full screen", "fullscreen"),
+    ("Disable loop", "repeat"),
+    ("Add clip", "add_2"),
+    ("Zoom out", "zoom_out"),
+    ("Zoom in", "zoom_in"),
+    ("Settings trigger", "settings"),
+] + [(f"filler {n}", f"f{n}") for n in range(12)]
 
 THUMBS_PER_CLIP = 8
 
 
 class _Clickable:
-    def __init__(self, page, label, kind):
+    def __init__(self, page, pair, kind):
         self.page = page
-        self.label = label
+        self.pair = pair
         self.kind = kind
 
     @property
@@ -563,39 +566,41 @@ class _Clickable:
         return 1
 
     async def inner_text(self):
-        return self.label
+        return self.pair[1] if self.pair else None
 
     async def click(self, timeout=None):
-        self.page.click(self.label, self.kind)
+        self.page.click(self.pair, self.kind)
 
 
 class _Matches:
     """A live locator over a list of labels: what it matches is read off the page at every call."""
 
-    def __init__(self, page, kind, needle=None, exact=None):
+    def __init__(self, page, kind, needle=None, exact=None, by="text"):
         self.page = page
         self.kind = kind
         self.needle = needle
         self.exact = exact
+        self.by = by
 
-    def _labels(self):
-        labels = self.page.labels(self.kind)
+    def _pairs(self):
+        pairs = self.page.labels(self.kind)
         if self.exact is not None:
-            return [label for label in labels if self.exact.fits(label)]
+            return [pair for pair in pairs if self.exact.fits(pair[1])]
         if self.needle is None:
-            return labels
-        return [label for label in labels if self.needle.search(label)]
+            return pairs
+        index = 0 if self.by == "aria" else 1
+        return [pair for pair in pairs if self.needle.search(pair[index])]
 
     def filter(self, has_text=None, has=None):
-        return _Matches(self.page, self.kind, has_text or self.needle, has or self.exact)
+        return _Matches(self.page, self.kind, has_text or self.needle, has or self.exact, self.by)
 
     @property
     def first(self):
-        labels = self._labels()
-        return _Clickable(self.page, labels[0] if labels else None, self.kind)
+        pairs = self._pairs()
+        return _Clickable(self.page, pairs[0] if pairs else None, self.kind)
 
     async def count(self):
-        return len(self._labels())
+        return len(self._pairs())
 
 
 class _Keyboard:
@@ -656,30 +661,37 @@ class _ScenePage:
         if kind == "toolbar":
             return self.toolbar if self.elapsed_ms >= self.builds_after else self.toolbar[:7]
         if kind == "overlay":
+            # Overlay items carry no aria-label, only their own text, ligature included.
             if self.overlay == "menu":
-                return ["add Add clip", "keyboard_double_arrow_right Extend (Veo 3.1 - Lite)"]
+                return [("", "add Add clip"), ("", "keyboard_double_arrow_right Extend (Veo 3.1 - Lite)")]
             if self.overlay == "picker":
-                return ["videocam Videos", "upload Upload media", *self.titles, "Add media"]
+                rows = [("", title) for title in self.titles]
+                return [("", "videocam Videos"), ("", "upload Upload media"), *rows, ("", "Add media")]
             return []
         if kind == "title_box":
-            return ["title"]
+            return [("", "title")]
         return []
 
-    def click(self, label, kind):
-        self.clicked.append(label)
-        if label is None:
+    def click(self, pair, kind):
+        if pair is None:
             raise AssertionError("clicked nothing")
-        if kind == "toolbar" and "Add clip" in label:
+        aria, text = pair
+        self.clicked.append(aria or text)
+        if kind == "toolbar" and "Add clip" in aria:
             self.overlay = "menu" if self.timeline else "picker"
-        elif kind == "overlay" and "Add clip" in label:
+        elif kind == "overlay" and "Add clip" in text:
             self.overlay = "picker"
-        elif kind == "overlay" and label in self.titles:
-            self.added.append(label)
+        elif kind == "overlay" and text in self.titles:
+            self.added.append(text)
             if self.adds:
                 self.timeline += THUMBS_PER_CLIP
             self.overlay = None
-        elif kind == "toolbar" and "Download scene" in label:
+        elif kind == "toolbar" and "Download scene" in aria:
             self.downloaded = "pB-probe_20260916.mp4"
+
+    def get_by_role(self, role, name=None):
+        assert role == "button"
+        return _Matches(self, "toolbar", name, by="aria")
 
     def locator(self, selector, has=None):
         if selector == "button":
