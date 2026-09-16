@@ -96,6 +96,26 @@ async def _open(session: FlowSession, project_id: str, media_id: str) -> None:
     await session.page.wait_for_timeout(3_000)
 
 
+CONTROL_WAIT_MS = 15_000
+
+
+async def _control(page: Any, found: Any, what: str) -> Any:
+    """Wait for a control to exist before clicking it.
+
+    Playwright's click waits for its element, but only for its own timeout. Measured 2026-09-16 by the first real
+    clip_extend through MCP: this editor builds its toolbar in stages, the Add clip button arrived later than the
+    8 s the click allows, and the call died there, after the ledger already held the job's intent row. The scene
+    driver carried the same bug and was fixed the same day.
+    """
+    waited = 0
+    while await found.count() == 0:
+        if waited >= CONTROL_WAIT_MS:
+            raise LookupError(f"{what} never appeared on the editor after {waited // 1000}s")
+        await page.wait_for_timeout(1_000)
+        waited += 1_000
+    return found.first
+
+
 async def _menu_item(session: FlowSession, button: str, item: str) -> Any:
     """Open a toolbar menu and return its item, waiting for the overlay to render.
 
@@ -104,7 +124,10 @@ async def _menu_item(session: FlowSession, button: str, item: str) -> Any:
     """
     page = session.page
     for attempt in range(2):
-        await page.get_by_role("button", name=re.compile(button, re.IGNORECASE)).first.click(timeout=8_000)
+        opener = await _control(
+            page, page.get_by_role("button", name=re.compile(button, re.IGNORECASE)), f"the {button} button"
+        )
+        await opener.click(timeout=8_000)
         found = (
             page.locator("[role=menuitem], .cdk-overlay-pane button")
             .filter(has_text=re.compile(item, re.IGNORECASE))

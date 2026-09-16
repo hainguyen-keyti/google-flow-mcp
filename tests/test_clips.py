@@ -103,6 +103,9 @@ class _Clickable:
     first = property(lambda self: self)
     text = "keep going"
 
+    async def count(self):
+        return 1
+
     async def click(self, timeout=None):
         return None
 
@@ -148,6 +151,95 @@ class _Countable(_Clickable):
 
     async def count(self):
         return 1
+
+
+class _LateButton:
+    """Playwright's click waits for its element up to its own timeout, then gives up."""
+
+    first = property(lambda self: self)
+
+    def __init__(self, page):
+        self.page = page
+
+    async def count(self):
+        return 1 if self.page.elapsed_ms >= self.page.appears_after_ms else 0
+
+    async def click(self, timeout=None):
+        deadline = self.page.elapsed_ms + (timeout or 0)
+        if self.page.appears_after_ms > deadline:
+            self.page.elapsed_ms = deadline
+            raise PlaywrightTimeoutError(f"Locator.click: Timeout {timeout}ms exceeded.")
+        self.page.elapsed_ms = max(self.page.elapsed_ms, self.page.appears_after_ms)
+        self.page.clicked.append("toolbar")
+        self.page.overlay = True
+
+
+class _MenuItems:
+    first = property(lambda self: self)
+
+    def __init__(self, page):
+        self.page = page
+
+    def filter(self, has_text=None):
+        return self
+
+    async def wait_for(self, state=None, timeout=None):
+        if not self.page.overlay:
+            raise PlaywrightTimeoutError(f"Locator.wait_for: Timeout {timeout}ms exceeded")
+
+    async def click(self, timeout=None):
+        self.page.clicked.append("item")
+
+
+class _LateToolbarPage:
+    """The clip editor builds its toolbar in stages.
+
+    Measured 2026-09-16 by the first real clip_extend: the driver opened the editor, waited a fixed 3 s and clicked
+    a button that was not there yet, so the call died with `Locator.click: Timeout 8000ms exceeded` before anything
+    could be spent. The scene driver had the same bug and was fixed the same day.
+    """
+
+    keyboard = _Keyboard()
+
+    def __init__(self, appears_after_ms):
+        self.appears_after_ms = appears_after_ms
+        self.elapsed_ms = 0
+        self.clicked = []
+        self.overlay = False
+
+    async def wait_for_timeout(self, ms):
+        self.elapsed_ms += ms
+
+    def get_by_role(self, role, name=None):
+        return _LateButton(self)
+
+    def locator(self, selector):
+        return _MenuItems(self)
+
+
+class _LateSession:
+    def __init__(self, page):
+        self.page = page
+
+
+def test_menu_item_waits_for_a_control_that_arrives_after_the_rest_of_the_toolbar():
+    # The editor's own Add clip button arrives late on a page that already holds a clip, and Playwright's click only
+    # waits its own 8 s. The first real clip_extend died there, before the spend, with the intent row already written.
+    page = _LateToolbarPage(appears_after_ms=12_000)
+
+    item = asyncio.run(clips._menu_item(_LateSession(page), "Add clip", "Extend"))
+
+    assert page.clicked == ["toolbar"]
+    assert page.elapsed_ms >= 12_000
+    assert item is not None
+
+
+def test_menu_item_gives_up_when_the_control_never_arrives():
+    page = _LateToolbarPage(appears_after_ms=10_000_000)
+
+    with pytest.raises(LookupError, match="never appeared"):
+        asyncio.run(clips._menu_item(_LateSession(page), "Add clip", "Extend"))
+    assert page.clicked == []
 
 
 async def _none(*args, **kwargs):
@@ -1382,6 +1474,9 @@ class _MenuPage:
             @property
             def first(self):
                 return self
+
+            async def count(self):
+                return 1
 
             async def click(self, timeout=None):
                 page.clicks.append("toolbar")
