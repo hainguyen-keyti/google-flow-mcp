@@ -1,5 +1,6 @@
 import asyncio
 import re
+from pathlib import Path
 
 import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -521,3 +522,370 @@ def test_delete_names_another_scene_whose_trash_flag_changed(monkeypatch):
 
     with pytest.raises(RuntimeError, match=f"{OTHER} \\('bravo'\\)"):
         asyncio.run(scenes.delete(_Session(["alpha", "bravo"], _GridPage), PROJECT, SCENE))
+
+
+# The scene page, measured 2026-09-16 (plan scene-timeline-tools T1): a built toolbar holds 27 buttons, among them
+# "Add clip add_2" and "Download scene download"; an empty scene answers Add clip with the media picker while a scene
+# that already holds a clip answers with a menu (Add clip, Extend) and the picker is one click further in; a picker row
+# carries NO media id, only the media's title; clicking the row is the add, and the picker closes itself.
+TOOLBAR = [
+    "Back button to go to previous page",
+    "Favorite",
+    "Download scene download",
+    "Move to trash",
+    "More options",
+    "Done editing scene",
+    "Toggle aspect ratio",
+    "Mute",
+    "Play",
+    "Full screen",
+    "Disable loop",
+    "Add clip add_2",
+    "Zoom out",
+    "Zoom in",
+    "Settings trigger",
+] + [f"filler {n}" for n in range(12)]
+
+THUMBS_PER_CLIP = 8
+
+
+class _Clickable:
+    def __init__(self, page, label, kind):
+        self.page = page
+        self.label = label
+        self.kind = kind
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self):
+        return 1
+
+    async def inner_text(self):
+        return self.label
+
+    async def click(self, timeout=None):
+        self.page.click(self.label, self.kind)
+
+
+class _Matches:
+    """A live locator over a list of labels: what it matches is read off the page at every call."""
+
+    def __init__(self, page, kind, needle=None, exact=None):
+        self.page = page
+        self.kind = kind
+        self.needle = needle
+        self.exact = exact
+
+    def _labels(self):
+        labels = self.page.labels(self.kind)
+        if self.exact is not None:
+            return [label for label in labels if self.exact.fits(label)]
+        if self.needle is None:
+            return labels
+        return [label for label in labels if self.needle.search(label)]
+
+    def filter(self, has_text=None, has=None):
+        return _Matches(self.page, self.kind, has_text or self.needle, has or self.exact)
+
+    @property
+    def first(self):
+        labels = self._labels()
+        return _Clickable(self.page, labels[0] if labels else None, self.kind)
+
+    async def count(self):
+        return len(self._labels())
+
+
+class _Keyboard:
+    def __init__(self, page):
+        self.page = page
+
+    async def press(self, key):
+        self.page.keys.append(key)
+
+    async def type(self, text):
+        self.page.typed = text
+
+
+class _Download:
+    def __init__(self, name):
+        self.suggested_filename = name
+
+    async def save_as(self, path):
+        Path(path).write_bytes(b"film")
+
+
+class _Expect:
+    def __init__(self, page):
+        self.page = page
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    @property
+    def value(self):
+        async def get():
+            if not self.page.downloaded:
+                raise PlaywrightTimeoutError("no download started")
+            return _Download(self.page.downloaded)
+
+        return get()
+
+
+class _ScenePage:
+    def __init__(self, titles, *, clips=0, toolbar=None, builds_after=0):
+        self.titles = list(titles)
+        self.timeline = clips * THUMBS_PER_CLIP
+        self.overlay = None
+        self.toolbar = list(TOOLBAR if toolbar is None else toolbar)
+        self.builds_after = builds_after
+        self.elapsed_ms = 0
+        self.clicked = []
+        self.keys = []
+        self.typed = None
+        self.downloaded = None
+        self.added = []
+
+    def labels(self, kind):
+        if kind == "toolbar":
+            return self.toolbar if self.elapsed_ms >= self.builds_after else self.toolbar[:7]
+        if kind == "overlay":
+            if self.overlay == "menu":
+                return ["add Add clip", "keyboard_double_arrow_right Extend (Veo 3.1 - Lite)"]
+            if self.overlay == "picker":
+                return ["videocam Videos", "upload Upload media", *self.titles, "Add media"]
+            return []
+        if kind == "title_box":
+            return ["title"]
+        return []
+
+    def click(self, label, kind):
+        self.clicked.append(label)
+        if label is None:
+            raise AssertionError("clicked nothing")
+        if kind == "toolbar" and "Add clip" in label:
+            self.overlay = "menu" if self.timeline else "picker"
+        elif kind == "overlay" and "Add clip" in label:
+            self.overlay = "picker"
+        elif kind == "overlay" and label in self.titles:
+            self.added.append(label)
+            self.timeline += THUMBS_PER_CLIP
+            self.overlay = None
+        elif kind == "toolbar" and "Download scene" in label:
+            self.downloaded = "pB-probe_20260916.mp4"
+
+    def locator(self, selector, has=None):
+        if selector == "button":
+            return _Matches(self, "toolbar")
+        if "overlay" in selector or "dialog" in selector:
+            return _Matches(self, "overlay")
+        if "flow-scene-timeline" in selector:
+            return _Timeline(self)
+        if "flow-editable-text" in selector:
+            return _Matches(self, "title_box")
+        raise AssertionError(f"unexpected selector {selector!r}")
+
+    def get_by_text(self, text, exact=False):
+        return _Text(text, exact)
+
+    def expect_download(self, timeout=None):
+        return _Expect(self)
+
+    @property
+    def keyboard(self):
+        return _Keyboard(self)
+
+    async def wait_for_timeout(self, ms):
+        self.elapsed_ms += ms
+
+
+class _Timeline:
+    def __init__(self, page):
+        self.page = page
+
+    async def count(self):
+        return self.page.timeline
+
+
+class _SceneSession:
+    def __init__(self, page, listing):
+        self.page = page
+        self.listing = listing
+        self.urls = []
+
+    async def goto(self, url, *, ready=None, timeout_ms=60_000):
+        self.urls.append(url)
+
+    project_url = staticmethod(FlowSession.project_url)
+
+
+def _media(media_id, title, kind="video"):
+    return {"id": media_id, "title": title, "kind": kind}
+
+
+def _scene_answers(monkeypatch, media, listing_after=None):
+    """reader.project for the media titles, capture for the rename, list_scenes for the confirmation."""
+
+    async def fake_project(session, project_id, *args, **kwargs):
+        return {"media": media}
+
+    async def fake_capture(session, action, *, settle):
+        await action()
+        return {"BpMsoe": [[]]}
+
+    async def fake_list(session, project_id, *, include_trashed=False):
+        return listing_after or []
+
+    monkeypatch.setattr(scenes.reader, "project", fake_project, raising=False)
+    monkeypatch.setattr(scenes, "capture", fake_capture)
+    monkeypatch.setattr(scenes, "list_scenes", fake_list)
+
+
+def test_add_clip_adds_the_media_whose_title_is_exactly_the_one_asked_for(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk"), _media(OTHER, "probe_upload.png", "image")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk", "probe_upload.png"])
+
+    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert page.added == ["Model sailboat on wooden desk"]
+    assert result["clips_before"] == 0 and result["clips_after"] == THUMBS_PER_CLIP
+
+
+def test_add_clip_goes_through_the_menu_when_the_scene_already_holds_a_clip(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], clips=1)
+
+    asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert "add Add clip" in page.clicked
+    assert page.added == ["Model sailboat on wooden desk"]
+
+
+def test_add_clip_refuses_when_two_media_share_the_title(monkeypatch):
+    # Measured in the owner's own project: bc89bca9 and de29028c are both titled probe_upload.png.
+    media = [_media(SCENE, "probe_upload.png"), _media(OTHER, "probe_upload.png")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["probe_upload.png", "probe_upload.png"])
+
+    with pytest.raises(RuntimeError, match="2 picker rows"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.added == []
+
+
+def test_add_clip_refuses_when_no_picker_row_carries_that_title(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["something else"])
+
+    with pytest.raises(LookupError, match="not offered by the picker"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.added == []
+
+
+def test_add_clip_refuses_a_media_the_project_does_not_have(monkeypatch):
+    media = [_media(OTHER, "kept")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["kept"])
+
+    with pytest.raises(LookupError, match="is not in the project"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+
+def test_add_clip_refuses_a_media_whose_title_normalizes_to_nothing(monkeypatch):
+    media = [_media(SCENE, BLANK_TITLE)]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage([BLANK_TITLE])
+
+    with pytest.raises(LookupError, match="has no title"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.added == []
+
+
+def test_add_clip_waits_for_the_toolbar_instead_of_judging_a_half_built_page(monkeypatch):
+    # Measured 2026-09-16: a scene page dumped too early showed 7 buttons where a built one shows 27.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], builds_after=3_000)
+
+    asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert page.elapsed_ms >= 3_000
+    assert page.added == ["Model sailboat on wooden desk"]
+
+
+def test_add_clip_gives_up_when_the_scene_page_never_finishes_building(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], builds_after=10_000_000)
+
+    with pytest.raises(LookupError, match="never finished building"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+
+def test_add_clip_never_clicks_a_paid_item(monkeypatch):
+    # The Add clip menu's second item is Extend (Veo 3.1 - Lite), 10 credits.
+    media = [_media(SCENE, "Extend (Veo 3.1 - Lite)")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Extend (Veo 3.1 - Lite)"])
+
+    with pytest.raises(RuntimeError, match="spends credits"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.added == []
+
+
+def test_download_saves_the_film_under_the_scene_id(monkeypatch, tmp_path):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], clips=2)
+
+    result = asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=tmp_path))
+
+    assert Path(result["path"]).exists() and Path(result["path"]).name.startswith("scene-1")
+    assert result["clips"] == 2 * THUMBS_PER_CLIP
+
+
+def test_download_refuses_a_scene_with_nothing_on_the_timeline(monkeypatch, tmp_path):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"])
+
+    with pytest.raises(LookupError, match="no clip"):
+        asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=tmp_path))
+    assert page.downloaded is None
+
+
+def test_rename_types_the_title_and_confirms_it_in_the_listing(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media, listing_after=[{"scene_id": "scene-1", "title": "new name"}])
+    page = _ScenePage([])
+
+    result = asyncio.run(scenes.rename(_SceneSession(page, media), PROJECT, "scene-1", "new name"))
+
+    assert page.typed == "new name" and "Enter" in page.keys
+    assert result == {"scene_id": "scene-1", "title": "new name", "rpcids": ["BpMsoe"]}
+
+
+def test_rename_refuses_a_title_that_normalizes_to_nothing(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage([])
+
+    with pytest.raises(ValueError, match="title"):
+        asyncio.run(scenes.rename(_SceneSession(page, media), PROJECT, "scene-1", BLANK_TITLE))
+    assert page.typed is None
+
+
+def test_rename_fails_when_the_listing_still_shows_the_old_title(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media, listing_after=[{"scene_id": "scene-1", "title": "old"}])
+    page = _ScenePage([])
+
+    with pytest.raises(RuntimeError, match="still reads"):
+        asyncio.run(scenes.rename(_SceneSession(page, media), PROJECT, "scene-1", "new name"))

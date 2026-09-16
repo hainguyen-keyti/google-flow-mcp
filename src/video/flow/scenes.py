@@ -6,17 +6,24 @@ under the project's Trash view. The scene editor's own 'Move to trash' button di
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from video.flow import parsers
+from video.flow import parsers, reader
 from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
 _SCENE_RE = re.compile(r"/scene/([A-Za-z0-9-]+)")
 BUILDER = "flow-scene-builder"
 TILE_WAIT_MS = 15_000
+TOOLBAR_MIN = 20
+TOOLBAR_WAIT_MS = 15_000
+THUMBS = "flow-scene-timeline video, flow-scene-timeline img"
+OVERLAY = ".cdk-overlay-pane button, [role=dialog] button"
+# Add clip's menu offers Extend (Veo 3.1 - Lite), 10 credits, right next to the item this driver wants.
+PAID_WORDS = ("extend", "generate", "upscale")
 # U+200B zero width space and U+00AD soft hyphen, built with chr() so this file carries no escape sequence.
 _ZERO_WIDTH = str.maketrans("", "", chr(0x200B) + chr(0xAD))
 
@@ -105,6 +112,139 @@ async def create(session: FlowSession, project_id: str, title: str | None = None
         result["title"] = title
         result["rename_rpcids"] = sorted(rename_frames)
     return result
+
+
+async def _open_scene(session: FlowSession, project_id: str, scene_id: str) -> None:
+    """Measured 2026-09-16: a scene page builds its toolbar in stages, 2 to 4 s, and a page read too early showed
+    7 of its 27 buttons, so anything matched against it before then is a guess."""
+    page = session.page
+    await session.goto(f"{session.project_url(project_id)}/scene/{scene_id}", ready=BUILDER)
+    waited = 0
+    while (shown := await page.locator("button").count()) < TOOLBAR_MIN:
+        if waited >= TOOLBAR_WAIT_MS:
+            raise LookupError(
+                f"the scene page showed {shown} buttons after {waited // 1000}s; it never finished building"
+            )
+        await page.wait_for_timeout(1_000)
+        waited += 1_000
+
+
+async def _click_one(page: Any, found: Any, what: str) -> str:
+    """Click the single control that matches, and never one that spends: labels sit next to paid actions here."""
+    matching = await found.count()
+    if matching != 1:
+        raise LookupError(f"{matching} controls match {what}; not guessing")
+    label = await found.first.inner_text()
+    if any(word in (label or "").lower() for word in PAID_WORDS):
+        raise RuntimeError(f"refusing to click {label!r} for {what}: that control spends credits")
+    await found.first.click(timeout=8_000)
+    return label
+
+
+async def rename(session: FlowSession, project_id: str, scene_id: str, title: str) -> dict[str, Any]:
+    """Rename a scene through the header's editable text, confirmed by the listing (rpc BpMsoe)."""
+    if not _tile_text(title):
+        raise ValueError(f"a scene title must hold visible text, got {title!r}")
+    page = session.page
+    await _open_scene(session, project_id, scene_id)
+    box = page.locator("flow-editor-header flow-editable-text, flow-editable-text").first
+
+    async def edit() -> None:
+        await box.click(timeout=8_000)
+        await page.keyboard.press("Meta+A")
+        await page.keyboard.type(title)
+        await page.keyboard.press("Enter")
+
+    frames = await capture(session, edit, settle=4.0)
+    after = await list_scenes(session, project_id, include_trashed=True)
+    state = next((s for s in after if s["scene_id"] == scene_id), None)
+    if state is None or state.get("title") != title:
+        raise RuntimeError(
+            f"rename: the listing still reads {(state or {}).get('title')!r} for scene {scene_id}"
+        )
+    return {"scene_id": scene_id, "title": title, "rpcids": sorted(frames)}
+
+
+async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_id: str) -> dict[str, Any]:
+    """Put one of the project's clips on a scene's timeline.
+
+    Measured 2026-09-16: a picker row carries NO media id, only the media's title, and titles do collide in this
+    account, so the media is resolved to its title from the listing and a title more than one row shows is refused
+    instead of guessed. An empty scene answers 'Add clip' with the picker, a scene that already holds a clip answers
+    with a menu first. Clicking the row IS the add: the picker closes itself and no confirm button follows.
+    """
+    page = session.page
+    media = (await reader.project(session, project_id))["media"]
+    item = next((m for m in media if m.get("id") == media_id), None)
+    if item is None:
+        raise LookupError(f"media {media_id} is not in the project listing")
+    title = item.get("title")
+    if not _tile_text(title):
+        raise LookupError(
+            f"media {media_id} has no title to match ({title!r}), and picker rows carry no media id, so adding "
+            "it would guess"
+        )
+    await _open_scene(session, project_id, scene_id)
+    before = await page.locator(THUMBS).count()
+    await _click_one(
+        page,
+        page.locator("button").filter(has_text=re.compile("Add clip", re.IGNORECASE)),
+        "the Add clip button",
+    )
+    await page.wait_for_timeout(1_500)
+    menu = page.locator(OVERLAY).filter(has_text=re.compile("Add clip", re.IGNORECASE))
+    if await menu.count():
+        await _click_one(page, menu, "the Add clip menu item")
+        await page.wait_for_timeout(2_000)
+    rows = page.locator(OVERLAY).filter(has=page.get_by_text(title, exact=True))
+    matching = await rows.count()
+    if matching == 0:
+        raise LookupError(f"media {media_id} titled {title!r} is not offered by the picker")
+    if matching > 1:
+        raise RuntimeError(
+            f"{matching} picker rows show {title!r}; rows carry no media id, so adding would guess"
+        )
+    frames = await capture(session, lambda: _click_one(page, rows, "the picker row"), settle=6.0)
+    after = await page.locator(THUMBS).count()
+    if after <= before:
+        raise RuntimeError(f"add_clip: the timeline still shows {after} thumbnails; nothing was added")
+    return {
+        "scene_id": scene_id,
+        "media_id": media_id,
+        "title": title,
+        "clips_before": before,
+        "clips_after": after,
+        "rpcids": sorted(frames),
+    }
+
+
+async def download(session: FlowSession, project_id: str, scene_id: str, *, out_dir: Path) -> dict[str, Any]:
+    """Hand back the scene as one film.
+
+    Measured 2026-09-16: unlike the clip editor, a scene has no quality menu. 'Download scene' downloads straight
+    away, and the file is the whole assembled timeline (two 8 s clips came back as one 16.0 s mp4).
+    """
+    page = session.page
+    await _open_scene(session, project_id, scene_id)
+    clips = await page.locator(THUMBS).count()
+    if clips == 0:
+        raise LookupError(f"scene {scene_id} has no clip on its timeline to download")
+    button = page.locator("button").filter(has_text=re.compile("Download scene", re.IGNORECASE))
+    async with page.expect_download(timeout=600_000) as info:
+        await _click_one(page, button, "the Download scene button")
+    handed = await info.value
+    target = Path(out_dir) / f"{scene_id}{Path(handed.suggested_filename).suffix or '.mp4'}"
+    if target.exists():
+        raise FileExistsError(target)
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    await handed.save_as(str(target))
+    return {
+        "scene_id": scene_id,
+        "path": str(target),
+        "clips": clips,
+        "suggested": handed.suggested_filename,
+        "bytes": target.stat().st_size,
+    }
 
 
 async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[str, Any]:
