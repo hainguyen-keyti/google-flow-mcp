@@ -1478,6 +1478,9 @@ class _MenuPage:
                 if page.waits <= page.appears_after:
                     raise PlaywrightTimeoutError("not visible")
 
+            async def is_enabled(self):
+                return True
+
         class Chain:
             def filter(self, has_text=None):
                 return self
