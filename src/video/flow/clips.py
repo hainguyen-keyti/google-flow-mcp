@@ -135,6 +135,14 @@ async def _menu_item(session: FlowSession, button: str, item: str) -> Any:
         )
         try:
             await found.wait_for(state="visible", timeout=6_000)
+            # A greyed out item is not a slow one: clicking it only spends 8 s waiting for Playwright to give up, and
+            # the caller reads a bare timeout. Measured 2026-09-16: Flow renders `Extend (Veo 3.1 - Lite)` disabled on
+            # a clip made by omni-flash, and that is what stopped the first two real clip_extend calls.
+            if not await found.is_enabled():
+                raise LookupError(
+                    f"menu {button!r} shows {item!r} greyed out, so Flow does not offer it for this clip; "
+                    "extend is offered on Veo clips, not on every model"
+                )
             return found
         except PlaywrightTimeoutError:
             if attempt == 0:

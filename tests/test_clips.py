@@ -187,7 +187,12 @@ class _MenuItems:
         if not self.page.overlay:
             raise PlaywrightTimeoutError(f"Locator.wait_for: Timeout {timeout}ms exceeded")
 
+    async def is_enabled(self):
+        return self.page.item_enabled
+
     async def click(self, timeout=None):
+        if not self.page.item_enabled:
+            raise PlaywrightTimeoutError(f"Locator.click: Timeout {timeout}ms exceeded.")
         self.page.clicked.append("item")
 
 
@@ -201,11 +206,12 @@ class _LateToolbarPage:
 
     keyboard = _Keyboard()
 
-    def __init__(self, appears_after_ms):
+    def __init__(self, appears_after_ms, item_enabled=True):
         self.appears_after_ms = appears_after_ms
         self.elapsed_ms = 0
         self.clicked = []
         self.overlay = False
+        self.item_enabled = item_enabled
 
     async def wait_for_timeout(self, ms):
         self.elapsed_ms += ms
@@ -232,6 +238,16 @@ def test_menu_item_waits_for_a_control_that_arrives_after_the_rest_of_the_toolba
     assert page.clicked == ["toolbar"]
     assert page.elapsed_ms >= 12_000
     assert item is not None
+
+
+def test_menu_item_says_so_when_flow_greys_the_item_out():
+    # Measured 2026-09-16 on a clip made by omni-flash: `Extend (Veo 3.1 - Lite)` is rendered disabled, and clicking
+    # it produced only `Locator.click: Timeout 8000ms exceeded`, which tells an agent nothing about why.
+    page = _LateToolbarPage(appears_after_ms=0, item_enabled=False)
+
+    with pytest.raises(LookupError, match="greyed out"):
+        asyncio.run(clips._menu_item(_LateSession(page), "Add clip", "Extend"))
+    assert "item" not in page.clicked
 
 
 def test_menu_item_gives_up_when_the_control_never_arrives():
