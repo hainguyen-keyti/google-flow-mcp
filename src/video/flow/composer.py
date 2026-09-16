@@ -91,7 +91,9 @@ def _job_digest(job_id: str | None) -> str:
     return hashlib.sha1((job_id or "").encode("utf-8")).hexdigest()[:12]
 
 
-REPLY_READ_S = 30.0
+REPLY_READ_S = 10.0
+SMALL_REPLY = 20_000
+MEASURED_STATUSES = (STATUS_DONE, STATUS_RUNNING, STATUS_SUBMITTED)
 _REASON_RE = re.compile(r"PUBLIC_ERROR_[A-Z0-9_]+")
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 _LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{120,}")
@@ -117,18 +119,27 @@ def _status_of(record: list[Any]) -> int | None:
     return cell[0] if cell and isinstance(cell[0], int) else None
 
 
+def _head(text: str) -> str:
+    return redact_error_detail(_LONG_TOKEN_RE.sub("<token>", text))
+
+
+def _about_the_job(rpcids: str) -> bool:
+    return any(rpcid in mc.SUBMIT_RPCS or rpcid in mc.STATUS_RPCS for rpcid in rpcids.split(","))
+
+
 class FlowReplies:
     """What Flow's own replies said about the submitted job, heard from the click until its outcome row is written.
 
     The submit reply names the job's workflow and the status replies carry its status (gflow batchexecute.py: 6
-    submitted, 2 running, 3 done; gflow has never captured a failure, so any other status counts as one). Measured
-    2026-09-17 (plan E, L3): Flow rendered a job to 23%, then dropped it with no record, no charge and nothing left on
-    the page, so these replies are the only place a reason can show up.
+    submitted, 2 running, 3 done; gflow has never captured a failure, so any other status is kept as unmeasured).
+    Measured 2026-09-17 (plan E, L3): Flow rendered a job to 23%, then dropped it with no record, no charge and nothing
+    left on the page, so these replies are the only place a reason can show up. A PUBLIC_ERROR code is this job's only
+    inside its own record or in a reply naming it and no other workflow; every other code heard is listed apart.
     """
 
     def __init__(self) -> None:
         self.heard: set[str] = set()
-        self._reads: list[asyncio.Future[str]] = []
+        self._reads: list[asyncio.Future[tuple[str, str]]] = []
 
     def on_response(self, response: Any) -> None:
         url = str(getattr(response, "url", "") or "")
@@ -136,75 +147,99 @@ class FlowReplies:
             return
         rpcids = [rpcid for rpcid in parse_qs(urlsplit(url).query).get("rpcids", [""])[0].split(",") if rpcid]
         self.heard.update(rpcids)
-        wanted = any(rpcid in mc.SUBMIT_RPCS or rpcid in mc.STATUS_RPCS for rpcid in rpcids)
-        self._reads.append(asyncio.ensure_future(self._keep(response, wanted)))
+        self._reads.append(asyncio.ensure_future(self._keep(response, ",".join(rpcids))))
 
     @staticmethod
-    async def _keep(response: Any, wanted: bool) -> str:
+    async def _keep(response: Any, rpcids: str) -> tuple[str, str]:
         try:
             text = await response.text()
         except Exception:  # noqa: BLE001
-            return ""
-        return text if wanted or "PUBLIC_ERROR" in text else ""
+            return rpcids, ""
+        kept = _about_the_job(rpcids) or "PUBLIC_ERROR" in text or len(text) <= SMALL_REPLY
+        return rpcids, text if kept else ""
 
     async def report(self) -> dict[str, Any]:
         """Never raises: it runs after a paid click, where an exception would cost the outcome row."""
         try:
-            texts: list[str] = []
+            bodies: list[tuple[str, str]] = []
             if self._reads:
                 done, pending = await asyncio.wait(self._reads, timeout=REPLY_READ_S)
                 for read in pending:
                     read.cancel()
-                texts = [read.result() for read in self._reads if read in done and not read.cancelled()]
-            return self._judge([text for text in texts if text])
+                bodies = [read.result() for read in self._reads if read in done and not read.cancelled()]
+            return self._judge([(rpcids, text) for rpcids, text in bodies if text])
         except Exception as exc:  # noqa: BLE001
             return {"error": f"{type(exc).__name__}: {str(exc)[:160]}", "heard": sorted(self.heard)}
 
-    def _judge(self, texts: list[str]) -> dict[str, Any]:
+    def _judge(self, bodies: list[tuple[str, str]]) -> dict[str, Any]:
         replies = [
             (rpcid, record)
-            for text in texts
+            for rpcids, text in bodies
+            if _about_the_job(rpcids)
             for rpcid, payload in parse_frames(text)
             for record in _records_in(payload)
         ]
         submitted = next((record for rpcid, record in replies if rpcid in mc.SUBMIT_RPCS), None)
-        workflow = submitted[0] if submitted else None
+        workflow, media = (submitted[0], submitted[2]) if submitted else (None, None)
         statuses: list[int | None] = []
-        failed = None
+        unmeasured = None
+        reasons: set[str] = set()
         for rpcid, record in replies:
-            if workflow is None or record[0] != workflow:
+            if record[0] != workflow:
                 continue
             status = _status_of(record)
             if not statuses or statuses[-1] != status:
                 statuses.append(status)
-            if (
-                failed is None
-                and status is not None
-                and status not in (STATUS_DONE, STATUS_RUNNING, STATUS_SUBMITTED)
-            ):
-                head = redact_error_detail(_LONG_TOKEN_RE.sub("<token>", json.dumps(record)))
-                failed = {"rpcid": rpcid, "status": status, "head": head}
+            dumped = json.dumps(record)
+            reasons.update(_REASON_RE.findall(dumped))
+            if unmeasured is None and status is not None and status not in MEASURED_STATUSES:
+                unmeasured = {"rpcid": rpcid, "status": status, "head": _head(dumped)}
+        named_by: dict[str, str] = {}
+        for rpcids, text in bodies:
+            hits = [text.find(ident) for ident in (workflow, media) if ident]
+            first = min((hit for hit in hits if hit >= 0), default=-1)
+            if first < 0:
+                continue
+            workflows = {record[0] for _, payload in parse_frames(text) for record in _records_in(payload)}
+            if not workflows - {workflow}:
+                reasons.update(_REASON_RE.findall(text))
+            if not _about_the_job(rpcids):
+                named_by.setdefault(rpcids, _head(text[max(0, first - 150) : first + 350]))
+        heard = {code for _, text in bodies for code in _REASON_RE.findall(text)}
         return {
             "workflow_id": workflow,
-            "media_id": submitted[2] if submitted else None,
+            "media_id": media,
             "statuses": statuses,
-            "failed": failed,
-            "reasons_heard": sorted({code for text in texts for code in _REASON_RE.findall(text)}),
+            "unmeasured": unmeasured,
+            "reasons": sorted(reasons),
+            "reasons_elsewhere": sorted(heard - reasons),
+            "named_by": named_by,
             "heard": sorted(self.heard),
         }
 
 
 def _flow_said(flow: dict[str, Any]) -> str:
-    reasons = f" ({', '.join(flow['reasons_heard'])})" if flow.get("reasons_heard") else ""
     if flow.get("error"):
         return f"Flow's replies could not be read ({flow['error']})"
-    if flow.get("failed"):
-        return f"Flow failed workflow {flow['workflow_id']} with status {flow['failed']['status']}{reasons}"
-    if flow.get("statuses"):
-        return f"Flow last reported status {flow['statuses'][-1]} for workflow {flow['workflow_id']}{reasons}"
-    if flow.get("workflow_id"):
-        return f"Flow named workflow {flow['workflow_id']} and sent no status{reasons}"
-    return f"no submit reply from Flow was heard{reasons}"
+    workflow = flow.get("workflow_id")
+    if not workflow:
+        said = "no submit reply from Flow was heard"
+    elif flow.get("statuses"):
+        last = flow["statuses"][-1]
+        odd = (flow.get("unmeasured") or {}).get("status")
+        prefix = "unmeasured " if last == odd else ""
+        said = f"Flow last reported {prefix}status {last} for workflow {workflow}"
+        if odd is not None and odd != last:
+            said += f" after unmeasured status {odd}"
+    else:
+        said = f"Flow named workflow {workflow} and sent no status"
+    if flow.get("reasons"):
+        said += f" with {', '.join(flow['reasons'])}"
+    if flow.get("named_by"):
+        said += f"; other replies naming it: {', '.join(sorted(flow['named_by']))}"
+    if flow.get("reasons_elsewhere"):
+        said += f"; codes heard in other replies: {', '.join(flow['reasons_elsewhere'])}"
+    return said
 
 
 async def _click_option(page: Any, label: str) -> bool:

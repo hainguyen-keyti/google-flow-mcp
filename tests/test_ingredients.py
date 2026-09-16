@@ -1409,7 +1409,7 @@ def test_submit_records_what_flow_replied_about_the_job_it_submitted(monkeypatch
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
     assert (flow["workflow_id"], flow["media_id"], flow["statuses"]) == (JOB_WORKFLOW, JOB_MEDIA, [6, 2, 5])
-    assert flow["failed"]["status"] == 5 and flow["reasons_heard"] == ["PUBLIC_ERROR_UNSAFE_FACE"]
+    assert flow["unmeasured"]["status"] == 5 and flow["reasons"] == ["PUBLIC_ERROR_UNSAFE_FACE"]
     assert "status 5" in str(raised.value) and "PUBLIC_ERROR_UNSAFE_FACE" in str(raised.value)
 
 
@@ -1420,7 +1420,7 @@ def test_submit_says_what_flow_last_reported_when_no_failure_reply_came(monkeypa
     with pytest.raises(RuntimeError, match="nothing was generated") as raised:
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
-    assert (flow["statuses"], flow["failed"], flow["reasons_heard"]) == ([6, None, 2], None, [])
+    assert (flow["statuses"], flow["unmeasured"], flow["reasons"]) == ([6, None, 2], None, [])
     assert "status 2" in str(raised.value)
 
 
@@ -1457,7 +1457,7 @@ def test_submit_skips_a_reply_whose_body_cannot_be_read(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="nothing was generated"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
-    assert (flow["workflow_id"], flow["statuses"], flow["failed"]) == (JOB_WORKFLOW, [6], None)
+    assert (flow["workflow_id"], flow["statuses"], flow["unmeasured"]) == (JOB_WORKFLOW, [6], None)
 
 
 def test_submit_reads_every_record_of_a_status_reply_not_only_the_first(monkeypatch, tmp_path):
@@ -1480,7 +1480,7 @@ def test_submit_hears_a_failure_reason_that_another_rpc_carries(monkeypatch, tmp
     with pytest.raises(RuntimeError, match="PUBLIC_ERROR_UNSAFE_IDENTITY"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
-    assert flow["reasons_heard"] == ["PUBLIC_ERROR_UNSAFE_IDENTITY"] and "Xq9Tzb" in flow["heard"]
+    assert flow["reasons"] == ["PUBLIC_ERROR_UNSAFE_IDENTITY"] and "Xq9Tzb" in flow["named_by"]
 
 
 def test_submit_never_waits_past_its_bound_for_a_reply_body(monkeypatch, tmp_path):
@@ -1521,8 +1521,112 @@ def test_submit_keeps_no_signed_url_from_a_failed_reply(monkeypatch, tmp_path):
     _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
     with pytest.raises(RuntimeError, match="nothing was generated"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
-    head = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]["failed"]["head"]
+    head = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]["unmeasured"]["head"]
     assert JOB_WORKFLOW in head and "Signature=" not in head and "Expires=" not in head
+
+
+def _judged(responses):
+    """Feed replies straight to a FlowReplies and return its report."""
+
+    async def run():
+        replies = composer.FlowReplies()
+        for response in responses:
+            replies.on_response(response)
+        return await replies.report()
+
+    return asyncio.run(run())
+
+
+def test_flow_replies_never_credit_this_job_with_a_code_another_workflow_carried():
+    # Re-review G1 (2026-09-17): every code heard was spoken next to this job's workflow.
+    flow = _judged(
+        [
+            SUBMIT_REPLY,
+            _status_reply(2, workflow=OTHER_WORKFLOW, extra=[["PUBLIC_ERROR_UNSAFE_FACE"]]),
+            _status_reply(2),
+            _FlowReply("Zzl0ze", [["listing", "PUBLIC_ERROR_UNSAFE_CONTENT"]]),
+        ]
+    )
+    assert (flow["reasons"], flow["reasons_elsewhere"]) == (
+        [],
+        ["PUBLIC_ERROR_UNSAFE_CONTENT", "PUBLIC_ERROR_UNSAFE_FACE"],
+    )
+    said = composer._flow_said(flow)
+    assert said.startswith(f"Flow last reported status 2 for workflow {JOB_WORKFLOW};")
+    assert "codes heard in other replies" in said
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        _FlowReply("jwpduf", [None, 1, [_flow_record(5)], [["PUBLIC_ERROR_UNSAFE_FACE"]]]),
+        _status_reply(5, extra=["x" * 600, ["PUBLIC_ERROR_UNSAFE_FACE"]]),
+    ],
+    ids=["beside its record in a reply about it alone", "past the 500 characters the head keeps"],
+)
+def test_flow_replies_credit_this_job_with_a_code_its_own_reply_carries(reply):
+    flow = _judged([SUBMIT_REPLY, reply])
+    assert (flow["reasons"], flow["reasons_elsewhere"]) == (["PUBLIC_ERROR_UNSAFE_FACE"], [])
+
+
+def test_flow_replies_call_an_unmeasured_status_unmeasured_and_speak_of_the_last_one():
+    # Re-review G2 (2026-09-17): a status gflow never saw is not proof of a failure when the job keeps running.
+    flow = _judged([SUBMIT_REPLY, _status_reply(4), _status_reply(2)])
+    said = composer._flow_said(flow)
+    assert flow["statuses"] == [6, 4, 2] and flow["unmeasured"]["status"] == 4
+    assert "last reported status 2" in said and "unmeasured status 4" in said and "failed" not in said
+
+
+def test_flow_replies_name_a_small_reply_of_another_rpc_that_names_the_job():
+    notice = _FlowReply("Kp2Wfd", [[JOB_MEDIA, "generation stopped"]])
+    flow = _judged([SUBMIT_REPLY, notice, _FlowReply("Zzl0ze", [["x" * 30_000, JOB_MEDIA]])])
+    assert list(flow["named_by"]) == ["Kp2Wfd"] and JOB_MEDIA in flow["named_by"]["Kp2Wfd"]
+
+
+def test_flow_replies_never_read_a_body_that_is_not_batchexecute():
+    class _Media:
+        url = "https://lh3.googleusercontent.com/abc=m22"
+        read = False
+
+        async def text(self):
+            _Media.read = True
+            return "x"
+
+    flow = _judged([_Media()])
+    assert _Media.read is False and flow["heard"] == []
+
+
+def test_flow_replies_count_a_record_without_its_media_info():
+    # gflow batchexecute.py locates a record by [uuid, uuid, uuid, "CAE", _, DETAILS]; a running job has no media yet.
+    short = _flow_record(2)[:6]
+    assert composer._records_in([None, 1, [short]]) == [short]
+
+
+def test_flow_replies_turn_a_long_token_into_a_placeholder_in_a_head():
+    token = "A" * 130
+    flow = _judged([SUBMIT_REPLY, _status_reply(5, extra=[f"https://lh3.googleusercontent.com/{token}"])])
+    head = flow["unmeasured"]["head"]
+    assert token not in head and "<token>" in head
+
+
+def test_flow_replies_cancel_a_read_still_pending_at_their_bound(monkeypatch):
+    monkeypatch.setattr(composer, "REPLY_READ_S", 0.05)
+
+    class _Stuck:
+        url = "https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=jwpduf&rt=c"
+
+        async def text(self):
+            await asyncio.Event().wait()
+
+    async def run():
+        replies = composer.FlowReplies()
+        replies.on_response(_Stuck())
+        flow = await replies.report()
+        await asyncio.sleep(0)
+        return flow, [read.cancelled() for read in replies._reads]
+
+    flow, cancelled = asyncio.run(run())
+    assert flow["heard"] == ["jwpduf"] and cancelled == [True]
 
 
 def test_submit_a_screenshot_that_fails_after_the_click_changes_nothing(monkeypatch, tmp_path):
