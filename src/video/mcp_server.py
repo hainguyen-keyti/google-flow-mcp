@@ -540,7 +540,9 @@ async def scene_create(project_id: str, title: str | None = None) -> str:
     name="scene_delete",
     description=(
         "Move a scene to the project's trash; scene_restore brings it back. Grid tiles carry no scene id, so the tile "
-        "is found by the scene's exact title: a scene with no title, or a title two scenes share, is refused. Free."
+        "is found by the scene's exact title, once the grid shows one tile per active scene (waited for, up to 15 s). "
+        "A title that is blank or only invisible characters, a title two scenes share, and a grid that never shows "
+        "that many tiles are all refused rather than guessed. Free."
     ),
 )
 async def scene_delete(project_id: str, scene_id: str) -> str:
@@ -553,8 +555,9 @@ async def scene_delete(project_id: str, scene_id: str) -> str:
     name="scene_restore",
     description=(
         "Bring a trashed scene back from the project's trash (undoes scene_delete), confirmed by the listing. "
-        "The trash shows no ids, so the tile is found by the scene's exact title: a scene with no title, or a title "
-        "more than one trashed scene shares, is refused. Free."
+        "The trash shows no ids, so the tile is found by the scene's exact title, once the trash shows one tile per "
+        "trashed scene (waited for, up to 15 s). A title that is blank or only invisible characters, a title more "
+        "than one trashed scene shares, and a trash that never shows that many tiles are all refused. Free."
     ),
 )
 async def scene_restore(project_id: str, scene_id: str) -> str:

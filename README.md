@@ -162,9 +162,13 @@ mặt, tay và món đồ.
   `ledger.jsonl` dưới `out/`, kèm lời dặn soát `flow_media` và `flow_credits`, nên gọi lại không bao giờ trả tiền hai
   lần. `job_id` đang chạy ở một lời gọi khác cũng bị từ chối, với lời dặn khác hẳn: chờ lời gọi đó xong rồi gọi lại
   với CÙNG `job_id`, không bao giờ đổi id mới (lúc job còn đang bay, `flow_media` và `flow_credits` chưa thấy gì).
-  `clip_extend` và `clip_edit` chỉ nhận `out_dir` là thư mục nằm trong `out/` (không phải file, không phải đường dẫn
-  sổ `ledger.jsonl`). Prompt hay message toàn dấu cách bị từ chối; `clip_edit`, `clip_extend`, `agent_send` từ chối
-  prompt có ký tự xuống dòng, vì ô của Flow nhận nó như phím Enter trước khi sổ kịp ghi dòng `submitted`.
+  `job_id` mang chữ giống bí mật phiên (tên cookie hay header `Authorization`) bị từ chối trước mọi thứ, vì sổ sẽ lưu nó
+  thành một id khác và không bao giờ tìm lại được; `Ledger.append` cũng từ chối id như vậy ở mọi đường ghi sổ (CLI,
+  story, driver), và mỗi chuỗi trong dòng sổ được lọc riêng nên dòng luôn là JSON đọc được. `clip_extend` và
+  `clip_edit` chỉ nhận `out_dir` là thư mục nằm trong `out/`: không thành phần nào tên `ledger.jsonl` (hoa hay thường),
+  không thành phần nào đã có sẵn là file. Sổ dưới `out/` được soát cả khi tên file viết hoa. Prompt hay message toàn dấu
+  cách bị từ chối; `clip_edit`, `clip_extend`, `agent_send` từ chối prompt có ký tự xuống dòng, vì ô của Flow nhận nó
+  như phím Enter trước khi sổ kịp ghi dòng `submitted`.
 - **Model mặc định qua MCP**: bỏ trống model thì `gen_t2v` và `gen_i2v` dùng `omni-flash` 10 s, còn `gen_r2v` dùng
   `omni-flash` 8 s, độ dài duy nhất host này cho r2v. `gen_r2v` không bao giờ gửi `--duration` cho gflow, kể cả khi
   truyền 8: gflow tự ghim 8 s, còn độ dài gửi tường minh làm gflow exit 11 ở cohort không có hàng duration; độ dài
@@ -181,8 +185,12 @@ mặt, tay và món đồ.
   project khác ra `skipped`; sổ không có gì để chấm thì trả ngay, không mở Chrome).
 - **Miễn phí nhưng ĐỔI project thật**: `project_create`, `project_rename` (đọc lại tên trên grid rồi mới trả
   `{id, title}`), `project_delete`, `character_create`, `character_delete`, `scene_create`, `scene_delete`,
-  `scene_restore` (lấy scene ra khỏi thùng rác, từ chối khi tên khớp hơn một tile hoặc khi thùng rác hiện nhiều tile
-  scene hơn số scene đã xoá trong listing), `agent_mode`, `flow_upload`.
+  `scene_restore` (lấy scene ra khỏi thùng rác). Tile scene trên grid lẫn trong thùng rác không mang scene id (đo
+  2026-09-16), nên cả hai tool tìm tile theo tên đúng nguyên, và chỉ xét tên sau khi view hiện đủ một tile cho mỗi
+  scene trong listing (chờ tối đa 15 s; grid đếm scene đang hoạt động, thùng rác đếm scene đã xoá). Từ chối thay vì
+  đoán khi: tên rỗng hay chỉ gồm ký tự vô hình sau chuẩn hoá của Playwright, tên có ở hơn một tile, hay số tile không
+  bao giờ khớp số scene. Bấm xong, cả hai tool đọc lại listing và gọi tên scene khác nếu cờ thùng rác của nó đổi.
+  Cùng nhóm: `agent_mode`, `flow_upload`.
 - **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
   hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
 

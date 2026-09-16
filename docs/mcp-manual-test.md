@@ -71,8 +71,8 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `project_rename` | `project_id`, `title` | đọc lại tên trên grid rồi trả `{"id", "title"}`; grid hiện tên khác thì báo lỗi |
 | `project_delete` | `project_id` | **xoá vĩnh viễn**; chỉ dùng cho id nháp |
 | `scene_create` | `project_id`, `title` | trả dict có `scene_id` |
-| `scene_delete` | `project_id`, `scene_id` | là "move to trash", scene vẫn còn trong `scene_list(include_trashed=true)`; lấy lại bằng `scene_restore` |
-| `scene_restore` | `project_id`, `scene_id` | lấy scene ra khỏi thùng rác, đọc lại listing rồi trả `{"scene_id", "trashed": false, "rpcids", "active"}`. Tile trong thùng rác không mang scene id nên tool tìm theo tên, và **từ chối khi tên khớp hơn một tile** hoặc khi thùng rác hiện nhiều tile scene hơn số scene đã xoá trong listing |
+| `scene_delete` | `project_id`, `scene_id` | là "move to trash", scene vẫn còn trong `scene_list(include_trashed=true)`; lấy lại bằng `scene_restore`. Tile trên grid không mang scene id nên tool chờ grid hiện đủ một tile cho mỗi scene đang hoạt động (tối đa 15 s) rồi mới tìm theo tên đúng nguyên: tên rỗng hay chỉ ký tự vô hình, hai scene cùng tên, hay số tile không khớp, thì từ chối; bấm xong đọc lại listing, scene khác bị đổi cờ thì báo tên nó |
+| `scene_restore` | `project_id`, `scene_id` | lấy scene ra khỏi thùng rác, đọc lại listing rồi trả `{"scene_id", "trashed": false, "rpcids", "active"}`. Tile trong thùng rác không mang scene id nên tool chờ thùng rác hiện đủ một tile cho mỗi scene đã xoá (tối đa 15 s) rồi mới tìm theo tên đúng nguyên, và **từ chối khi tên rỗng hay chỉ ký tự vô hình, khi tên có ở hơn một tile**, hay khi số tile không khớp số scene đã xoá |
 | `character_create` | `project_id`, `prompt`, `name`, `personality`, `wait=90` | chân dung vẽ bằng Nano Banana 2, **không tốn credit**. Trả `portrait.workflow_id`, **không phải media id**: lấy media id bằng `flow_characters` |
 | `character_delete` | `project_id`, `entity_id` | xoá vĩnh viễn nhân vật |
 | `flow_upload` | `project_id`, `path` | đường dẫn file trên máy; trả `{file, bytes, rpcids, tiles, media_id, workflow_id, size_bytes, ...}`. `media_id` là id dùng được với `flow_download`. `bytes` là file trên máy, `size_bytes` là bản Flow lưu (Flow nén ảnh lại: PNG 139 KB thành JPEG 5,6 KB). `tiles` đếm tile của view đang mở, không phải số upload |
@@ -80,10 +80,12 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 
 ### D. Tiêu credit, chỉ chạy khi bạn cố ý
 
-Cả 6 tool tốn credit **bắt buộc `job_id`**. `job_id` đã có bất kỳ dòng nào trong mọi `ledger.jsonl` dưới `out/` bị từ
-chối ngay, trước khi mở trình duyệt; `job_id` đang chạy ở lời gọi khác cũng bị từ chối, lúc đó phải chờ rồi gọi lại
-với CÙNG `job_id`, không đổi id mới. `clip_edit`, `clip_extend`, `agent_send` từ chối prompt có ký tự xuống dòng;
-prompt toàn dấu cách bị từ chối; `out_dir` của `clip_edit`, `clip_extend` phải là thư mục nằm trong `out/`.
+Cả 6 tool tốn credit **bắt buộc `job_id`**. `job_id` đã có bất kỳ dòng nào trong mọi `ledger.jsonl` dưới `out/` (tên
+file hoa hay thường) bị từ chối ngay, trước khi mở trình duyệt; `job_id` mang chữ giống bí mật phiên (tên cookie hay
+header `Authorization`) cũng bị từ chối; `job_id` đang chạy ở lời gọi khác cũng bị từ chối, lúc đó phải chờ rồi gọi
+lại với CÙNG `job_id`, không đổi id mới. `clip_edit`, `clip_extend`, `agent_send` từ chối prompt có ký tự xuống dòng;
+prompt toàn dấu cách bị từ chối; `out_dir` của `clip_edit`, `clip_extend` phải là thư mục nằm trong `out/`, không có
+thành phần nào tên `ledger.jsonl` (hoa hay thường) hay đã có sẵn là file.
 
 | Tool | Giá đã đo | Ghi chú |
 |---|---|---|
