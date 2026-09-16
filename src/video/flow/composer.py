@@ -129,11 +129,10 @@ class FlowReplies:
     def __init__(self) -> None:
         self.heard: set[str] = set()
         self._reads: list[asyncio.Future[str]] = []
-        self._closed = False
 
     def on_response(self, response: Any) -> None:
         url = str(getattr(response, "url", "") or "")
-        if self._closed or "batchexecute" not in url:
+        if "batchexecute" not in url:
             return
         rpcids = [rpcid for rpcid in parse_qs(urlsplit(url).query).get("rpcids", [""])[0].split(",") if rpcid]
         self.heard.update(rpcids)
@@ -150,7 +149,6 @@ class FlowReplies:
 
     async def report(self) -> dict[str, Any]:
         """Never raises: it runs after a paid click, where an exception would cost the outcome row."""
-        self._closed = True
         try:
             texts: list[str] = []
             if self._reads:

@@ -1005,6 +1005,7 @@ def test_submit_strict_output_leaves_a_paid_job_unknown_when_it_cannot_claim_the
     with pytest.raises(RuntimeError, match="could be this job's clip") as raised:
         _submit(_SubmitSession(log), tmp_path, log, verify=_reads(f"Thu {PROMPT}"), strict_output=True)
     assert "nothing was generated" not in str(raised.value)
+    assert "no submit reply from Flow was heard" in str(raised.value)
     assert not any(entry.startswith("fetch") for entry in log)
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
     assert (last["status"], last["candidates"], last["spent"]) == ("unknown", ["m-w-new"], 12)
@@ -1039,6 +1040,7 @@ def test_submit_strict_output_leaves_a_job_unknown_when_the_balance_moved_and_no
     with pytest.raises(RuntimeError, match="balance moved by 12") as raised:
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     assert "nothing was generated" not in str(raised.value)
+    assert "no submit reply from Flow was heard" in str(raised.value)
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
     assert (last["status"], last["candidates"]) == ("unknown", [])
 
@@ -1390,9 +1392,15 @@ def test_submit_records_what_flow_replied_about_the_job_it_submitted(monkeypatch
     # nothing left on the page, so its own replies are the only place a reason can show up.
     log = []
     replies = {
-        "click": [SUBMIT_REPLY, _status_reply(2)],
+        "click": [
+            _status_reply(2, workflow=OTHER_WORKFLOW),
+            SUBMIT_REPLY,
+            _status_reply(2),
+            _status_reply(2),
+        ],
         "poll": [
             _status_reply(7, workflow=OTHER_WORKFLOW),
+            _FlowReply("Zzl0ze", [[_flow_record(9)]]),
             _status_reply(5, extra=[["PUBLIC_ERROR_UNSAFE_FACE"]]),
         ],
     }
@@ -1407,12 +1415,12 @@ def test_submit_records_what_flow_replied_about_the_job_it_submitted(monkeypatch
 
 def test_submit_says_what_flow_last_reported_when_no_failure_reply_came(monkeypatch, tmp_path):
     log = []
-    replies = {"click": [SUBMIT_REPLY, _status_reply(2)]}
+    replies = {"click": [SUBMIT_REPLY, _status_reply(None), _status_reply(2)]}
     _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
     with pytest.raises(RuntimeError, match="nothing was generated") as raised:
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
-    assert (flow["statuses"], flow["failed"], flow["reasons_heard"]) == ([6, 2], None, [])
+    assert (flow["statuses"], flow["failed"], flow["reasons_heard"]) == ([6, None, 2], None, [])
     assert "status 2" in str(raised.value)
 
 
@@ -1420,10 +1428,11 @@ def test_submit_keeps_what_flow_replied_on_the_unknown_row_after_a_failure(monke
     log = []
     poll_error = LookupError("rpc Zzl0ze not observed; saw []")
     _install(monkeypatch, tmp_path, log, poll_error=poll_error, replies={"click": [SUBMIT_REPLY]})
-    with pytest.raises(RuntimeError, match="credits may already be spent"):
+    with pytest.raises(RuntimeError, match="credits may already be spent") as raised:
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
     assert last["status"] == "unknown" and last["flow"]["workflow_id"] == JOB_WORKFLOW
+    assert f"status 6 for workflow {JOB_WORKFLOW}" in str(raised.value)
 
 
 @pytest.mark.parametrize("poll_error", [None, LookupError("rpc Zzl0ze not observed; saw []")])
@@ -1434,7 +1443,8 @@ def test_submit_stops_hearing_flow_once_the_outcome_is_written(monkeypatch, tmp_
     with contextlib.suppress(RuntimeError):
         _submit(session, tmp_path, log, strict_output=True)
     assert session.page.responders == []
-    assert "flow" in gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
+    assert (flow["workflow_id"], flow["statuses"], flow["heard"]) == (None, [], []) and "error" not in flow
 
 
 def test_submit_skips_a_reply_whose_body_cannot_be_read(monkeypatch, tmp_path):
