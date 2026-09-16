@@ -21,10 +21,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from video.flow import clips, parsers, reader
+from video.flow import clips, composer, parsers, reader
 from video.probes._common import out_path
 from video.session import GRID_READY, MIGRATED_ROOT, PROJECT_READY, FlowSession
-from video.story import composer
 
 Observed = dict[str, Any]
 

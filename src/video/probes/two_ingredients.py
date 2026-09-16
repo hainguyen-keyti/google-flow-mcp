@@ -12,8 +12,9 @@ import argparse
 import asyncio
 import json
 
+from video.flow import composer
 from video.session import PROJECT_READY, FlowSession
-from video.story import composer, persona, product
+from video.story import persona, product
 
 _TILES_JS = """() => [...document.querySelectorAll('.cdk-overlay-pane img, [role=dialog] img')]
   .slice(0, 12)

@@ -1,6 +1,6 @@
 import pytest
 
-from video.story import composer
+from video.flow import composer
 
 
 def test_price_is_read_from_the_composer_settings_line():

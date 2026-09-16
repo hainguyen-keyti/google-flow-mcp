@@ -17,9 +17,9 @@ import asyncio
 import json
 import re
 
+from video.flow import composer
 from video.flow.reader import capture
 from video.session import PROJECT_READY, FlowSession
-from video.story import composer
 
 _SLOTS_JS = """() => [...document.querySelectorAll('flow-prompt-box button, flow-base-prompt-box button')]
   .map(e => ({label: (e.getAttribute('aria-label') || e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40),

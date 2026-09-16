@@ -12,8 +12,8 @@ import argparse
 import asyncio
 import json
 
+from video.flow import composer
 from video.session import PROJECT_READY, FlowSession
-from video.story import composer
 
 _OVERLAY_JS = """() => [...document.querySelectorAll('.cdk-overlay-pane, [role=menu], [role=dialog]')]
   .filter(e => e.offsetParent !== null)

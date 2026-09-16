@@ -3,7 +3,8 @@ import asyncio
 import pytest
 
 from video import gen
-from video.story import composer, pipeline
+from video.flow import composer
+from video.story import pipeline
 
 
 def test_reconcile_decision_reads_the_ground_truth():

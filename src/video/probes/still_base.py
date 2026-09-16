@@ -28,8 +28,9 @@ import sys
 from pathlib import Path
 
 from video import gen
+from video.flow import composer
 from video.session import FlowSession
-from video.story import bible, composer, persona
+from video.story import bible, persona
 
 PRICE = 10
 ASPECT = "9:16"

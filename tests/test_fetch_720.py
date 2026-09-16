@@ -1,6 +1,6 @@
 import asyncio
 
-from video.story import composer
+from video.flow import composer
 
 
 class _Session:

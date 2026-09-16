@@ -38,11 +38,10 @@ from gflow_cli.api.transports import migrated_composer as mc
 from gflow_cli.api.video import Aspect, GenerateVideoRequest, Mode, VideoModel
 
 from video import gen
-from video.flow import agent, characters, parsers, reader, uploads
+from video.flow import agent, characters, composer, parsers, reader, uploads
 from video.flow.reader import capture, one
 from video.probes._common import OUT_DIR, out_path
 from video.session import PROJECT_READY, FlowSession
-from video.story import composer
 
 BOX = "flow-prompt-box [contenteditable='true']"
 PICKER_CONFIRM = "button.detail-add-to-prompt-btn"

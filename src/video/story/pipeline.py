@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from video import gen, post
-from video.flow import clips
+from video.flow import clips, composer
 from video.flow import uploads as uploads_mod
-from video.story import composer, persona, product, shots, shots2
+from video.story import persona, product, shots, shots2
 
 PRICE_PER_SHOT = 10
 FINAL_NAME = "tryon2_final.mp4"
@@ -83,9 +83,8 @@ def reconcile_decision(row: dict[str, Any], credits_now: int, record: dict[str, 
 
 async def reconcile(session, project_id: str, *, out_dir: Path) -> list[dict[str, Any]]:
     """Close out shots stuck on 'submitted' using the listing and the credit balance, never a guess."""
+    from video.flow import composer, reader
     from video.flow import download as download_mod
-    from video.flow import reader
-    from video.story import composer
 
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
     stuck = pending_jobs(ledger)
