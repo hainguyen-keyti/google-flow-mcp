@@ -17,6 +17,7 @@ from gflow_cli import auth as _auth
 from gflow_cli.api.client import FlowApiClient
 
 import video  # noqa: F401
+from video import gen
 
 _GUARD = threading.Lock()
 _GUARD_POLL_S = 0.05
@@ -87,10 +88,12 @@ class FlowSession:
                             PAGE_CLOSE_TIMEOUT_S,
                         )
                     except Exception as exc:  # noqa: BLE001
+                        # Playwright appends a call log that can quote request headers: keep the first line, scrubbed.
+                        detail = gen._scrub(str(exc).split("Call log:")[0].strip())
                         logging.getLogger(__name__).warning(
                             "page.close() failed (%s: %s); leaving it to the client exit",
                             type(exc).__name__,
-                            exc,
+                            detail,
                         )
             finally:
                 # A failed or cancelled close must not skip the client's exit: that exit returns gflow's profile

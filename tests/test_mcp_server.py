@@ -813,6 +813,10 @@ def test_a_job_id_is_free_again_after_its_call_was_cancelled_without_writing_any
         "out/x/LEDGER.JSONL",
         "out/y/ledger.jsonl/run",
         "out/clip.mp4/x",
+        # Review of plan D (2026-09-16, finding 3): the resolved path was checked but the unresolved one was returned,
+        # so the driver still made a folder named ledger.jsonl and every later spend failed reading it.
+        "out/ledger.jsonl/..",
+        "out/x/LEDGER.JSONL/..",
     ],
 )
 def test_an_editor_out_dir_that_is_a_ledger_or_a_file_is_refused_before_a_browser_opens(

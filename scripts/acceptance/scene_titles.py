@@ -91,6 +91,11 @@ async def run(project: str, rows: list[dict[str, Any]]) -> None:
                 )
                 row("S1 create three namesakes", not errors and now == expected, detail)
                 if len(ids) < len(LABELS):
+                    # Leave nothing active behind when one creation failed halfway.
+                    for label, scene_id in ids.items():
+                        arguments = {"project_id": project, "scene_id": scene_id}
+                        _, error, _ = await call(session, "scene_delete", arguments)
+                        print(f"      cleanup {label}: {error or 'trashed'}", flush=True)
                     return
 
                 steps = (

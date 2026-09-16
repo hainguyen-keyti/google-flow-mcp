@@ -14,7 +14,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 VIDEO_KINDS = ("t2v", "i2v", "r2v")
@@ -100,16 +100,26 @@ def _scrub(text: str) -> str:
 
 
 def _scrubbed(value: Any) -> Any:
-    """Scrub each string a row carries on its own, so the scrub can never eat the JSON around it."""
+    """Scrub each string a row carries on its own, so the scrub can never eat the JSON around it.
+
+    Values json cannot encode on its own (paths, bytes, sets) become their text here, keys included: the encoder's
+    fallback runs after this walk, and whatever it returns goes to the file as it is.
+    """
     if isinstance(value, str):
         return _scrub(value)
-    if isinstance(value, Path):
+    if isinstance(value, PurePath | bytes | bytearray):
         return _scrub(str(value))
     if isinstance(value, dict):
-        return {key: _scrubbed(item) for key, item in value.items()}
+        return {_scrubbed(key): _scrubbed(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
         return [_scrubbed(item) for item in value]
+    if isinstance(value, set | frozenset):
+        return [_scrubbed(item) for item in sorted(value, key=repr)]
     return value
+
+
+def _scrub_other(value: Any) -> str:
+    return _scrub(str(value))
 
 
 def check_job_id(job_id: str) -> None:
@@ -152,13 +162,15 @@ class Ledger:
         row = {"ts": time.time(), "job_id": job_id, "status": status, **fields}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(_scrubbed(row), ensure_ascii=False, default=str) + "\n")
+            handle.write(json.dumps(_scrubbed(row), ensure_ascii=False, default=_scrub_other) + "\n")
 
     def rows(self, job_id: str | None = None) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
+        # Split on the newline alone: `splitlines()` also breaks on U+2028, U+2029 and U+0085, which json keeps inside
+        # strings, so one prompt holding one of them made every later read of this ledger fail (review of plan D).
         rows = [
-            json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines() if line.strip()
+            json.loads(line) for line in self.path.read_text(encoding="utf-8").split("\n") if line.strip()
         ]
         return [r for r in rows if job_id is None or r.get("job_id") == job_id]
 

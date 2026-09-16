@@ -1,6 +1,6 @@
 import asyncio
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -142,6 +142,44 @@ def test_ledger_rows_stay_readable_json_whatever_strings_they_carry(tmp_path):
     assert "SAPISID=" not in text and "__Secure-" not in text and "Authorization:" not in text
     assert rows[0]["argv"][:2] == ["video", "t2v"] and rows[0]["argv"][-1] == "--json"
     assert "[redacted]" in rows[0]["prompt"] and "[redacted]" in rows[0]["outputs"][0]["note"]
+
+
+@pytest.mark.parametrize("code", [0x2028, 0x2029, 0x85])
+def test_ledger_rows_survive_a_unicode_line_separator_in_a_prompt(tmp_path, code):
+    # Review of plan D (2026-09-16, F2): `splitlines()` also breaks on these three, so one prompt carrying one made every
+    # later read of that ledger raise JSONDecodeError, which blocks every spend and every reconcile.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("job-a", "submitted", prompt="night" + chr(code) + "city")
+    ledger.append("job-b", "planned", prompt="plain")
+
+    rows = ledger.rows()
+
+    assert [row["job_id"] for row in rows] == ["job-a", "job-b"]
+    assert rows[0]["prompt"] == "night" + chr(code) + "city"
+
+
+def test_ledger_scrubs_values_json_cannot_encode_on_its_own(tmp_path):
+    # Review of plan D (2026-09-16, finding 4): the per-string scrub walks strings, so a secret inside a set, bytes, a
+    # PurePosixPath or a dict key reached disk raw, where the old whole-line scrub had caught it.
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        "job-c",
+        "planned",
+        tags={"SAPISID=abc"},
+        raw=b"__Secure-1PSID=def",
+        pure=PurePosixPath("/x/SAPISID=ghi"),
+        **{"Authorization: Bearer key": 1},
+    )
+
+    rows = ledger.rows()
+
+    text = (tmp_path / "ledger.jsonl").read_text(encoding="utf-8")
+    assert [row["job_id"] for row in rows] == ["job-c"]
+    assert "SAPISID=" not in text and "__Secure-" not in text and "Authorization:" not in text
+    # The walk itself turns each of these into text or a list, so none of them reaches the encoder as it was given.
+    assert rows[0]["tags"] == ["[redacted]"]
+    assert rows[0]["raw"].startswith("b'[redacted]") and rows[0]["pure"] == "/x/[redacted]"
+    assert rows[0]["[redacted]"] == 1
 
 
 @pytest.mark.parametrize("job_id", ["__Secure- x", "run SAPISID=1", "Authorization: me"])

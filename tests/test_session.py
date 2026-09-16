@@ -138,6 +138,15 @@ class DriverGonePage(FakePage):
         raise Exception("Connection closed while reading from the driver")  # noqa: TRY002
 
 
+class ChattyClosePage(FakePage):
+    async def close(self):
+        self.log.append("page.close")
+        # Playwright appends a call log to its errors, and a call log can quote request headers.
+        raise RuntimeError(
+            "Target page, context or browser has been closed\nCall log:\n  - cookie: SAPISID=abc123"
+        )
+
+
 class LeasedClient(FakeClient):
     """gflow's in-process profile lease: until a client exits, the next one cannot enter."""
 
@@ -208,6 +217,23 @@ def test_a_call_that_failed_keeps_its_own_error_when_the_page_fails_to_close_too
     assert log.count("client.exit") == 2
     assert "Connection closed while reading from the driver" in caplog.text
     assert not session_mod._GUARD.locked()
+
+
+def test_a_close_error_is_logged_without_its_call_log_or_session_material(tmp_path, caplog):
+    # Review of plan D (2026-09-16, finding 6): TellingServer cuts "Call log:" and scrubs before logging; this warning did
+    # neither, so a call log quoting a request header would reach the log raw.
+    log = []
+    lease = {"held": False}
+
+    async def run():
+        async with FlowSession(profile_dir=tmp_path, client_factory=leased(log, lease, ChattyClosePage)):
+            pass
+
+    with caplog.at_level(logging.WARNING, logger="video.session"):
+        asyncio.run(run())
+    assert "Target page" in caplog.text
+    assert "SAPISID=" not in caplog.text and "Call log:" not in caplog.text
+    assert log.count("client.exit") == 1
 
 
 class HangingPage(FakePage):

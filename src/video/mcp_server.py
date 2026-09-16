@@ -95,11 +95,16 @@ class Backend:
                 f"out_dir must be inside {self.out_dir.resolve()} (outputs stay in out/), got {target}"
             )
         # Any part named ledger.jsonl, in any case since the disk may not tell the names apart, makes the driver create a
-        # folder every spend then fails to read; a part that is already a file would fail only once a browser is open.
+        # folder every spend then fails to read. The path as given counts too: `out/ledger.jsonl/..` resolves that name
+        # away, while the driver still creates it. A part that is already a file would fail only once a browser is open.
         current = self.out_dir.resolve()
-        for part in target.resolve().relative_to(current).parts:
+        walked = target.resolve().relative_to(current).parts
+        for part in (*Path(out_dir).parts, *walked) if out_dir else walked:
+            if part.casefold() == "ledger.jsonl":
+                raise ValueError(f"out_dir must be a folder, not a ledger or another file, got {target}")
+        for part in walked:
             current = current / part
-            if part.casefold() == "ledger.jsonl" or (current.exists() and not current.is_dir()):
+            if current.exists() and not current.is_dir():
                 raise ValueError(f"out_dir must be a folder, not a ledger or another file, got {target}")
         return target
 

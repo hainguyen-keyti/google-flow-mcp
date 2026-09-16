@@ -451,6 +451,8 @@ def check_scrub_keeps_rows(tmp: Path) -> tuple[str, str]:
     """
     ledger = gen.Ledger(tmp / "ledger.jsonl")
     ledger.append("scrub-ok", "submitted", prompt="Authorization: denied", argv=["video", "SAPISID=abc"])
+    # U+2028 is a line break for `splitlines()` but not for JSON (review of plan D, 2026-09-16).
+    ledger.append("separator", "planned", prompt="night" + chr(0x2028) + "city")
     refused = None
     try:
         gen.Ledger(tmp / "refused.jsonl").append("__Secure- x", "submitted")
@@ -461,7 +463,12 @@ def check_scrub_keeps_rows(tmp: Path) -> tuple[str, str]:
     except ValueError as exc:
         return "FAIL", f"ledger unreadable: {type(exc).__name__}: {exc}"
     leaked = [p.name for p in tmp.iterdir() if p.is_file() and SECRET.search(p.read_text(errors="ignore"))]
-    ok = ids == ["scrub-ok"] and refused is not None and not (tmp / "refused.jsonl").exists() and not leaked
+    ok = (
+        ids == ["scrub-ok", "separator"]
+        and refused is not None
+        and not (tmp / "refused.jsonl").exists()
+        and not leaked
+    )
     return ("PASS" if ok else "FAIL"), f"job_ids={ids} refused={refused!r} leaked={leaked}"
 
 
