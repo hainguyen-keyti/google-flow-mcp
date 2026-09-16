@@ -35,8 +35,6 @@ from video import mcp_server
 
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 
-EXPECTED_TOOL_COUNT = 29
-
 # Free AND side-effect free: safe to call on the owner's live account on every run.
 READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits", "flow_tools")
 READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_uploads", "scene_list")
@@ -47,10 +45,29 @@ MUTATING = (
     "scene_create",
     "scene_delete",
     "scene_restore",
+    "scene_add_clip",
+    "scene_rename",
     "project_create",
+    "project_rename",
     "project_delete",
+    "character_create",
+    "character_delete",
     "flow_upload",
+    "clip_reconcile",
+    "gen_t2i",
+    "gen_i2i",
 )
+
+# Free for Flow but they write a file on this machine, so they are not called here either.
+DOWNLOADING = ("flow_download", "clip_download", "scene_download")
+
+# Real money. Never called here, and the roster row insists they stay declared rather than quietly vanish.
+SPENDING = ("gen_t2v", "gen_i2v", "gen_r2v", "clip_extend", "clip_edit", "agent_send")
+
+# One source for the roster contract: a tool that exists must be classified above, and a name declared above must
+# still be served. The count used to be typed here as well, so adding three tools left this gate red while the unit
+# test was green (review of plan scene-timeline-tools, 2026-09-16).
+CLASSIFIED = (*READ_ONLY_NO_ARGS, *READ_ONLY_PER_PROJECT, *MUTATING, *DOWNLOADING, *SPENDING)
 
 
 def payload_of(result):
@@ -205,11 +222,17 @@ async def run(findings):
             async with ClientSession(client_streams[0], client_streams[1]) as session:
                 await session.initialize()
                 names = sorted(tool.name for tool in (await session.list_tools()).tools)
+                unclassified = sorted(set(names) - set(CLASSIFIED))
+                vanished = sorted(set(CLASSIFIED) - set(names))
                 findings.append(
                     {
                         "name": "roster",
-                        "status": "PASS" if len(names) == EXPECTED_TOOL_COUNT else "FAIL",
-                        "detail": f"{len(names)} tools served, expected exactly {EXPECTED_TOOL_COUNT}",
+                        "status": "PASS" if not unclassified and not vanished else "FAIL",
+                        "detail": (
+                            f"{len(names)} tools served, every one classified"
+                            if not unclassified and not vanished
+                            else f"unclassified {unclassified}; declared but not served {vanished}"
+                        ),
                     }
                 )
                 missing = [tool for tool in MUTATING if tool not in names]

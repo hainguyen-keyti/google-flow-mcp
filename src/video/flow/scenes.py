@@ -24,8 +24,11 @@ TOOLBAR_WAIT_MS = 15_000
 THUMBS = "flow-scene-timeline video, flow-scene-timeline img"
 SAVE_WAIT_MS = 20_000
 OVERLAY = ".cdk-overlay-pane button, [role=dialog] button"
-# Add clip's menu offers Extend (Veo 3.1 - Lite), 10 credits, right next to the item this driver wants.
-PAID_WORDS = ("extend", "generate", "upscale")
+# Add clip's menu offers Extend (Veo 3.1 - Lite), 10 credits, right next to the item this driver wants, and the same
+# page carries Start generation. "generation" is listed on its own because "generate" is not a substring of it, which
+# left the one certain spender on that page unguarded (review 2026-09-16).
+PAID_WORDS = ("extend", "generate", "generation", "upscale")
+TITLE_BOX = "flow-editor-header flow-editable-text"
 # U+200B zero width space and U+00AD soft hyphen, built with chr() so this file carries no escape sequence.
 _ZERO_WIDTH = str.maketrans("", "", chr(0x200B) + chr(0xAD))
 
@@ -102,7 +105,7 @@ async def create(session: FlowSession, project_id: str, title: str | None = None
         "title": None,
     }
     if title:
-        box = page.locator("flow-editor-header flow-editable-text, flow-editable-text").first
+        box = await _title_box(page)
 
         async def edit() -> None:
             await box.click(timeout=8_000)
@@ -154,16 +157,43 @@ async def _wait_until_it_holds_a_clip(page: Any, scene_id: str, complaint: str) 
     return waited
 
 
-async def _click_one(page: Any, found: Any, what: str) -> str:
-    """Click the single control that matches, and never one that spends: labels sit next to paid actions here."""
+async def _label_of(element: Any) -> str:
+    """A control's accessible name AND its text: these buttons carry the name in aria-label and only a ligature as
+    text, so reading one of the two leaves the guard below blind exactly where the match was made on the other."""
+    aria = await element.get_attribute("aria-label")
+    text = await element.inner_text()
+    return " ".join(part for part in (aria, text) if part)
+
+
+async def _click_one(page: Any, found: Any, what: str, *, guard_paid: bool = True) -> str:
+    """Click the single control that matches, and never one that spends: paid actions sit right beside these.
+
+    `guard_paid` is off for the media rows of the picker: a row is a clip, not a control, and its label is a title
+    the owner chose, so refusing "robot generates a sandwich" as a spender was both wrong and unavoidable.
+    """
     matching = await found.count()
     if matching != 1:
         raise LookupError(f"{matching} controls match {what}; not guessing")
-    label = await found.first.inner_text()
-    if any(word in (label or "").lower() for word in PAID_WORDS):
+    element = found.first
+    label = await _label_of(element)
+    if guard_paid and any(word in label.lower() for word in PAID_WORDS):
         raise RuntimeError(f"refusing to click {label!r} for {what}: that control spends credits")
-    await found.first.click(timeout=8_000)
+    await element.click(timeout=8_000)
     return label
+
+
+async def _title_box(page: Any) -> Any:
+    """The scene's own title, and only it.
+
+    Measured 2026-09-16: a scene page holds exactly one `flow-editable-text`, inside `flow-editor-header`, and the
+    composer's prompt box is not one. Typing into `.first` of a wider selector would be a guess on a page whose
+    buttons include Start generation.
+    """
+    box = page.locator(TITLE_BOX)
+    matching = await box.count()
+    if matching != 1:
+        raise LookupError(f"{matching} editable titles on the page; not guessing which one to type into")
+    return box.first
 
 
 async def rename(session: FlowSession, project_id: str, scene_id: str, title: str) -> dict[str, Any]:
@@ -172,7 +202,7 @@ async def rename(session: FlowSession, project_id: str, scene_id: str, title: st
         raise ValueError(f"a scene title must hold visible text, got {title!r}")
     page = session.page
     await _open_scene(session, project_id, scene_id)
-    box = page.locator("flow-editor-header flow-editable-text, flow-editable-text").first
+    box = await _title_box(page)
 
     async def edit() -> None:
         await box.click(timeout=8_000)
@@ -209,6 +239,15 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
             f"media {media_id} has no title to match ({title!r}), and picker rows carry no media id, so adding "
             "it would guess"
         )
+    # Judge a name clash on the listing, not on the rows one tab happens to show: the picker is tabbed (Videos,
+    # Uploads, Upload media), so two media sharing a title can appear as a single row and the click would be a coin
+    # flip that still reports the media_id that was asked for (review 2026-09-16).
+    namesakes = sorted(m["id"] for m in media if _tile_text(m.get("title")) == _tile_text(title))
+    if len(namesakes) > 1:
+        raise RuntimeError(
+            f"{len(namesakes)} media in this project are titled {title!r} ({', '.join(namesakes)}); picker rows "
+            "carry no media id, so adding would guess which one"
+        )
     await _open_scene(session, project_id, scene_id)
     before = await page.locator(THUMBS).count()
     # By accessible name, not by text: measured 2026-09-16, this button's text is only the ligature "add_2" while
@@ -231,29 +270,22 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
         raise RuntimeError(
             f"{matching} picker rows show {title!r}; rows carry no media id, so adding would guess"
         )
-    frames = await capture(session, lambda: _click_one(page, rows, "the picker row"), settle=6.0)
+    frames = await capture(
+        session, lambda: _click_one(page, rows, "the picker row", guard_paid=False), settle=6.0
+    )
     after = await page.locator(THUMBS).count()
     if after <= before:
         raise RuntimeError(f"add_clip: the timeline still shows {after} thumbnails; nothing was added")
-    # Measured 2026-09-16: a reload in the same session often does not show the clip yet, while a later call in a
-    # fresh session downloads the film just fine, so this confirmation is reported, never raised. Raising would tell
-    # an agent the add failed when it worked, and the retry would put the clip on the timeline twice.
-    await _open_scene(session, project_id, scene_id)
-    confirmed = False
-    waited = 0
-    while waited <= SAVE_WAIT_MS:
-        if await _holds_a_clip(page):
-            confirmed = True
-            break
-        await page.wait_for_timeout(2_000)
-        waited += 2_000
+    # No reload here. A reload in the same session often does not show the clip yet while a later call in a fresh
+    # session downloads the film fine, so the answer it gave was worthless: for every add after the first it said
+    # yes whatever happened, since "Download scene" only reports that the scene holds SOME clip (review 2026-09-16).
+    # What this call can honestly report is that the click landed and the timeline grew; scene_download is the proof.
     return {
         "scene_id": scene_id,
         "media_id": media_id,
         "title": title,
-        "clips_before": before,
-        "clips_after": after,
-        "confirmed_after_reload": confirmed,
+        "thumbnails_before": before,
+        "thumbnails_after": after,
         "rpcids": sorted(frames),
     }
 

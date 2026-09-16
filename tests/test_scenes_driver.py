@@ -568,6 +568,10 @@ class _Clickable:
     async def inner_text(self):
         return self.pair[1] if self.pair else None
 
+    async def get_attribute(self, name):
+        assert name == "aria-label"
+        return (self.pair[0] or None) if self.pair else None
+
     async def is_disabled(self):
         # Measured 2026-09-16: Flow keeps 'Download scene' disabled until the editor really holds a clip, and a
         # freshly loaded page does not restore the timeline thumbnails at all.
@@ -650,8 +654,12 @@ class _Expect:
 
 
 class _ScenePage:
-    def __init__(self, titles, *, clips=0, toolbar=None, builds_after=0, adds=True, saves=True):
+    def __init__(
+        self, titles, *, clips=0, toolbar=None, builds_after=0, adds=True, saves=True, title_boxes=1
+    ):
         self.titles = list(titles)
+        self.title_boxes = title_boxes
+        self.menu_items = None
         self.adds = adds
         self.saves = saves
         self.saved = clips > 0
@@ -672,13 +680,15 @@ class _ScenePage:
         if kind == "overlay":
             # Overlay items carry no aria-label, only their own text, ligature included.
             if self.overlay == "menu":
+                if self.menu_items is not None:
+                    return self.menu_items
                 return [("", "add Add clip"), ("", "keyboard_double_arrow_right Extend (Veo 3.1 - Lite)")]
             if self.overlay == "picker":
                 rows = [("", title) for title in self.titles]
                 return [("", "videocam Videos"), ("", "upload Upload media"), *rows, ("", "Add media")]
             return []
         if kind == "title_box":
-            return [("", "title")]
+            return [("", "title")] * self.title_boxes
         return []
 
     def click(self, pair, kind):
@@ -777,12 +787,14 @@ def test_add_clip_adds_the_media_whose_title_is_exactly_the_one_asked_for(monkey
     media = [_media(SCENE, "Model sailboat on wooden desk"), _media(OTHER, "probe_upload.png", "image")]
     _scene_answers(monkeypatch, media)
     page = _ScenePage(["Model sailboat on wooden desk", "probe_upload.png"])
+    session = _SceneSession(page, media)
 
-    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    result = asyncio.run(scenes.add_clip(session, PROJECT, "scene-1", SCENE))
 
     assert page.added == ["Model sailboat on wooden desk"]
-    assert result["clips_before"] == 0 and result["clips_after"] == THUMBS_PER_CLIP
-    assert result["confirmed_after_reload"] is True
+    assert result["thumbnails_before"] == 0 and result["thumbnails_after"] == THUMBS_PER_CLIP
+    # The scene it was asked about, not the project page and not another scene.
+    assert session.urls == [f"{FlowSession.project_url(PROJECT)}/scene/scene-1"]
 
 
 def test_add_clip_goes_through_the_menu_when_the_scene_already_holds_a_clip(monkeypatch):
@@ -796,11 +808,22 @@ def test_add_clip_goes_through_the_menu_when_the_scene_already_holds_a_clip(monk
     assert page.added == ["Model sailboat on wooden desk"]
 
 
-def test_add_clip_refuses_when_two_media_share_the_title(monkeypatch):
-    # Measured in the owner's own project: bc89bca9 and de29028c are both titled probe_upload.png.
-    media = [_media(SCENE, "probe_upload.png"), _media(OTHER, "probe_upload.png")]
+def test_add_clip_takes_the_row_whose_title_is_exactly_the_medias_not_one_containing_it(monkeypatch):
+    # The bug class plan D paid for in delete and restore: a substring match makes "Scene 1" fit "Scene 10" too.
+    media = [_media(SCENE, "Scene 1"), _media(OTHER, "Scene 10")]
     _scene_answers(monkeypatch, media)
-    page = _ScenePage(["probe_upload.png", "probe_upload.png"])
+    page = _ScenePage(["Scene 10", "Scene 1"])
+
+    asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert page.added == ["Scene 1"]
+
+
+def test_add_clip_refuses_when_the_picker_shows_that_title_twice(monkeypatch):
+    # The listing knows one media under this title, yet the picker offers two rows: still a coin flip, still refused.
+    media = [_media(SCENE, "alpha")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["alpha", "alpha"])
 
     with pytest.raises(RuntimeError, match="2 picker rows"):
         asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
@@ -857,15 +880,18 @@ def test_add_clip_gives_up_when_the_scene_page_never_finishes_building(monkeypat
         asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
 
 
-def test_add_clip_never_clicks_a_paid_item(monkeypatch):
-    # The Add clip menu's second item is Extend (Veo 3.1 - Lite), 10 credits.
-    media = [_media(SCENE, "Extend (Veo 3.1 - Lite)")]
+def test_add_clip_never_clicks_the_paid_item_of_the_add_clip_menu(monkeypatch):
+    # The Add clip menu's second item is Extend (Veo 3.1 - Lite), 10 credits, and a scene that already holds a clip
+    # opens that menu before the picker.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
     _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Extend (Veo 3.1 - Lite)"])
+    page = _ScenePage(["Model sailboat on wooden desk"], clips=1)
+    page.menu_items = [("", "keyboard_double_arrow_right Extend (Veo 3.1 - Lite)")]
 
-    with pytest.raises(RuntimeError, match="spends credits"):
+    with pytest.raises(LookupError, match="is not offered by the picker"):
         asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
     assert page.added == []
+    assert not any("Extend" in label for label in page.clicked)
 
 
 def test_add_clip_says_so_when_the_click_landed_but_the_timeline_did_not_grow(monkeypatch):
@@ -878,18 +904,115 @@ def test_add_clip_says_so_when_the_click_landed_but_the_timeline_did_not_grow(mo
         asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
 
 
-def test_add_clip_reports_a_reload_that_does_not_show_the_clip_yet_instead_of_failing(monkeypatch):
-    # Live run 2026-09-16: add_clip raised "did not stick" after 20 s and the very next call downloaded the 8.0 s
-    # film anyway. Raising tells an agent the add failed when it worked, and the retry puts the clip on twice.
+def test_add_clip_does_not_reload_to_confirm_an_add_that_already_landed(monkeypatch):
+    # Live run 2026-09-16: add_clip raised "did not stick" after 20 s and the very next call downloaded the 8.0 s film
+    # anyway. Review 2026-09-16: the answer was worthless anyway, since "Download scene" only says the scene holds SOME
+    # clip, so from the second add on it said yes whatever happened. The film is the proof, not a reload.
     media = [_media(SCENE, "Model sailboat on wooden desk")]
     _scene_answers(monkeypatch, media)
     page = _ScenePage(["Model sailboat on wooden desk"], saves=False)
+    session = _SceneSession(page, media)
 
-    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    result = asyncio.run(scenes.add_clip(session, PROJECT, "scene-1", SCENE))
 
-    assert result["confirmed_after_reload"] is False
     assert page.added == ["Model sailboat on wooden desk"]
-    assert page.elapsed_ms >= scenes.SAVE_WAIT_MS
+    assert "confirmed_after_reload" not in result
+    assert len(session.urls) == 1 and page.elapsed_ms < scenes.SAVE_WAIT_MS
+
+
+def test_add_clip_refuses_when_another_media_in_the_project_shares_the_title(monkeypatch):
+    # Review 2026-09-16: the picker is tabbed, so two media with one title can show as a single row and the click is a
+    # coin flip that still reports the media_id asked for. Judge the clash on the listing, which is already in hand.
+    media = [_media(SCENE, "probe_upload.png"), _media(OTHER, "probe_upload.png", "image")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["probe_upload.png"])
+
+    with pytest.raises(RuntimeError, match="2 media in this project are titled"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.added == []
+
+
+def test_add_clip_adds_a_clip_whose_title_reads_like_a_paid_control(monkeypatch):
+    # Review 2026-09-16: Flow titles a clip from its prompt, so the guard meant for controls refused real clips and
+    # told the agent they spend credits. A row is a clip, not a control.
+    media = [_media(SCENE, "robot generates a sandwich")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["robot generates a sandwich"])
+
+    asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert page.added == ["robot generates a sandwich"]
+
+
+def test_add_clip_refuses_a_control_whose_paid_name_is_only_in_its_aria_label(monkeypatch):
+    # Review 2026-09-16: these buttons keep their name in aria-label and only a ligature as text, so a guard reading
+    # the text alone was blind for every control matched by name.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    toolbar = [
+        ("Add clip Extend (Veo 3.1 - Lite)" if aria == "Add clip" else aria, text) for aria, text in TOOLBAR
+    ]
+    page = _ScenePage(["Model sailboat on wooden desk"], toolbar=toolbar)
+
+    with pytest.raises(RuntimeError, match="spends credits"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.clicked == []
+
+
+def test_add_clip_refuses_when_two_controls_answer_to_the_same_name(monkeypatch):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], toolbar=[*TOOLBAR, ("Add clip", "add_2")])
+
+    with pytest.raises(LookupError, match="2 controls match"):
+        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    assert page.clicked == []
+
+
+def test_download_refuses_when_the_page_shows_two_download_buttons(monkeypatch, tmp_path):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage([], clips=1, toolbar=[*TOOLBAR, ("Download scene", "download")])
+
+    with pytest.raises(LookupError, match="2 Download scene buttons"):
+        asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=tmp_path))
+    assert page.downloaded is None
+
+
+def test_download_writes_into_the_folder_it_was_given(monkeypatch, tmp_path):
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage([], clips=1)
+    room = tmp_path / "films"
+
+    result = asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=room))
+
+    assert Path(result["path"]).parent == room
+
+
+def test_download_never_overwrites_a_film_that_is_already_there(monkeypatch, tmp_path):
+    # CLAUDE.md rule 5: footage is never overwritten, and a stamped name still collides inside one second.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage([], clips=1)
+    monkeypatch.setattr(scenes.time, "strftime", lambda fmt: "20260916_120000")
+    (tmp_path / "scene-1_20260916_120000.mp4").write_bytes(b"older film")
+
+    with pytest.raises(FileExistsError):
+        asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=tmp_path))
+    assert (tmp_path / "scene-1_20260916_120000.mp4").read_bytes() == b"older film"
+
+
+def test_rename_refuses_when_the_page_shows_more_than_one_editable_title(monkeypatch):
+    # Measured 2026-09-16: a scene page holds exactly one flow-editable-text, in the header, and the composer's
+    # prompt box is not one. Typing into `.first` of a wider match would be a guess beside a Start generation button.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media, listing_after=[{"scene_id": "scene-1", "title": "new name"}])
+    page = _ScenePage([], title_boxes=2)
+
+    with pytest.raises(LookupError, match="2 editable titles"):
+        asyncio.run(scenes.rename(_SceneSession(page, media), PROJECT, "scene-1", "new name"))
+    assert page.typed is None
 
 
 def test_two_downloads_of_one_scene_do_not_collide(monkeypatch, tmp_path):
