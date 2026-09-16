@@ -1467,3 +1467,50 @@ def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():
     assert re.search(r"\b\d+\s*(?:s|seconds|min|minutes)\b", text), text
     assert "job_id" in text
     assert "omni-flash" in text
+
+
+@pytest.mark.parametrize("bad", ["elsewhere", "out/../elsewhere", "out/x/LEDGER.JSONL"])
+def test_a_scene_download_out_dir_outside_the_out_folder_is_refused_before_a_browser_opens(
+    monkeypatch, tmp_path, bad
+):
+    # scene_download writes a film, so it obeys the rule the editor jobs obey (CLAUDE.md rule 5). Found by mutation:
+    # dropping the guard from Backend.scene_download broke no test at all (plan scene-timeline-tools T4).
+    reached = []
+
+    async def fake_download(session, project_id, scene_id, *, out_dir):
+        reached.append(out_dir)
+        return {"path": str(out_dir)}
+
+    monkeypatch.setattr(mcp_server.scenes_mod, "download", fake_download)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        arguments = {"project_id": "P", "scene_id": "S", "out_dir": str(tmp_path / bad)}
+        return await s.call_tool("scene_download", arguments)
+
+    text = _texts([with_client(fn)])[0]
+    assert "out_dir must be" in text, text
+    assert reached == []
+
+
+def test_a_scene_download_folder_inside_out_reaches_the_driver(monkeypatch, tmp_path):
+    seen = {}
+
+    async def fake_with(self, fn):
+        return await fn(object())
+
+    async def fake_download(session, project_id, scene_id, *, out_dir):
+        seen["out_dir"] = out_dir
+        return {"scene_id": scene_id, "path": str(out_dir / "film.mp4")}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.scenes_mod, "download", fake_download)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        arguments = {"project_id": "P", "scene_id": "S", "out_dir": str(tmp_path / "out" / "films")}
+        return await s.call_tool("scene_download", arguments)
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])[0]
+    assert seen["out_dir"] == tmp_path / "out" / "films"
