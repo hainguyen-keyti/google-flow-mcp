@@ -62,6 +62,14 @@ def pick_output(fresh: list[dict[str, Any]], prompt: str) -> dict[str, Any] | No
     return max(videos, key=lambda r: r.get("created") or 0)
 
 
+def matching_outputs(fresh: list[dict[str, Any]], prompt: str) -> list[dict[str, Any]]:
+    """The new videos carrying the job's prompt; a record Flow prefixes with the chips' names still matches."""
+    needle = prompt.strip()[:40].lower()
+    return [
+        r for r in fresh if r.get("kind") == "video" and needle and needle in (r.get("prompt") or "").lower()
+    ]
+
+
 async def _click_option(page: Any, label: str) -> bool:
     option = (
         page.locator("[role=menuitem], [role=option], .cdk-overlay-pane button")
@@ -318,6 +326,13 @@ async def attach_character(session: FlowSession, name: str) -> bool:
     return True
 
 
+_LEFT_JS = """() => ({
+  mentions: document.querySelectorAll('flow-prompt-box .mention-chip').length,
+  text: [...document.querySelectorAll("flow-prompt-box [contenteditable='true']")]
+    .map(e => e.innerText || '').join('').trim(),
+})"""
+
+
 async def _submit(
     session: FlowSession,
     project_id: str,
@@ -325,27 +340,38 @@ async def _submit(
     prompt: str,
     setup,
     kind: str,
-    job_id: str,
+    job_id: str | None,
     expected_credits: int,
     out_dir: Path,
     aspect: str = "9:16",
     mode: str = "Ingredients",
     wait: float = 300.0,
+    dry_run: bool = False,
+    watch: Any = None,
+    strict_output: bool = False,
 ) -> dict[str, Any]:
-    """The one money path: every mode goes through the same price guard, single click and ledger."""
+    """The one money path: every mode goes through the same price guard, single click and ledger.
+
+    dry_run stops once the price is read: no balance read, no ledger row, no click, and the composer is emptied again.
+    watch hears every request of the click window and its report lands in the outcome row. strict_output takes only
+    a new video carrying the prompt and never picks between two. Whatever setup returns joins the intent row.
+    """
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
-    if any(r.get("status") == "done" for r in ledger.rows(job_id)):
-        raise gen.AlreadySubmitted(f"job {job_id} is already done; delete its output to redo it")
-    rows, _ = await snapshot(session, project_id)
-    before = {r["workflow_id"] for r in rows}
-    credits_before = (await reader.credits(session))["balance"]
+    before: set[str] = set()
+    credits_before = None
+    if not dry_run:
+        if any(r.get("status") == "done" for r in ledger.rows(job_id)):
+            raise gen.AlreadySubmitted(f"job {job_id} is already done; delete its output to redo it")
+        rows, _ = await snapshot(session, project_id)
+        before = {r["workflow_id"] for r in rows}
+        credits_before = (await reader.credits(session))["balance"]
 
     await agent.set_mode(session, project_id, False)
     await session.goto(session.project_url(project_id), ready=PROJECT_READY)
     await session.page.wait_for_timeout(2_500)
     left_over = await clear_prompt(session)
     settings = await configure(session, mode=mode, aspect=aspect, label="pre")
-    await setup(session)
+    extra = await setup(session) or {}
     box = session.page.locator("flow-prompt-box [contenteditable='true']").first
     landed = await _type_prompt(session.page, box, prompt)
     if not landed:
@@ -354,6 +380,17 @@ async def _submit(
         )
 
     confirm = await configure(session, mode=mode, aspect=aspect, label="confirm")
+    if dry_run:
+        await clear_prompt(session)
+        return {
+            "dry_run": True,
+            "kind": kind,
+            "quoted_credits": confirm["price"],
+            "expected_credits": expected_credits,
+            "price_ok": confirm["price"] == expected_credits,
+            "composer_left": await session.page.evaluate(_LEFT_JS),
+            **extra,
+        }
     ensure_price(confirm["price"], expected_credits)
     start = session.page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
     ledger.append(
@@ -366,19 +403,32 @@ async def _submit(
         credits_before=credits_before,
         left_over=left_over,
         prompt_landed=landed,
+        **extra,
     )
-    frames = await clips._await_submit(session, lambda: start.click(timeout=8_000))
+    if watch is not None:
+        session.page.on("request", watch.on_request)
+    try:
+        frames = await clips._await_submit(session, lambda: start.click(timeout=8_000))
+    finally:
+        if watch is not None:
+            session.page.remove_listener("request", watch.on_request)
     notice = await _notice(session.page)
     # Flow can take the click, fire the rpcids, create nothing and charge nothing; the only way to see
     # why is to look at the screen while the refusal is still on it (measured 2026-09-13 on tryon2-04).
     await session.page.screenshot(path=str(out_dir / f"{job_id}_submitted.png"))
 
-    output, fresh = None, []
+    output, fresh, candidates = None, [], []
     deadline = asyncio.get_running_loop().time() + wait
     while True:
         rows, _ = await snapshot(session, project_id)
         fresh = clips.new_records(before, rows)
-        output = pick_output(fresh, prompt)
+        if strict_output:
+            candidates = matching_outputs(fresh, prompt)
+            output = candidates[0] if len(candidates) == 1 else None
+            if len(candidates) > 1:
+                break
+        else:
+            output = pick_output(fresh, prompt)
         if output is not None and clips.is_done(output):
             break
         if asyncio.get_running_loop().time() >= deadline:
@@ -389,7 +439,9 @@ async def _submit(
     path = None
     if output is not None and clips.is_done(output):
         path = str(await fetch_720(session, output, out_dir / job_id))
-    status = "done" if path else "failed"
+    ambiguous = strict_output and len(candidates) > 1
+    checked = {"body_check": watch.report()} if watch is not None else {}
+    status = "done" if path else "unknown" if ambiguous else "failed"
     ledger.append(
         job_id,
         status,
@@ -400,7 +452,14 @@ async def _submit(
         spent=credits_before - credits_after,
         rpcids=sorted(frames),
         notice=notice or (await _notice(session.page)),
+        **checked,
+        **({"candidates": [c["id"] for c in candidates]} if ambiguous else {}),
     )
+    if ambiguous:
+        raise RuntimeError(
+            f"{job_id}: {len(candidates)} new records carry this prompt ({[c['id'] for c in candidates]}), so "
+            f"none is taken as this job's clip; spent {credits_before - credits_after} credits; check flow_media"
+        )
     if not path:
         raise RuntimeError(
             f"{job_id}: nothing was generated within {wait:.0f}s, spent "
@@ -416,6 +475,8 @@ async def _submit(
         "credits_before": credits_before,
         "credits_after": credits_after,
         "spent": credits_before - credits_after,
+        **extra,
+        **checked,
     }
 
 
