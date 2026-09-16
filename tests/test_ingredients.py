@@ -174,12 +174,15 @@ class _MentionPage:
     """The @ picker as measured on 2026-09-16: options only once '@' is typed, no id on them; a click commits the
     active option (the first one to begin with) and only activates any other, which 'Add to prompt' then commits."""
 
-    def __init__(self, options, *, shows_after_ms=0, chips=(), confirms=1, active_sticks=False):
+    def __init__(
+        self, options, *, shows_after_ms=0, chips=(), confirms=1, active_sticks=False, entity_after_ms=0
+    ):
         self.options = options
         self.shows_after_ms = shows_after_ms
         self.chips = [dict(chip) for chip in chips]
         self.confirms = confirms
         self.active_sticks = active_sticks
+        self.entity_after_ms = entity_after_ms
         self.active = 0
         self.closed = False
         self.clicked = []
@@ -194,8 +197,15 @@ class _MentionPage:
     def commit(self, index):
         chip = self.options[index].get("chip")
         if chip is not None:
-            self.chips.append(dict(chip))
+            self.chips.append({**chip, "committed_at": self.clock})
         self.closed = True
+
+    def chip_view(self, chip):
+        # L2 run 3 (2026-09-16): a character chip lands with its data-mention-id and fills data-entity-id later.
+        view = {key: value for key, value in chip.items() if key != "committed_at"}
+        if "committed_at" in chip and self.clock < chip["committed_at"] + self.entity_after_ms:
+            view["entity"] = ""
+        return view
 
     async def wait_for_timeout(self, ms):
         self.clock += ms
@@ -219,7 +229,7 @@ class _MentionPage:
                 for index, option in enumerate(self.shown())
             ]
         if script == ingredients._CHIPS_JS:
-            return [dict(chip) for chip in self.chips]
+            return [self.chip_view(chip) for chip in self.chips]
         raise AssertionError(f"unexpected script {script[:40]!r}")
 
 
@@ -335,6 +345,18 @@ def test_attach_judges_only_the_chip_its_own_click_added():
     earlier = _chip("entity", OTHER, OTHER, text="Lan")
     page = _MentionPage([_option("Thu", "Character", _chip("entity", ENTITY, ENTITY))], chips=[earlier])
     assert asyncio.run(ingredients.attach(page, THU))["id"] == ENTITY
+
+
+def test_attach_waits_for_a_character_chip_to_carry_its_entity_id_before_judging_it():
+    page = _MentionPage([_option("Thu", "Character", _chip("entity", ENTITY, ENTITY))], entity_after_ms=3_000)
+    assert asyncio.run(ingredients.attach(page, THU)) == {"kind": "entity", "id": ENTITY, "text": "Thu"}
+
+
+def test_attach_refuses_a_character_chip_that_never_carries_its_entity_id():
+    page = _MentionPage([_option("Thu", "Character", _chip("entity", ENTITY, ENTITY))], entity_after_ms=10**9)
+    with pytest.raises(LookupError, match="refusing"):
+        asyncio.run(ingredients.attach(page, THU))
+    assert page.clock <= ingredients.OPTION_WAIT_MS + 3 * ingredients.CHIP_WAIT_MS
 
 
 def test_attach_refuses_a_click_that_adds_no_chip():

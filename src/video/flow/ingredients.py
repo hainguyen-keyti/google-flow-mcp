@@ -172,6 +172,14 @@ def _is(option: dict[str, Any], reference: Reference) -> bool:
     )
 
 
+def _added(before: list[dict[str, str]], after: list[dict[str, str]]) -> list[dict[str, str]]:
+    added = list(after)
+    for chip in before:
+        if chip in added:
+            added.remove(chip)
+    return added
+
+
 async def _chips_after(page: Any, before: list[dict[str, str]], wait_ms: int) -> list[dict[str, str]]:
     after = await chips_on(page)
     waited = 0
@@ -233,10 +241,19 @@ async def attach(page: Any, reference: Reference) -> dict[str, str]:
             )
         await confirm.nth(visible[0]).click(timeout=8_000)
         after = await _chips_after(page, before, CHIP_WAIT_MS)
-    added = list(after)
-    for chip in before:
-        if chip in added:
-            added.remove(chip)
+    added = _added(before, after)
+    # L2 run 3 (2026-09-16): a character chip landed with its data-mention-id while data-entity-id was still empty,
+    # and T1 read it filled 2.5 s after the click; wait for it rather than judge a chip still being built.
+    waited = 0
+    while (
+        reference.kind == "entity"
+        and len(added) == 1
+        and not added[0].get("entity")
+        and waited < CHIP_WAIT_MS
+    ):
+        await page.wait_for_timeout(500)
+        waited += 500
+        added = _added(before, await chips_on(page))
     chip = added[0] if len(added) == 1 else None
     if (
         chip is None
