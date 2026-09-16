@@ -23,6 +23,9 @@ TOOLBAR_MIN = 20
 TOOLBAR_WAIT_MS = 15_000
 THUMBS = "flow-scene-timeline video, flow-scene-timeline img"
 SAVE_WAIT_MS = 20_000
+# Measured 2026-09-16: a scene film lands within seconds of the click. The editor's 600 s, copied at first, turned one
+# click that fired no download at all into a ten minute hang.
+DOWNLOAD_WAIT_MS = 180_000
 OVERLAY = ".cdk-overlay-pane button, [role=dialog] button"
 # Add clip's menu offers Extend (Veo 3.1 - Lite), 10 credits, right next to the item this driver wants, and the same
 # page carries Start generation. "generation" is listed on its own because "generate" is not a substring of it, which
@@ -301,7 +304,7 @@ async def download(session: FlowSession, project_id: str, scene_id: str, *, out_
     await _wait_until_it_holds_a_clip(page, scene_id, "there is no clip on this scene's timeline to download")
     # Same as Add clip: the label is the aria-label, the text is just the ligature "download".
     button = page.get_by_role("button", name=re.compile("Download scene", re.IGNORECASE))
-    async with page.expect_download(timeout=600_000) as info:
+    async with page.expect_download(timeout=DOWNLOAD_WAIT_MS) as info:
         await _click_one(page, button, "the Download scene button")
     handed = await info.value
     # Stamped, because downloading the same scene again after adding a clip is the normal way to work and a name

@@ -1493,15 +1493,22 @@ def test_a_scene_download_out_dir_outside_the_out_folder_is_refused_before_a_bro
     assert reached == []
 
 
-def test_a_scene_download_retries_once_when_the_browser_dies_as_the_film_lands(monkeypatch, tmp_path):
-    # Measured three times on 2026-09-16: the page can be gone by the time save_as runs. The download changes nothing,
-    # so a second session is safe; a different failure must still come straight out.
+@pytest.mark.parametrize(
+    "first_failure",
+    [
+        "Download.save_as: Target page, context or browser has been closed",
+        'Timeout 180000ms exceeded while waiting for event "download"',
+    ],
+)
+def test_a_scene_download_retries_once_when_the_film_never_lands(monkeypatch, tmp_path, first_failure):
+    # Both measured on 2026-09-16: the page can be gone by the time save_as runs, and a click can fire no download at
+    # all. The download changes nothing, so a second session is safe; a different failure must still come straight out.
     sessions = []
 
     async def fake_with(self, fn):
         sessions.append(len(sessions))
         if len(sessions) == 1:
-            raise RuntimeError("Download.save_as: Target page, context or browser has been closed")
+            raise RuntimeError(first_failure)
         return await fn(object())
 
     async def fake_download(session, project_id, scene_id, *, out_dir):
