@@ -666,6 +666,7 @@ class _ScenePage:
         title_boxes=1,
         stray_boxes=0,
         label_lag_ms=0,
+        clip_button_after=0,
     ):
         self.titles = list(titles)
         self.title_boxes = title_boxes
@@ -687,6 +688,9 @@ class _ScenePage:
         self.overlay = None
         self.toolbar = list(TOOLBAR if toolbar is None else toolbar)
         self.builds_after = builds_after
+        # The timeline's own button arrives after the rest of the toolbar: live run 2026-09-16, a scene that already
+        # held a clip crossed the button count while Add clip was still missing, and the driver read 0 and gave up.
+        self.clip_button_after = clip_button_after
         self.elapsed_ms = 0
         self.clicked = []
         self.keys = []
@@ -709,7 +713,11 @@ class _ScenePage:
         if kind == "builder":
             return [("", self.duration_text())]
         if kind == "toolbar":
-            return self.toolbar if self.elapsed_ms >= self.builds_after else self.toolbar[:7]
+            if self.elapsed_ms < self.builds_after:
+                return self.toolbar[:7]
+            if self.elapsed_ms < self.clip_button_after:
+                return [pair for pair in self.toolbar if "Add clip" not in pair[0]]
+            return self.toolbar
         if kind == "overlay":
             # Overlay items carry no aria-label, only their own text, ligature included.
             if self.overlay == "menu":
@@ -907,6 +915,21 @@ def test_add_clip_waits_for_the_toolbar_instead_of_judging_a_half_built_page(mon
 
     assert page.elapsed_ms >= 3_000
     assert page.added == ["Model sailboat on wooden desk"]
+
+
+def test_add_clip_waits_for_a_control_that_arrives_after_the_rest_of_the_toolbar(monkeypatch):
+    # Live run 2026-09-16: on a scene that already held a clip the page crossed the button count while the timeline's
+    # own Add clip button was still missing, and the driver read 0 matches and gave up. Playwright's click waits for
+    # an element; count() does not, so the wait has to be here.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], clips=1, clip_button_after=4_000)
+
+    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert page.added == ["Model sailboat on wooden desk"]
+    assert result["changed"] is True
+    assert page.elapsed_ms >= 4_000
 
 
 def test_add_clip_gives_up_when_the_scene_page_never_finishes_building(monkeypatch):

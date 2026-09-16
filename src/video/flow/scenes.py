@@ -21,6 +21,7 @@ BUILDER = "flow-scene-builder"
 TILE_WAIT_MS = 15_000
 TOOLBAR_MIN = 20
 TOOLBAR_WAIT_MS = 15_000
+CONTROL_WAIT_MS = 10_000
 SAVE_WAIT_MS = 20_000
 # The Total duration label was measured still reading the old value right after a clip landed, so an add waits for it
 # to move. It replaces a thumbnail count: a cold page rebuilds no thumbnails at all, so that count read 0 then 8 for
@@ -192,16 +193,29 @@ async def _label_of(element: Any) -> str:
     return " ".join(part for part in (aria, text) if part)
 
 
+async def _one_of(page: Any, found: Any, complaint: str) -> Any:
+    """Wait for exactly one match, then hand it over, or refuse rather than guess between several.
+
+    Playwright's click waits for its element; count() does not, it is one query with no retry. These controls arrive
+    in stages: measured 2026-09-16, a scene that already held a clip crossed the toolbar count while the timeline's
+    own Add clip button was still missing, and a driver that only counted read 0 and gave up.
+    """
+    waited = 0
+    while (matching := await found.count()) != 1:
+        if waited >= CONTROL_WAIT_MS:
+            raise LookupError(complaint.replace("{count}", str(matching)))
+        await page.wait_for_timeout(1_000)
+        waited += 1_000
+    return found.first
+
+
 async def _click_one(page: Any, found: Any, what: str, *, guard_paid: bool = True) -> str:
     """Click the single control that matches, and never one that spends: paid actions sit right beside these.
 
     `guard_paid` is off for the media rows of the picker: a row is a clip, not a control, and its label is a title
     the owner chose, so refusing "robot generates a sandwich" as a spender was both wrong and unavoidable.
     """
-    matching = await found.count()
-    if matching != 1:
-        raise LookupError(f"{matching} controls match {what}; not guessing")
-    element = found.first
+    element = await _one_of(page, found, "{count} controls match " + what + "; not guessing")
     label = await _label_of(element)
     if guard_paid and any(word in label.lower() for word in PAID_WORDS):
         raise RuntimeError(f"refusing to click {label!r} for {what}: that control spends credits")
@@ -216,11 +230,11 @@ async def _title_box(page: Any) -> Any:
     composer's prompt box is not one. Typing into `.first` of a wider selector would be a guess on a page whose
     buttons include Start generation.
     """
-    box = page.locator(TITLE_BOX)
-    matching = await box.count()
-    if matching != 1:
-        raise LookupError(f"{matching} editable titles on the page; not guessing which one to type into")
-    return box.first
+    return await _one_of(
+        page,
+        page.locator(TITLE_BOX),
+        "{count} editable titles on the page; not guessing which one to type into",
+    )
 
 
 async def rename(session: FlowSession, project_id: str, scene_id: str, title: str) -> dict[str, Any]:
