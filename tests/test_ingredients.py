@@ -1693,6 +1693,40 @@ def test_flow_replies_credit_this_job_only_with_the_code_paired_with_its_own_id(
     )
 
 
+def test_flow_replies_redact_a_signed_query_before_cutting_the_excerpt_through_it():
+    # gflow's rule needs "signature=" in the token, so a cut landing inside it would leave the value behind.
+    for size in range(400):
+        payload = [[SIGNED_URL + "&x=" + ("k." * 200)[:size], JOB_MEDIA]]
+        text = composer._LONG_TOKEN_RE.sub("<token>", json.dumps(payload))
+        if text.find(JOB_MEDIA) - 150 == text.find("Signature=") + 6:
+            break
+    else:
+        raise AssertionError("no padding puts the excerpt's start inside the signed query")
+    excerpt = _judged([SUBMIT_REPLY, _FlowReply("Kp2Wfd", payload)])["named_by"]["Kp2Wfd"]
+    assert JOB_MEDIA in excerpt and "MOP4fXq9Tz" not in excerpt
+
+
+def test_flow_replies_cut_the_excerpt_around_the_job_id_wherever_it_sits():
+    naming = _FlowReply("Kp2Wfd", [["n" * 30] * 40 + [JOB_MEDIA]])
+    assert JOB_MEDIA in _judged([SUBMIT_REPLY, naming])["named_by"]["Kp2Wfd"]
+
+
+def test_flow_replies_credit_codes_by_the_ids_beside_them():
+    notice = _FlowReply(
+        "Xq9Tzb",
+        [
+            [JOB_WORKFLOW, ["PUBLIC_ERROR_UNSAFE_FACE"]],
+            [f"workflow {JOB_WORKFLOW} stopped: PUBLIC_ERROR_UNSAFE_GENERATION"],
+            [JOB_WORKFLOW, f"{OTHER_WORKFLOW}: PUBLIC_ERROR_UNSAFE_CONTENT"],
+            ["PUBLIC_ERROR_UNSAFE_IDENTITY", FLOW_PROJECT],
+            ["note", OTHER_WORKFLOW],
+        ],
+    )
+    flow = _judged([SUBMIT_REPLY, notice])
+    assert flow["reasons"] == ["PUBLIC_ERROR_UNSAFE_FACE", "PUBLIC_ERROR_UNSAFE_GENERATION"]
+    assert flow["reasons_elsewhere"] == ["PUBLIC_ERROR_UNSAFE_CONTENT", "PUBLIC_ERROR_UNSAFE_IDENTITY"]
+
+
 def test_flow_replies_call_any_last_status_outside_the_measured_ones_unmeasured():
     # Re-review H3 (2026-09-17): statuses 6, 4, 5 read "last reported status 5 ... after unmeasured status 4".
     said = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(4), _status_reply(5)]))
