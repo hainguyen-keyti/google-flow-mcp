@@ -1,4 +1,4 @@
-# Test tay MCP `video`: 29 tool, có giá và có rào chắn
+# Test tay MCP `video`: 32 tool, có giá và có rào chắn
 
 Hướng dẫn để chủ repo tự test, hoặc giao cho một agent khác gọi qua MCP. Mọi hình dạng kết quả dưới đây là
 **đo thật ngày 2026-09-14 và 2026-09-15**, không phải suy từ code.
@@ -38,7 +38,7 @@ Tầng 0 đỏ thì dừng, đừng test tay tiếp: lỗi nằm ở tầng dư�
 **`project_delete` xoá vĩnh viễn cả clip, ingredient và prompt.** Đọc lại id hai lần trước khi gọi. Không bao
 giờ dán id của project thật vào tool này.
 
-## 3. Bảng 29 tool
+## 3. Bảng 32 tool
 
 Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi project; nhóm C chỉ làm trong project nháp.
 
@@ -73,6 +73,9 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `scene_create` | `project_id`, `title` | trả dict có `scene_id` |
 | `scene_delete` | `project_id`, `scene_id` | là "move to trash", scene vẫn còn trong `scene_list(include_trashed=true)`; lấy lại bằng `scene_restore`. Tile trên grid không mang scene id nên tool chờ grid hiện đủ một tile cho mỗi scene đang hoạt động (tối đa 15 s) rồi mới tìm theo tên đúng nguyên: tên rỗng hay chỉ ký tự vô hình, hai scene cùng tên, hay số tile không khớp, thì từ chối; bấm xong đọc lại listing, scene khác bị đổi cờ thì báo tên nó |
 | `scene_restore` | `project_id`, `scene_id` | lấy scene ra khỏi thùng rác, đọc lại listing rồi trả `{"scene_id", "trashed": false, "rpcids", "active"}`. Tile trong thùng rác không mang scene id nên tool chờ thùng rác hiện đủ một tile cho mỗi scene đã xoá (tối đa 15 s) rồi mới tìm theo tên đúng nguyên, và **từ chối khi tên rỗng hay chỉ ký tự vô hình, khi tên có ở hơn một tile**, hay khi số tile không khớp số scene đã xoá |
+| `scene_rename` | `project_id`, `scene_id`, `title` | đổi tên scene rồi đọc LẠI listing để xác nhận. Trang scene có đúng một ô sửa được trong header (đo 2026-09-16) và tool đòi đúng một ô đó; tên rỗng hay chỉ ký tự vô hình bị từ chối, vì các tool scene tìm nhau bằng tên |
+| `scene_add_clip` | `project_id`, `scene_id`, `media_id` | đặt một clip của project lên timeline của scene, đây là cách một scene thành phim nhiều cảnh. Picker không mang media id nên tool tra `media_id` ra **title** từ listing rồi khớp đúng nguyên tên; từ chối khi title rỗng, khi media khác trong project trùng title, hay khi picker hiện title đó hơn một lần. Trả `duration_before`, `duration_after`, `changed` đọc từ nhãn `Total duration` của editor. **`changed: false` thường chỉ là nhãn chưa kịp cập nhật, KHÔNG phải add hỏng**: đọc lại phim bằng `scene_download` thay vì thêm lần nữa, vì thêm hai lần là clip vào timeline hai lần |
+| `scene_download` | `project_id`, `scene_id`, `out_dir=None` | tải cả scene thành MỘT phim, không phải một clip: đo 2026-09-16, hai clip 8 s ra một mp4 **16,0 giây**. Scene rỗng bị từ chối, `out_dir` phải nằm trong `out/`. Trang scene KHÔNG có menu chọn chất lượng (khác trang clip), nên muốn 270p/720p/1080p/4k thì dùng `clip_download`. Trả thêm `attempts`: bằng 2 nghĩa là lần đầu trình duyệt chết đúng lúc phim vừa tải và tool lấy lại trong phiên mới |
 | `character_create` | `project_id`, `prompt`, `name`, `personality`, `wait=90` | chân dung vẽ bằng Nano Banana 2, **không tốn credit**. Trả `portrait.workflow_id`, **không phải media id**: lấy media id bằng `flow_characters` |
 | `character_delete` | `project_id`, `entity_id` | xoá vĩnh viễn nhân vật |
 | `flow_upload` | `project_id`, `path` | đường dẫn file trên máy; trả `{file, bytes, rpcids, tiles, media_id, workflow_id, size_bytes, ...}`. `media_id` là id dùng được với `flow_download`. `bytes` là file trên máy, `size_bytes` là bản Flow lưu (Flow nén ảnh lại: PNG 139 KB thành JPEG 5,6 KB). `tiles` đếm tile của view đang mở, không phải số upload |
@@ -92,10 +95,10 @@ thành phần nào tên `ledger.jsonl` (hoa hay thường) hay đã có sẵn l�
 | `gen_t2i`, `gen_i2i` | **0 credit** (nano2) | tính vào quota ảnh theo ngày, không phải credit |
 | `gen_t2v` | **15** khi bỏ trống model (omni-flash 10 s, count 1); **10** với `model="veo-lite"` (8 s) | `count` nhân giá (veo-lite `count=2` là 20); `count` phải 1-4, `aspect` chỉ `9:16` hoặc `16:9` |
 | `gen_r2v` | **12** khi bỏ trống model (omni-flash, luôn 8 s, đo 2026-09-15); **10** với `model="veo-lite"` | host này chỉ cho r2v 8 s: đừng truyền `duration` (truyền 8 cũng không được gửi đi). Số ảnh: omni-flash tối đa 7, veo-lite và veo-fast tối đa 3, veo-quality không nhận ảnh; quá số bị từ chối trước khi tiêu. Flow từ chối ảnh có người mặc đồ lót |
-| `gen_i2v` | **chưa đo** | chưa lần nào thành công: mọi lần thử đều hỏng phía Flow ở bước chọn khung đầu, 0 credit. Đường thay thế là `gen_r2v` |
-| `clip_extend` | **10** | tạo scene mới và chép clip nguồn vào đó |
+| `gen_i2v` | **chưa đo** | chưa lần nào thành công. Lần thứ năm, 2026-09-16 qua MCP, vẫn hỏng y hệt: gflow exit 23 `UiSelectorDriftError`, "the frame picker stayed open 15s after picking", **0 credit**, sổ có dòng `failed` kèm mã lỗi. Đường thay thế là `gen_r2v` |
+| `clip_extend` | **10** | tạo scene mới và chép clip nguồn vào đó (output có `role: copy`). **Chỉ chạy trên clip Veo**: đo 2026-09-16 bằng đối chứng đổi đúng một biến, clip omni-flash làm mục `Extend (Veo 3.1 - Lite)` hiện XÁM nên tool từ chối kèm lời giải thích, clip veo-lite thì chạy ngay |
 | `clip_edit` | **20** | Omni 1.1 Flash, sửa video theo chữ |
-| `agent_send` | **0** ở 3 lần agent không sinh gì | agent tự sinh media thì trả giá của lần sinh đó; hỏi trước khi gọi |
+| `agent_send` | **0** ở 4 lần agent không sinh gì (lần thứ tư qua MCP, 2026-09-16, số dư 193 trước và sau) | agent tự sinh media thì trả giá của lần sinh đó; hỏi trước khi gọi |
 
 ## 4. Prompt sẵn để giao cho agent khác
 

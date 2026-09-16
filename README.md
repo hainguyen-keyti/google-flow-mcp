@@ -153,11 +153,15 @@ mặt, tay và món đồ.
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`). Server
 đang chạy không tự nạp code mới, và phiên đang mở còn giữ mô tả tool cũ: sửa code xong phải mở phiên mới.
 
-29 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
+32 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
 "unmeasured"):
 
 - **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
-  `clip_edit`, `agent_send` (có thể tốn). Cả 6 tool **bắt buộc `job_id`**: job mới thì id mới, gọi lại cùng job
+  `clip_edit`, `agent_send` (có thể tốn). **Cả 6 đã chạy thật qua MCP ngày 2026-09-16**, mỗi tool đúng một lần, số dư
+  kẹp hai đầu: t2v omni-flash 15, t2v veo-lite 10, `clip_edit` 20, `clip_extend` 10, `gen_r2v` 12; `agent_send` một
+  tin nhắn thường **0**; `gen_i2v` vẫn hỏng phía gflow ở bước chọn khung đầu, **0** và có dòng sổ `failed`.
+  **`clip_extend` chỉ chạy trên clip Veo**: trên clip omni-flash, Flow hiện mục `Extend (Veo 3.1 - Lite)` xám và tool
+  nói thẳng điều đó thay vì chờ hết giờ. Cả 6 tool **bắt buộc `job_id`**: job mới thì id mới, gọi lại cùng job
   thì giữ id. Trước khi mở trình duyệt, MCP từ chối `job_id` đã có BẤT KỲ dòng nào (kể cả `opening`) trong mọi file
   `ledger.jsonl` dưới `out/`, kèm lời dặn soát `flow_media` và `flow_credits`, nên gọi lại không bao giờ trả tiền hai
   lần. `job_id` đang chạy ở một lời gọi khác cũng bị từ chối, với lời dặn khác hẳn: chờ lời gọi đó xong rồi gọi lại
@@ -190,7 +194,14 @@ mặt, tay và món đồ.
   scene trong listing (chờ tối đa 15 s; grid đếm scene đang hoạt động, thùng rác đếm scene đã xoá). Từ chối thay vì
   đoán khi: tên rỗng hay chỉ gồm ký tự vô hình sau chuẩn hoá của Playwright, tên có ở hơn một tile, hay số tile không
   bao giờ khớp số scene. Bấm xong, cả hai tool đọc lại listing và gọi tên scene khác nếu cờ thùng rác của nó đổi.
-  Cùng nhóm: `agent_mode`, `flow_upload`.
+  Cùng nhóm: `agent_mode`, `flow_upload`, và ba tool Scenebuilder dưới đây.
+- **Dựng phim trong chính Flow** (miễn phí): `scene_add_clip` đặt một clip của project lên timeline của scene,
+  `scene_download` tải **cả scene thành MỘT phim** (đo 2026-09-16: hai clip 8 s ra một mp4 16,0 giây), `scene_rename`
+  đổi tên. Picker clip không mang media id, chỉ có **title**, nên `scene_add_clip` tra title từ listing rồi khớp đúng
+  nguyên tên và từ chối khi title rỗng, khi media khác trùng title, hay khi picker hiện title đó hơn một lần. Nó trả
+  `duration_before`, `duration_after`, `changed` đọc từ nhãn `Total duration`: **`changed: false` thường chỉ là nhãn
+  chưa kịp cập nhật chứ không phải add hỏng**, nên đọc lại phim bằng `scene_download` thay vì thêm lần nữa. Trang
+  scene không có menu chất lượng, muốn chọn mức thì dùng `clip_download`.
 - **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
   hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
 
@@ -222,7 +233,7 @@ uv run python scripts/acceptance/ledger_integrity.py     # $0, offline, không c
 uv run pytest -q
 ```
 
-Test tay toàn bộ 29 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
+Test tay toàn bộ 32 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
 `docs/mcp-manual-test.md`.
 
 `ledger_integrity.py` canh đúng một luật: **không credit nào rời tài khoản qua clip editor mà không có
