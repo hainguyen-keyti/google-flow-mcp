@@ -209,6 +209,18 @@ class Backend:
     async def scene_restore(self, project_id: str, scene_id: str) -> dict[str, Any]:
         return await self._with(lambda s: scenes_mod.restore(s, project_id, scene_id))
 
+    async def scene_add_clip(self, project_id: str, scene_id: str, media_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.add_clip(s, project_id, scene_id, media_id))
+
+    async def scene_download(
+        self, project_id: str, scene_id: str, out_dir: str | None = None
+    ) -> dict[str, Any]:
+        target = self._editor_out_dir(out_dir)
+        return await self._with(lambda s: scenes_mod.download(s, project_id, scene_id, out_dir=target))
+
+    async def scene_rename(self, project_id: str, scene_id: str, title: str) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.rename(s, project_id, scene_id, title))
+
     async def agent_mode(self, project_id: str, enabled: bool) -> dict[str, Any]:
         return await self._with(lambda s: agent_mod.set_mode(s, project_id, enabled))
 
@@ -564,6 +576,51 @@ async def scene_restore(project_id: str, scene_id: str) -> str:
     _require(project_id, "project_id")
     _require(scene_id, "scene_id")
     return _json(await backend.scene_restore(project_id, scene_id))
+
+
+@server.tool(
+    name="scene_add_clip",
+    description=(
+        "Put one of the project's clips onto a scene's timeline, which is how a scene becomes a film made of "
+        "several clips. The picker rows carry no media id, only the media's title, so the media id is resolved "
+        "to its title through the listing: a media whose title is blank, and a title more than one row shows, "
+        "are refused rather than guessed. The add is confirmed by the timeline growing. Free."
+    ),
+)
+async def scene_add_clip(project_id: str, scene_id: str, media_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    _require(media_id, "media_id")
+    return _json(await backend.scene_add_clip(project_id, scene_id, media_id))
+
+
+@server.tool(
+    name="scene_download",
+    description=(
+        "Download a scene as ONE film, the whole timeline rather than a single clip: two 8 s clips came back as "
+        "one 16.0 s mp4 (measured 2026-09-16). A scene with nothing on its timeline is refused, and out_dir must "
+        "sit inside out/. A scene offers no quality choice, so use clip_download for a single media and its "
+        "270p, 720p, 1080p or 4k renditions. Free."
+    ),
+)
+async def scene_download(project_id: str, scene_id: str, out_dir: str | None = None) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    return _json(await backend.scene_download(project_id, scene_id, out_dir))
+
+
+@server.tool(
+    name="scene_rename",
+    description=(
+        "Rename a scene, confirmed by re-reading the listing. A title that is blank or only invisible characters "
+        "is refused, since the scene tools find a scene by its exact title. Free."
+    ),
+)
+async def scene_rename(project_id: str, scene_id: str, title: str) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    _require(title, "title")
+    return _json(await backend.scene_rename(project_id, scene_id, title))
 
 
 @server.tool(
