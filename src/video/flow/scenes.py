@@ -21,8 +21,11 @@ BUILDER = "flow-scene-builder"
 TILE_WAIT_MS = 15_000
 TOOLBAR_MIN = 20
 TOOLBAR_WAIT_MS = 15_000
-THUMBS = "flow-scene-timeline video, flow-scene-timeline img"
 SAVE_WAIT_MS = 20_000
+# The Total duration label was measured still reading the old value right after a clip landed, so an add waits for it
+# to move. It replaces a thumbnail count: a cold page rebuilds no thumbnails at all, so that count read 0 then 8 for
+# every add after the first, whatever the click did (scoped review 2026-09-16).
+DURATION_WAIT_MS = 20_000
 # Measured 2026-09-16: a scene film lands within seconds of the click. The editor's 600 s, copied at first, turned one
 # click that fired no download at all into a ten minute hang.
 DOWNLOAD_WAIT_MS = 180_000
@@ -273,10 +276,7 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
             "carry no media id, so adding would guess which one"
         )
     await _open_scene(session, project_id, scene_id)
-    # TODO(next session): this is the count the scoped re-review called meaningless, and the owner chose to replace it
-    # with a bounded wait on _total_duration changing, reported and never raised. Left as it was so the tree stays
-    # green while the work pauses; _total_duration above is the helper that replacement needs.
-    before = await page.locator(THUMBS).count()
+    before = await _total_duration(page)
     # By accessible name, not by text: measured 2026-09-16, this button's text is only the ligature "add_2" while
     # "Add clip" lives in its aria-label, so a text match finds nothing at all (live run of scene_build).
     await _click_one(
@@ -300,19 +300,22 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
     frames = await capture(
         session, lambda: _click_one(page, rows, "the picker row", guard_paid=False), settle=6.0
     )
-    after = await page.locator(THUMBS).count()
-    if after <= before:
-        raise RuntimeError(f"add_clip: the timeline still shows {after} thumbnails; nothing was added")
-    # No reload here. A reload in the same session often does not show the clip yet while a later call in a fresh
-    # session downloads the film fine, so the answer it gave was worthless: for every add after the first it said
-    # yes whatever happened, since "Download scene" only reports that the scene holds SOME clip (review 2026-09-16).
-    # What this call can honestly report is that the click landed and the timeline grew; scene_download is the proof.
+    # Reported, never raised on. An add that really landed must not come back looking like a failure, or the agent
+    # adds the same clip again and the film gets it twice (live run 2026-09-16). The film itself, through
+    # scene_download, stays the proof; this only says whether the editor admitted the change while we watched.
+    waited = 0
+    while (after := await _total_duration(page)) == before:
+        if waited >= DURATION_WAIT_MS:
+            break
+        await page.wait_for_timeout(2_000)
+        waited += 2_000
     return {
         "scene_id": scene_id,
         "media_id": media_id,
         "title": title,
-        "thumbnails_before": before,
-        "thumbnails_after": after,
+        "duration_before": before,
+        "duration_after": after,
+        "changed": after != before,
         "rpcids": sorted(frames),
     }
 

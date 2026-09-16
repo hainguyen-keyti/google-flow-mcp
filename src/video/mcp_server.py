@@ -597,9 +597,11 @@ async def scene_restore(project_id: str, scene_id: str) -> str:
         "Put one of the project's clips onto a scene's timeline, which is how a scene becomes a film made of "
         "several clips. The picker carries no media id, only the media's title, so the media id is resolved to "
         "its title through the listing and refused rather than guessed when that title is blank, when another "
-        "media in the project shares it, or when the picker shows it more than once. The add is confirmed by the "
-        "timeline growing; the film itself is the proof, so read it back with scene_download rather than adding "
-        "again, since a second add puts the same clip on the timeline twice. Free."
+        "media in the project shares it, or when the picker shows it more than once. The result carries "
+        "duration_before, duration_after and changed, read off the editor's own Total duration, the one measure of "
+        "a scene that survives a page load. changed=false usually means the label had not caught up yet rather than "
+        "that the add failed, so read the film back with scene_download instead of adding again: a second add puts "
+        "the same clip on the timeline twice. Free."
     ),
 )
 async def scene_add_clip(project_id: str, scene_id: str, media_id: str) -> str:

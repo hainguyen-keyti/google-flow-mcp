@@ -549,7 +549,7 @@ TOOLBAR = [
     ("Settings trigger", "settings"),
 ] + [(f"filler {n}", f"f{n}") for n in range(12)]
 
-THUMBS_PER_CLIP = 8
+CLIP_SECONDS = 8
 
 
 class _Clickable:
@@ -655,7 +655,16 @@ class _Expect:
 
 class _ScenePage:
     def __init__(
-        self, titles, *, clips=0, toolbar=None, builds_after=0, adds=True, saves=True, title_boxes=1
+        self,
+        titles,
+        *,
+        clips=0,
+        toolbar=None,
+        builds_after=0,
+        adds=True,
+        saves=True,
+        title_boxes=1,
+        label_lag_ms=0,
     ):
         self.titles = list(titles)
         self.title_boxes = title_boxes
@@ -663,7 +672,15 @@ class _ScenePage:
         self.adds = adds
         self.saves = saves
         self.saved = clips > 0
-        self.timeline = clips * THUMBS_PER_CLIP
+        # The truth about the scene, and what the page is willing to say about it. Measured 2026-09-16: a freshly
+        # loaded page does NOT rebuild the thumbnail strip (0 images even after 14 s) while the Total duration label
+        # does survive the load, though it can lag behind a click. An earlier version of this fake rebuilt the strip
+        # on construction, which is the opposite of the measurement, and it let a driver that could not tell a new
+        # clip from a strip waking up pass every test.
+        self.clips = clips
+        self.stale_clips = clips
+        self.label_lag_ms = label_lag_ms
+        self.lag_until = 0
         self.overlay = None
         self.toolbar = list(TOOLBAR if toolbar is None else toolbar)
         self.builds_after = builds_after
@@ -674,7 +691,19 @@ class _ScenePage:
         self.downloaded = None
         self.added = []
 
+    def shown_clips(self):
+        return self.clips if self.elapsed_ms >= self.lag_until else self.stale_clips
+
+    def duration_text(self):
+        seconds = self.shown_clips() * CLIP_SECONDS
+        return (
+            "crop_landscape 16:9 volume_up Current time: 00:00:00 skip_previous play_arrow skip_next "
+            f"Total duration: 00:{seconds:02d}:00 fullscreen repeat 00 01 02 add_2 zoom_out zoom_in"
+        )
+
     def labels(self, kind):
+        if kind == "builder":
+            return [("", self.duration_text())]
         if kind == "toolbar":
             return self.toolbar if self.elapsed_ms >= self.builds_after else self.toolbar[:7]
         if kind == "overlay":
@@ -697,20 +726,22 @@ class _ScenePage:
         aria, text = pair
         self.clicked.append(aria or text)
         if kind == "toolbar" and "Add clip" in aria:
-            self.overlay = "menu" if self.timeline else "picker"
+            self.overlay = "menu" if self.clips else "picker"
         elif kind == "overlay" and "Add clip" in text:
             self.overlay = "picker"
         elif kind == "overlay" and text in self.titles:
             self.added.append(text)
             if self.adds:
-                self.timeline += THUMBS_PER_CLIP
+                self.stale_clips = self.clips
+                self.clips += 1
+                self.lag_until = self.elapsed_ms + self.label_lag_ms
                 self.saved = self.saves
             self.overlay = None
         elif kind == "toolbar" and "Download scene" in aria:
             self.downloaded = "pB-probe_20260916.mp4"
 
     def download_ready(self):
-        return bool(self.timeline and self.saved)
+        return bool(self.clips and self.saved)
 
     def get_by_role(self, role, name=None):
         assert role == "button"
@@ -719,10 +750,10 @@ class _ScenePage:
     def locator(self, selector, has=None):
         if selector == "button":
             return _Matches(self, "toolbar")
+        if selector == scenes.BUILDER:
+            return _Matches(self, "builder")
         if "overlay" in selector or "dialog" in selector:
             return _Matches(self, "overlay")
-        if "flow-scene-timeline" in selector:
-            return _Timeline(self)
         if "flow-editable-text" in selector:
             return _Matches(self, "title_box")
         raise AssertionError(f"unexpected selector {selector!r}")
@@ -739,14 +770,6 @@ class _ScenePage:
 
     async def wait_for_timeout(self, ms):
         self.elapsed_ms += ms
-
-
-class _Timeline:
-    def __init__(self, page):
-        self.page = page
-
-    async def count(self):
-        return self.page.timeline
 
 
 class _SceneSession:
@@ -792,7 +815,8 @@ def test_add_clip_adds_the_media_whose_title_is_exactly_the_one_asked_for(monkey
     result = asyncio.run(scenes.add_clip(session, PROJECT, "scene-1", SCENE))
 
     assert page.added == ["Model sailboat on wooden desk"]
-    assert result["thumbnails_before"] == 0 and result["thumbnails_after"] == THUMBS_PER_CLIP
+    assert result["duration_before"] == "00:00:00" and result["duration_after"] == "00:08:00"
+    assert result["changed"] is True
     # The scene it was asked about, not the project page and not another scene.
     assert session.urls == [f"{FlowSession.project_url(PROJECT)}/scene/scene-1"]
 
@@ -894,14 +918,44 @@ def test_add_clip_never_clicks_the_paid_item_of_the_add_clip_menu(monkeypatch):
     assert not any("Extend" in label for label in page.clicked)
 
 
-def test_add_clip_says_so_when_the_click_landed_but_the_timeline_did_not_grow(monkeypatch):
-    # The picker closes itself either way, so a click that changed nothing looks exactly like a good one.
+def test_add_clip_reports_a_duration_that_never_changed_instead_of_failing(monkeypatch):
+    # The picker closes itself either way, so a click that changed nothing looks exactly like a good one. Report it
+    # and let the agent read the film back: raising after a click that DID land makes it add the clip twice.
     media = [_media(SCENE, "Model sailboat on wooden desk")]
     _scene_answers(monkeypatch, media)
     page = _ScenePage(["Model sailboat on wooden desk"], adds=False)
 
-    with pytest.raises(RuntimeError, match="nothing was added"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert result["changed"] is False
+    assert result["duration_before"] == result["duration_after"] == "00:00:00"
+    assert page.added == ["Model sailboat on wooden desk"]
+
+
+def test_add_clip_on_a_scene_that_already_holds_one_is_judged_by_the_duration(monkeypatch):
+    # Scoped re-review 2026-09-16: the old post-check counted timeline thumbnails, which a cold page never restores,
+    # so for every add after the first it read 0 then 8 and called a click that added nothing a success.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], clips=1, adds=False)
+
+    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert result["changed"] is False
+    assert result["duration_before"] == result["duration_after"] == "00:08:00"
+
+
+def test_add_clip_waits_for_a_duration_label_that_lags_behind_the_click(monkeypatch):
+    # Measured 2026-09-16: the label was still reading 00:08:00 right after a second clip landed.
+    media = [_media(SCENE, "Model sailboat on wooden desk")]
+    _scene_answers(monkeypatch, media)
+    page = _ScenePage(["Model sailboat on wooden desk"], clips=1, label_lag_ms=6_000)
+
+    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
+
+    assert result["duration_before"] == "00:08:00" and result["duration_after"] == "00:16:00"
+    assert result["changed"] is True
+    assert page.elapsed_ms >= 6_000
 
 
 def test_add_clip_does_not_reload_to_confirm_an_add_that_already_landed(monkeypatch):
