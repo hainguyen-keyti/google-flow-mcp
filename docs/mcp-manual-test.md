@@ -1,7 +1,8 @@
-# Test tay MCP `video`: 32 tool, có giá và có rào chắn
+# Test tay MCP `video`: 33 tool, có giá và có rào chắn
 
 Hướng dẫn để chủ repo tự test, hoặc giao cho một agent khác gọi qua MCP. Mọi hình dạng kết quả dưới đây là
-**đo thật ngày 2026-09-14 và 2026-09-15**, không phải suy từ code.
+**đo thật ngày 2026-09-14 và 2026-09-15** (riêng `gen_character` và `character_create` nhận ảnh: 2026-09-16 và
+2026-09-17), không phải suy từ code.
 
 ## 0. Trước khi bắt đầu
 
@@ -23,7 +24,7 @@ Tầng 0 đỏ thì dừng, đừng test tay tiếp: lỗi nằm ở tầng dư�
 
 | Lệnh | Kỳ vọng |
 |---|---|
-| `uv run pytest -q` | `308 passed` |
+| `uv run pytest -q` | mọi test xanh, không `failed` |
 | `uv run python scripts/acceptance/ledger_integrity.py` | `rows=6 pass=6 fail=0`, offline, không mở trình duyệt |
 | `uv run python scripts/acceptance/mcp_smoke.py` | `rows=12 pass=12 fail=0`, 2 đến 3 phút, gọi THẬT 8 tool đọc qua MCP |
 | `uv run python scripts/acceptance/flow_coverage.py --project <id> --character` | ma trận CLI; tự tạo rồi tự xoá project "acceptance probe" |
@@ -38,7 +39,7 @@ Tầng 0 đỏ thì dừng, đừng test tay tiếp: lỗi nằm ở tầng dư�
 **`project_delete` xoá vĩnh viễn cả clip, ingredient và prompt.** Đọc lại id hai lần trước khi gọi. Không bao
 giờ dán id của project thật vào tool này.
 
-## 3. Bảng 32 tool
+## 3. Bảng 33 tool
 
 Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi project; nhóm C chỉ làm trong project nháp.
 
@@ -76,14 +77,14 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `scene_rename` | `project_id`, `scene_id`, `title` | đổi tên scene rồi đọc LẠI listing để xác nhận. Trang scene có đúng một ô sửa được trong header (đo 2026-09-16) và tool đòi đúng một ô đó; tên rỗng hay chỉ ký tự vô hình bị từ chối, vì các tool scene tìm nhau bằng tên |
 | `scene_add_clip` | `project_id`, `scene_id`, `media_id` | đặt một clip của project lên timeline của scene, đây là cách một scene thành phim nhiều cảnh. Picker không mang media id nên tool tra `media_id` ra **title** từ listing rồi khớp đúng nguyên tên; từ chối khi title rỗng, khi media khác trong project trùng title, hay khi picker hiện title đó hơn một lần. Trả `duration_before`, `duration_after`, `changed` đọc từ nhãn `Total duration` của editor. **`changed: false` thường chỉ là nhãn chưa kịp cập nhật, KHÔNG phải add hỏng**: đọc lại phim bằng `scene_download` thay vì thêm lần nữa, vì thêm hai lần là clip vào timeline hai lần |
 | `scene_download` | `project_id`, `scene_id`, `out_dir=None` | tải cả scene thành MỘT phim, không phải một clip: đo 2026-09-16, hai clip 8 s ra một mp4 **16,0 giây**. Scene rỗng bị từ chối, `out_dir` phải nằm trong `out/`. Trang scene KHÔNG có menu chọn chất lượng (khác trang clip), nên muốn 270p/720p/1080p/4k thì dùng `clip_download`. Trả thêm `attempts`: bằng 2 nghĩa là lần đầu trình duyệt chết đúng lúc phim vừa tải và tool lấy lại trong phiên mới |
-| `character_create` | `project_id`, `prompt`, `name`, `personality`, `wait=90` | chân dung vẽ bằng Nano Banana 2, **không tốn credit**. Trả `portrait.workflow_id`, **không phải media id**: lấy media id bằng `flow_characters` |
+| `character_create` | `project_id`, `prompt` HOẶC `image`, `name`, `personality`, `wait=90` | **không tốn credit**, nhận đúng một trong hai: `prompt` thì chân dung vẽ bằng Nano Banana 2; `image` là đường dẫn ảnh trên máy (png, jpg, jpeg, webp), tải qua nút Upload của trang New character (đo 2026-09-16: ảnh cắt cận mặt được nhận; Flow từng im lặng từ chối ảnh người mặc đồ ren, tool báo "created no character"). Trả `portrait.workflow_id`, **không phải media id**: lấy media id bằng `flow_characters` |
 | `character_delete` | `project_id`, `entity_id` | xoá vĩnh viễn nhân vật |
 | `flow_upload` | `project_id`, `path` | đường dẫn file trên máy; trả `{file, bytes, rpcids, tiles, media_id, workflow_id, size_bytes, ...}`. `media_id` là id dùng được với `flow_download`. `bytes` là file trên máy, `size_bytes` là bản Flow lưu (Flow nén ảnh lại: PNG 139 KB thành JPEG 5,6 KB). `tiles` đếm tile của view đang mở, không phải số upload |
 | `agent_mode` | `project_id`, `enabled` | bật xong **nhớ tắt**: bật thì Flow giấu chip và nút settings của composer |
 
 ### D. Tiêu credit, chỉ chạy khi bạn cố ý
 
-Cả 6 tool tốn credit **bắt buộc `job_id`**. `job_id` đã có bất kỳ dòng nào trong mọi `ledger.jsonl` dưới `out/` (tên
+Cả 7 tool tốn credit **bắt buộc `job_id`** (riêng `gen_character` với `dry_run=true` thì không, vì không bấm gì). `job_id` đã có bất kỳ dòng nào trong mọi `ledger.jsonl` dưới `out/` (tên
 file hoa hay thường) bị từ chối ngay, trước khi mở trình duyệt; `job_id` mang chữ giống bí mật phiên (tên cookie hay
 header `Authorization`) cũng bị từ chối; `job_id` đang chạy ở lời gọi khác cũng bị từ chối, lúc đó phải chờ rồi gọi
 lại với CÙNG `job_id`, không đổi id mới. `clip_edit`, `clip_extend`, `agent_send` từ chối prompt có ký tự xuống dòng;
@@ -95,6 +96,7 @@ thành phần nào tên `ledger.jsonl` (hoa hay thường) hay đã có sẵn l�
 | `gen_t2i`, `gen_i2i` | **0 credit** (nano2) | tính vào quota ảnh theo ngày, không phải credit |
 | `gen_t2v` | **15** khi bỏ trống model (omni-flash 10 s, count 1); **10** với `model="veo-lite"` (8 s) | `count` nhân giá (veo-lite `count=2` là 20); `count` phải 1-4, `aspect` chỉ `9:16` hoặc `16:9` |
 | `gen_r2v` | **12** khi bỏ trống model (omni-flash, luôn 8 s, đo 2026-09-15); **10** với `model="veo-lite"` | host này chỉ cho r2v 8 s: đừng truyền `duration` (truyền 8 cũng không được gửi đi). Số ảnh: omni-flash tối đa 7, veo-lite và veo-fast tối đa 3, veo-quality không nhận ảnh; quá số bị từ chối trước khi tiêu. Flow từ chối ảnh có người mặc đồ lót |
+| `gen_character` | **12** khi bỏ trống model (omni-flash, 8 s, đo 2026-09-17 qua MCP); **10** với `model="veo-lite"` (đo 2026-09-17); **20** với `model="veo-fast"` theo dòng giá của Flow, chưa tiêu | tham số `project`, `prompt`, `characters` (entity id, ít nhất một), `media_ids` (ảnh đã có trong project), `model`, `aspect` (`9:16` hoặc `16:9`), `dry_run`, `job_id`. **Gọi `dry_run=true` trước**: $0, trả `quoted_credits`, `price_ok`, `chips` (nhân vật mang entity id, ảnh mang WORKFLOW id), `prompt_text`, `composer_left`. Tên nhân vật và tiêu đề ảnh phải là duy nhất trong project, không thì bị từ chối. Lượt thật trả `media_id`, `path`, `spent`, `body_check`. Flow có thể từ chối vì bộ lọc nội dung mà không tính tiền, lý do nằm trong câu lỗi (đo L4: trạng thái 4, `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED` với nhân vật tạo từ ảnh người thật): đừng thử lại cùng đầu vào |
 | `gen_i2v` | **chưa đo** | chưa lần nào thành công. Lần thứ năm, 2026-09-16 qua MCP, vẫn hỏng y hệt: gflow exit 23 `UiSelectorDriftError`, "the frame picker stayed open 15s after picking", **0 credit**, sổ có dòng `failed` kèm mã lỗi. Đường thay thế là `gen_r2v` |
 | `clip_extend` | **10** | tạo scene mới và chép clip nguồn vào đó (output có `role: copy`). **Chỉ chạy trên clip Veo**: đo 2026-09-16 bằng đối chứng đổi đúng một biến, clip omni-flash làm mục `Extend (Veo 3.1 - Lite)` hiện XÁM nên tool từ chối kèm lời giải thích, clip veo-lite thì chạy ngay |
 | `clip_edit` | **20** | Omni 1.1 Flash, sửa video theo chữ |
@@ -110,8 +112,9 @@ Bạn có MCP server "video" điều khiển Google Flow. Hãy test nó và báo
 RÀO CHẮN, không được vi phạm:
 - Chỉ thao tác trong project <ID NHÁP>. Không đụng project nào khác.
 - Không gọi project_delete với bất kỳ id nào khác <ID NHÁP>.
-- Không gọi tool tiêu credit (gen_t2v, gen_i2v, gen_r2v, clip_extend, clip_edit, agent_send) và không gọi
-  clip_download với quality="4k". Nếu thấy cần, hãy DỪNG và hỏi tôi trước.
+- Không gọi tool tiêu credit (gen_t2v, gen_i2v, gen_r2v, gen_character, clip_extend, clip_edit, agent_send) và
+  không gọi clip_download với quality="4k". Riêng gen_character với dry_run=true là miễn phí và được gọi. Nếu thấy
+  cần tiêu tiền, hãy DỪNG và hỏi tôi trước.
 - Nếu tool nào báo Google gắn cờ hoạt động bất thường, DỪNG hẳn: không thử lại, không đăng nhập lại, báo tôi.
 
 Việc cần làm, theo thứ tự, và sau mỗi bước dán nguyên JSON trả về:
@@ -124,6 +127,8 @@ Việc cần làm, theo thứ tự, và sau mỗi bước dán nguyên JSON tr�
 7. flow_upload một file ảnh nhỏ có sẵn trên máy, rồi flow_uploads xem count tăng
 8. agent_mode bật rồi tắt
 9. clip_reconcile cho <ID NHÁP>
+10. character_create với prompt tuỳ bạn và name duy nhất, rồi gen_character với dry_run=true cho nhân vật đó:
+    kiểm quoted_credits là 12, chips có đúng entity id, composer_left rỗng
 
 Cuối cùng: liệt kê tool nào chạy đúng, tool nào sai hoặc báo lỗi, kèm nguyên văn lỗi.
 ```
@@ -151,9 +156,13 @@ Cuối cùng: liệt kê tool nào chạy đúng, tool nào sai hoặc báo lỗ
 - **`clip_download` mặc định lấy bản mới nhất.** Muốn đúng bản của một lần edit thì lấy `workflow_id` từ
   `flow_media(all_versions=true)`.
 - **Xoá scene là soft trash**, không biến mất khỏi listing.
-- **Composer chỉ gắn được một ingredient mỗi prompt.**
+- **Nút thêm ingredient của composer chỉ gắn được một ingredient mỗi prompt.** Gõ `@` thì được nhiều: `gen_character`
+  đã gắn nhân vật cộng ảnh trong một prompt (đo 2026-09-17).
 - **Flow từ chối mọi generation vẽ người đang mặc đồ bán hàng**: submit đi bình thường, chờ rất lâu, không có
   record nào, 0 credit, không báo gì.
+- **Bộ lọc người nổi tiếng của Flow chấm khung hình đầu ra**, nên lúc chặn lúc không: cùng nhân vật tạo từ ảnh người
+  thật, lần đầu hỏng không lý do trên trang, lần sau qua, lần khác bị chặn với `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED`
+  (2026-09-17), cả hai lần hỏng đều 0 credit.
 - **Rendition có thể 404 ngay sau khi sinh**, thậm chí 404 vĩnh viễn với một workflow trong khi workflow khác
   cùng media vẫn tải được.
 - **Đừng chạy `gflow auth login`** trên tài khoản này, kể cả khi gflow khuyên thế.

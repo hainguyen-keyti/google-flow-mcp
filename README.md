@@ -153,7 +153,7 @@ mặt, tay và món đồ.
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`). Server
 đang chạy không tự nạp code mới, và phiên đang mở còn giữ mô tả tool cũ: sửa code xong phải mở phiên mới.
 
-32 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
+33 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
 "unmeasured"):
 
 - **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
@@ -180,6 +180,20 @@ mặt, tay và món đồ.
   veo-lite, veo-fast, veo-lite-lp tối đa 3, veo-quality không nhận ảnh. Model veo thì duration để Flow tự chọn (veo
   tối đa 8 s). Model, duration, số ảnh được kiểm theo đúng luật của gflow TRƯỚC khi ghi sổ, để một giá trị gflow sẽ
   từ chối không đốt mất `job_id`. CLI `video gen` giữ nguyên.
+- **Nhân vật trong video, `gen_character`** (tốn credit, ghi ledger, bắt buộc `job_id` ở lượt thật): video 8 s x1 có
+  nhân vật của project (entity id từ `flow_characters`) và tuỳ chọn ảnh đã có trong project (media id từ `flow_media`,
+  chỉ ảnh). gflow vẫn từ chối nhân vật trên host này, nên repo tự gõ `@` cộng tên vào ô prompt rồi bấm ĐÚNG option theo
+  tên và loại (`Character` hay `Image`), không bao giờ nhấn Enter. Giá đo bằng tiền thật qua MCP ngày 2026-09-17:
+  omni-flash (mặc định) **12**, veo-lite **10**; veo-fast **20** theo dòng giá của Flow, chưa tiêu. `dry_run=true` trả
+  giá và chip, không bấm, không ghi sổ, không cần `job_id`, để composer trống. Ngay trước kiểm giá, tool đọc lại chip
+  và chữ ô prompt: chip phải đúng id đã yêu cầu, ô phải đúng bằng tên các chip rồi prompt, lệch là từ chối ($0). Body
+  của submit được kiểm có khoá `_r2v_` và mọi id tham chiếu (`body_check`). Sau cú bấm tool chỉ nhận clip mới có prompt
+  BẰNG đúng chữ đã gửi (Flow lưu tên chip rồi chữ gõ); không nhận được mà có video mới hay số dư đổi thì ghi `unknown`,
+  clip có mà chưa tải được thì `pending`, và câu lỗi mở đầu bằng lời dặn không chạy lại dưới `job_id` mới. Tool nghe
+  phản hồi của chính Flow về job (khoá `flow` của dòng sổ): trạng thái 6 đã gửi, 2 đang chạy, 3 xong, **4 hỏng**, kèm
+  mã lý do. **Bộ lọc người nổi tiếng của Flow** (`PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED`) đã chặn nhân vật tạo từ
+  ảnh người thật, không tính tiền, lúc chặn lúc không: không thử lại cùng đầu vào cho tới khi lọt. File clip đặt tên
+  `<media_id>_<8 hex>.mp4`, không bao giờ theo `job_id`.
 - **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
 - **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media` (luôn trả một object,
   `all_versions=true` thêm khoá `versions`), `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
@@ -188,7 +202,9 @@ mặt, tay và món đồ.
   không và số dòng, để `jobs: []` không bị hiểu nhầm là sạch khi đọc nhầm chỗ; job gen, job agent và job editor của
   project khác ra `skipped`; sổ không có gì để chấm thì trả ngay, không mở Chrome).
 - **Miễn phí nhưng ĐỔI project thật**: `project_create`, `project_rename` (đọc lại tên trên grid rồi mới trả
-  `{id, title}`), `project_delete`, `character_create`, `character_delete`, `scene_create`, `scene_delete`,
+  `{id, title}`), `project_delete`, `character_create` (nhận đúng một trong hai: `prompt`, hay `image` là file ảnh trên
+  máy tải qua nút Upload của trang New character; Flow từng im lặng từ chối ảnh người mặc đồ ren), `character_delete`,
+  `scene_create`, `scene_delete`,
   `scene_restore` (lấy scene ra khỏi thùng rác). Tile scene trên grid lẫn trong thùng rác không mang scene id (đo
   2026-09-16), nên cả hai tool tìm tile theo tên đúng nguyên, và chỉ xét tên sau khi view hiện đủ một tile cho mỗi
   scene trong listing (chờ tối đa 15 s; grid đếm scene đang hoạt động, thùng rác đếm scene đã xoá). Từ chối thay vì
@@ -230,10 +246,12 @@ của lời gọi; lời gọi bị huỷ trong lúc đó vẫn bị huỷ.
 uv run python scripts/acceptance/flow_coverage.py --project <id> [--character] [--spend --ref-image anh.jpg]
 uv run python scripts/acceptance/mcp_smoke.py
 uv run python scripts/acceptance/ledger_integrity.py     # $0, offline, không cần trình duyệt
+uv run python scripts/acceptance/character_gen.py --project <id nháp>   # $0, 8 hàng, gen_character dry_run thật
+uv run python scripts/acceptance/character_gen.py compare --project <id> --job <job_id> --entity <entity_id>
 uv run pytest -q
 ```
 
-Test tay toàn bộ 32 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
+Test tay toàn bộ 33 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
 `docs/mcp-manual-test.md`.
 
 `ledger_integrity.py` canh đúng một luật: **không credit nào rời tài khoản qua clip editor mà không có

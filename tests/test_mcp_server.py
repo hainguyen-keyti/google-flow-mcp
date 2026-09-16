@@ -1139,6 +1139,13 @@ def test_gen_character_shows_the_agent_its_defaults():
     assert schema["dry_run"].get("default") is False
 
 
+def test_gen_character_tells_the_agent_a_filtered_run_costs_nothing_and_must_not_be_retried_as_is():
+    # Measured 2026-09-17 (plan E, L4): Flow's prominent-people filter refused a character made from a real photo.
+    description = served_tool_objects()["gen_character"].description
+    assert "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED" in description
+    assert "charges nothing" in description and "do not retry the same inputs" in description
+
+
 def test_character_create_takes_exactly_one_of_prompt_and_image_before_a_browser_opens(monkeypatch, tmp_path):
     # Plan character-generation T5b: a character can come from the owner's own face photo (DECISIONS 2026-09-16).
     recorder = _Recorder()
