@@ -1477,8 +1477,9 @@ def test_submit_hears_a_failure_reason_that_another_rpc_carries(monkeypatch, tmp
     _install(
         monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY, notice]}
     )
-    with pytest.raises(RuntimeError, match="PUBLIC_ERROR_UNSAFE_IDENTITY"):
+    with pytest.raises(RuntimeError, match="PUBLIC_ERROR_UNSAFE_IDENTITY") as raised:
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    assert "other replies naming it: Xq9Tzb" in str(raised.value)
     flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
     assert flow["reasons"] == ["PUBLIC_ERROR_UNSAFE_IDENTITY"] and "Xq9Tzb" in flow["named_by"]
 
@@ -1561,8 +1562,23 @@ def test_flow_replies_never_credit_this_job_with_a_code_another_workflow_carried
     [
         _FlowReply("jwpduf", [None, 1, [_flow_record(5)], [["PUBLIC_ERROR_UNSAFE_FACE"]]]),
         _status_reply(5, extra=["x" * 600, ["PUBLIC_ERROR_UNSAFE_FACE"]]),
+        _FlowReply(
+            "jwpduf",
+            [
+                None,
+                1,
+                [
+                    _flow_record(2, workflow=OTHER_WORKFLOW),
+                    _flow_record(5, extra=[["PUBLIC_ERROR_UNSAFE_FACE"]]),
+                ],
+            ],
+        ),
     ],
-    ids=["beside its record in a reply about it alone", "past the 500 characters the head keeps"],
+    ids=[
+        "beside its record in a reply about it alone",
+        "past the 500 characters the head keeps",
+        "inside its record in a reply about two workflows",
+    ],
 )
 def test_flow_replies_credit_this_job_with_a_code_its_own_reply_carries(reply):
     flow = _judged([SUBMIT_REPLY, reply])
@@ -1575,6 +1591,8 @@ def test_flow_replies_call_an_unmeasured_status_unmeasured_and_speak_of_the_last
     said = composer._flow_said(flow)
     assert flow["statuses"] == [6, 4, 2] and flow["unmeasured"]["status"] == 4
     assert "last reported status 2" in said and "unmeasured status 4" in said and "failed" not in said
+    last_odd = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(5)]))
+    assert last_odd.startswith(f"Flow last reported unmeasured status 5 for workflow {JOB_WORKFLOW}")
 
 
 def test_flow_replies_name_a_small_reply_of_another_rpc_that_names_the_job():
