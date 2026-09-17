@@ -250,6 +250,14 @@ class Backend:
     async def scene_set_aspect(self, project_id: str, scene_id: str, aspect: str) -> dict[str, Any]:
         return await self._with(lambda s: scenes_mod.set_aspect(s, project_id, scene_id, aspect))
 
+    async def scene_remove_clip(self, project_id: str, scene_id: str, clip_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.remove_clip(s, project_id, scene_id, clip_id))
+
+    async def scene_move_clip(
+        self, project_id: str, scene_id: str, clip_id: str, position: int
+    ) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.move_clip(s, project_id, scene_id, clip_id, position))
+
     async def agent_mode(self, project_id: str, enabled: bool) -> dict[str, Any]:
         return await self._with(lambda s: agent_mod.set_mode(s, project_id, enabled))
 
@@ -704,7 +712,8 @@ async def scene_rename(project_id: str, scene_id: str, title: str) -> str:
         "Read one scene's timeline as Flow stores it: its clips in the order the film plays them, each with its "
         "position (counted from 0), clip_id, title and seconds, plus the scene's aspect ratio (9:16 or 16:9, "
         "null when the listing names neither) and its total seconds. A clip_id names one clip on this timeline, "
-        "not a project media: adding the same media twice gives two clip_ids. The page's own Total duration label "
+        "not a project media: adding the same media twice gives two clip_ids, and scene_move_clip and "
+        "scene_remove_clip take a clip_id. The page's own Total duration label "
         "moves before Flow has stored a change (measured 2026-09-17), so read this again after changing the "
         "timeline instead of trusting the label or an earlier answer. Free."
     ),
@@ -730,6 +739,42 @@ async def scene_set_aspect(project_id: str, scene_id: str, aspect: str) -> str:
     if aspect not in scenes_mod.ASPECTS.values():
         raise ValueError(f"aspect must be 9:16 or 16:9, got {aspect!r}")
     return _json(await backend.scene_set_aspect(project_id, scene_id, aspect))
+
+
+@server.tool(
+    name="scene_remove_clip",
+    description=(
+        "Take one clip off a scene's timeline, named by its clip_id from scene_clips; the clips after it move up "
+        "one position. Flow asks nothing before deleting (measured 2026-09-17), so the call acts only on the clip "
+        "the listing places at that position once the editor shows as many clips as the listing holds, and checks "
+        "the change the page sends before reading the listing back. The media itself stays in the project and "
+        "scene_add_clip can put it back at the end. The result carries the remaining clips in order. Free."
+    ),
+)
+async def scene_remove_clip(project_id: str, scene_id: str, clip_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    _require(clip_id, "clip_id")
+    return _json(await backend.scene_remove_clip(project_id, scene_id, clip_id))
+
+
+@server.tool(
+    name="scene_move_clip",
+    description=(
+        "Move one clip, named by its clip_id from scene_clips, to a position counted from 0 on a scene's timeline; "
+        "the clips in between shift by one. Flow reorders a timeline only by drag and drop, so the editor is zoomed "
+        "out until both places are on screen and the clip is dragged there, then the order the page sends and the "
+        "listing read back must both match the one asked for. A clip already at that position is left alone. The "
+        "result carries every clip in its new order. Free."
+    ),
+)
+async def scene_move_clip(project_id: str, scene_id: str, clip_id: str, position: int) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    _require(clip_id, "clip_id")
+    if position < 0:
+        raise ValueError(f"position counts from 0, got {position}")
+    return _json(await backend.scene_move_clip(project_id, scene_id, clip_id, position))
 
 
 @server.tool(

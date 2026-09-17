@@ -50,6 +50,8 @@ MUTATING = (
     "scene_add_clip",
     "scene_rename",
     "scene_set_aspect",
+    "scene_remove_clip",
+    "scene_move_clip",
     "project_create",
     "project_rename",
     "project_delete",

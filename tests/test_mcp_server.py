@@ -47,10 +47,12 @@ EXPECTED_TOOLS = {
     "scene_add_clip",
     "scene_download",
     "scene_rename",
-    # Plan character-generation T10: the listing read that lets an agent name a clip on a timeline, and the aspect
-    # ratio a film is exported in, added on purpose.
+    # Plan character-generation T10: the listing read that lets an agent name a clip on a timeline, the aspect ratio a
+    # film is exported in, and taking a clip off or moving it, added on purpose, so this roster grows from 33 to 37.
     "scene_clips",
     "scene_set_aspect",
+    "scene_remove_clip",
+    "scene_move_clip",
     "agent_mode",
     "agent_send",
     "clip_download",
@@ -108,6 +110,8 @@ TOOL_CALLS: dict[str, dict] = {
     "scene_rename": {"project_id": "P", "scene_id": "S", "title": "a name"},
     "scene_clips": {"project_id": "P", "scene_id": "S"},
     "scene_set_aspect": {"project_id": "P", "scene_id": "S", "aspect": "9:16"},
+    "scene_remove_clip": {"project_id": "P", "scene_id": "S", "clip_id": "C"},
+    "scene_move_clip": {"project_id": "P", "scene_id": "S", "clip_id": "C", "position": 2},
     "agent_mode": {"project_id": "P", "enabled": True},
     "agent_send": {"project_id": "P", "message": "hello", "job_id": "job-agent"},
     "clip_download": {"project_id": "P", "media_id": "M"},
@@ -1813,6 +1817,72 @@ def test_scene_clips_answers_with_the_timeline_the_driver_read_off_the_listing(m
 def test_scene_clips_tells_the_agent_the_order_is_the_films_and_how_clips_are_named():
     text = served_tool_objects()["scene_clips"].description
     for phrase in ("order the film plays", "position", "from 0", "clip_id", "aspect", "Free."):
+        assert phrase in text, phrase
+    assert "scene_move_clip" in text and "scene_remove_clip" in text
+
+
+def test_scene_remove_clip_and_scene_move_clip_reach_the_driver_with_the_clip_named(monkeypatch, tmp_path):
+    seen = []
+
+    async def fake_with(self, fn):
+        return await fn("session")
+
+    async def fake_remove(session, project_id, scene_id, clip_id):
+        seen.append(("remove", session, project_id, scene_id, clip_id))
+        return {"clips": []}
+
+    async def fake_move(session, project_id, scene_id, clip_id, position):
+        seen.append(("move", session, project_id, scene_id, clip_id, position))
+        return {"clips": []}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.scenes_mod, "remove_clip", fake_remove)
+    monkeypatch.setattr(mcp_server.scenes_mod, "move_clip", fake_move)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        removed = await s.call_tool(
+            "scene_remove_clip", {"project_id": "P", "scene_id": "S", "clip_id": "C1"}
+        )
+        moved = await s.call_tool(
+            "scene_move_clip", {"project_id": "P", "scene_id": "S", "clip_id": "C2", "position": 3}
+        )
+        return removed, moved
+
+    removed, moved = with_client(fn)
+    assert not removed.is_error and not moved.is_error, _texts([removed, moved])
+    assert seen == [("remove", "session", "P", "S", "C1"), ("move", "session", "P", "S", "C2", 3)]
+
+
+def test_scene_move_clip_refuses_a_negative_position_before_a_browser_opens(monkeypatch, tmp_path):
+    sessions = []
+
+    async def fake_with(self, fn):
+        sessions.append(fn)
+        return {}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        return await s.call_tool(
+            "scene_move_clip", {"project_id": "P", "scene_id": "S", "clip_id": "C", "position": -1}
+        )
+
+    result = with_client(fn)
+    assert result.is_error and "position" in _texts([result])[0]
+    assert sessions == []
+
+
+def test_scene_remove_clip_tells_the_agent_flow_asks_nothing_and_the_media_stays():
+    text = served_tool_objects()["scene_remove_clip"].description
+    for phrase in ("clip_id", "scene_clips", "asks nothing", "stays in the project", "Free."):
+        assert phrase in text, phrase
+
+
+def test_scene_move_clip_tells_the_agent_how_positions_count_and_how_the_move_is_done():
+    text = served_tool_objects()["scene_move_clip"].description
+    for phrase in ("clip_id", "position", "from 0", "drag", "scene_clips", "Free."):
         assert phrase in text, phrase
 
 

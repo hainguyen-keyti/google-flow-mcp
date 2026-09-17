@@ -1190,10 +1190,34 @@ class _EditorElement:
         return self.page.text_of(self.kind, self.key)
 
     async def click(self, timeout=None, button="left"):
+        if self.kind == "clip":
+            self.page.scroll_to(self.key)
         self.page.click(self.kind, self.key, button)
 
     async def scroll_into_view_if_needed(self, timeout=None):
-        pass
+        self.page.scroll_to(self.key)
+
+    async def bounding_box(self):
+        return self.page.box(self.key)
+
+
+class _Mouse:
+    """Drag and drop as Angular CDK sees it: a press on a clip, moves, a release over the clip whose place it takes."""
+
+    def __init__(self, page):
+        self.page = page
+        self.at = (0, 0)
+        self.held = None
+
+    async def move(self, x, y, steps=1):
+        self.at = (x, y)
+
+    async def down(self):
+        self.held = self.page.clip_at(*self.at)
+
+    async def up(self):
+        source, self.held = self.held, None
+        self.page.drop(source, self.at)
 
 
 class _EditorMatches:
@@ -1274,6 +1298,14 @@ class _Editor:
         self.add_clip_after = 0
         self.add_clip_buttons = 1
         self.toggles = 1
+        self.zoom = 0
+        self.zooms = True
+        self.scroll = 0
+        self.drops_at = None
+        self.context_items = None
+        self.deletes_index = None
+        self._mouse = _Mouse(self)
+        self.viewport_size = {"width": 1280, "height": 720}
         self.menu_items = None
 
     @staticmethod
@@ -1336,7 +1368,96 @@ class _Editor:
             return _EditorMatches(self, "row", lambda: [k for k in self._row_keys() if k == self.row])
         if selector == scenes.OVERLAY:
             return _EditorMatches(self, "overlay", self._overlay_keys)
+        if selector == scenes.MENU_ITEM:
+            return _EditorMatches(self, "overlay", self._context_keys)
         raise AssertionError(f"unexpected selector {selector!r}")
+
+    # The timeline as laid out on screen, measured 2026-09-17: an 8 s clip is 816 px wide from x 21, every zoom-out
+    # halves that, the viewport is 1280 px wide, and a locator click scrolls its clip into view.
+
+    @property
+    def mouse(self):
+        return self._mouse
+
+    def clip_width(self):
+        return 816 / 2 ** (self.zoom if self.zooms else 0)
+
+    def _clamp(self):
+        # Like a browser: the timeline cannot scroll past its content, which shrinks with every zoom-out.
+        content = 21 + len(self.shown) * self.clip_width()
+        self.scroll = min(max(self.scroll, 0), max(0, content - self.viewport_size["width"]))
+
+    def box(self, index):
+        self._clamp()
+        width = self.clip_width()
+        return {"x": 21 + index * width - self.scroll, "y": 471, "width": width, "height": 62}
+
+    def scroll_to(self, index):
+        box = self.box(index)
+        if box["x"] < 0 or box["x"] + box["width"] > self.viewport_size["width"]:
+            self.scroll += box["x"] - 21
+        self._clamp()
+
+    def clip_at(self, x, y):
+        index = int((x - 21 + self.scroll) // self.clip_width())
+        return index if 471 <= y <= 533 and 0 <= index < len(self.shown) else None
+
+    def drop(self, source, at):
+        """CDK sorting: a dragged clip passes a sibling only once the pointer is past that sibling's middle."""
+        x, y = at
+        if source is None or not 471 <= y <= 533:
+            return
+        middles = [self.box(i)["x"] + self.box(i)["width"] / 2 for i in range(len(self.shown))]
+        passed_right = [i for i in range(source + 1, len(self.shown)) if x > middles[i]]
+        passed_left = [i for i in range(source) if x < middles[i]]
+        target = max(passed_right) if passed_right else min(passed_left) if passed_left else source
+        if target == source:
+            return
+        target = self.drops_at if self.drops_at is not None else target
+        self.clicked.append(f"drag {source} to {target}")
+        self.shown.insert(target, self.shown.pop(source))
+        self._save()
+
+    def _context_keys(self):
+        if not (isinstance(self.overlay, tuple) and self.overlay[0] == "context"):
+            return []
+        items = self.context_items or [
+            ("", "content_copyCopy"),
+            ("", "content_pastePaste"),
+            ("", "saveSave to Project"),
+            ("", "downloadDownload"),
+            ("", "deleteDelete"),
+        ]
+        return [("context", i, label) for i, label in enumerate(items)]
+
+    def _save(self):
+        """The page sends the whole ordered list (GoMJte) and Flow keeps it once it answers."""
+        if not self.sends:
+            return
+        order = [dict(clip) for clip in self.shown]
+        payload = [
+            PROJECT,
+            EDITOR_SCENE,
+            [
+                [
+                    [clip["clip_id"], None, None, [None, None, None, None, "wf"]],
+                    EDITOR_SCENE,
+                    [i or None, [8], [], [8]],
+                ]
+                for i, clip in enumerate(order)
+            ],
+        ]
+        call = _Call("GoMJte", payload)
+        self.sent.append(("GoMJte", payload))
+        self._emit("request", call)
+
+        def reply():
+            if self.stores:
+                self.server = order
+            self._emit("response", _Answer(call, "GoMJte", [[]]))
+
+        if self.answers:
+            self._later(1_500, reply)
 
     def get_by_role(self, role, name=None):
         assert role == "button"
@@ -1447,6 +1568,8 @@ class _Editor:
             self.clicked.append(f"clip {key}" + (" right" if button == "right" else ""))
             if self.selects_on_click:
                 self.selected = key
+            if button == "right":
+                self.overlay = ("context", key)
             return
         if kind == "named":
             label = self._named_label(key)
@@ -1456,6 +1579,8 @@ class _Editor:
                 self.row = 0 if self.overlay == "picker" else None
             elif key[0] == "toggle":
                 self._toggle()
+            elif label[0] == "Zoom out":
+                self.zoom = min(self.zoom + 1, 4)
             return
         if kind == "overlay":
             label = key[2][1]
@@ -1464,6 +1589,12 @@ class _Editor:
                 self.overlay, self.row = "picker", 0
             elif label == "Add media":
                 self._add(self.rows()[self.row])
+            elif key[0] == "context" and label.endswith("Delete"):
+                self.overlay = None
+                gone = self.deletes_index if self.deletes_index is not None else self.selected
+                self.shown.pop(gone)
+                self.selected = None
+                self._save()
             return
         if kind == "row":
             self.clicked.append(f"row {self.rows()[key][1]}")
@@ -2027,3 +2158,245 @@ def test_add_clip_refuses_when_two_controls_answer_to_the_same_name(monkeypatch)
     with pytest.raises(LookupError, match="2 controls match"):
         asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
     assert page.clicked == []
+
+
+def _ids(page):
+    return [clip["clip_id"] for clip in page.server]
+
+
+FIVE = [WALKING, ORBIT, SMILING, HOLDING, CAFE]
+
+
+def test_remove_clip_deletes_the_named_clip_from_its_menu_and_confirms_the_rest_in_the_listing(monkeypatch):
+    # Measured 2026-09-17: right-clicking a clip selects it and opens its menu; Delete asks nothing and sends GoMJte
+    # with the clips that remain.
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    gone = page.server[2]["clip_id"]
+    kept = [clip_id for clip_id in _ids(page) if clip_id != gone]
+
+    result = asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, gone))
+
+    assert page.clicked == ["clip 2 right", "deleteDelete"]
+    assert _ids(page) == kept
+    assert [entry[0][0] for entry in page.sent[0][1][2]] == kept
+    assert [clip["clip_id"] for clip in result["clips"]] == kept
+    assert result["removed_position"] == 2 and result["seconds"] == 32 and result["rpcids"] == ["GoMJte"]
+
+
+def test_remove_clip_refuses_a_clip_id_that_is_not_on_the_timeline(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="is not on scene"):
+        asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, "clip-nowhere"))
+    assert page.loads == 0 and page.sent == []
+
+
+def test_remove_clip_refuses_when_the_page_shows_another_number_of_clips(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.page_clips = 4
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="shows 4 clips while Flow lists 5"):
+        asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, page.server[1]["clip_id"]))
+    assert page.clicked == [] and page.sent == []
+
+
+def test_remove_clip_refuses_when_the_right_click_does_not_select_the_clip(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.selects_on_click = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="did not select it"):
+        asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, page.server[3]["clip_id"]))
+    assert "deleteDelete" not in page.clicked and page.sent == []
+
+
+def test_remove_clip_refuses_a_menu_without_exactly_one_delete(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.context_items = [("", "content_copyCopy"), ("", "deleteDelete"), ("", "deleteDelete")]
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="2 controls match"):
+        asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, page.server[1]["clip_id"]))
+    assert page.sent == []
+
+
+def test_remove_clip_fails_when_delete_sends_nothing_and_never_clicks_it_again(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.sends = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="no timeline change left the page"):
+        asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, page.server[1]["clip_id"]))
+    assert page.clicked.count("deleteDelete") == 1
+
+
+def test_remove_clip_fails_when_the_change_it_sent_drops_another_clip(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.deletes_index = 0
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="the timeline sent to Flow reads") as caught:
+        asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, page.server[2]["clip_id"]))
+    assert "scene_clips" in str(caught.value)
+
+
+def test_remove_clip_fails_when_flow_never_answers_and_says_to_read_the_timeline(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.answers = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="Flow never answered") as caught:
+        asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, page.server[2]["clip_id"]))
+    assert "scene_clips" in str(caught.value)
+
+
+def test_remove_clip_fails_when_the_listing_still_holds_the_clip(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.stores = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="the listing reads"):
+        asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, page.server[2]["clip_id"]))
+
+
+def test_move_clip_drags_a_clip_later_and_confirms_the_new_order_in_the_listing(monkeypatch):
+    # Measured 2026-09-17: dragging clip 1 onto clip 3 sent GoMJte with clip 1 at index 3.
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    ids = _ids(page)
+    moved = ids[1]
+    expected = [ids[0], ids[2], ids[3], moved, ids[4]]
+
+    result = asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, moved, 3))
+
+    assert _ids(page) == expected
+    assert [entry[0][0] for entry in page.sent[0][1][2]] == expected
+    assert [clip["clip_id"] for clip in result["clips"]] == expected
+    assert result["position"] == 3 and result["moved"] is True and result["rpcids"] == ["GoMJte"]
+
+
+def test_move_clip_drags_a_clip_earlier(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    ids = _ids(page)
+
+    asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, ids[3], 0))
+
+    assert _ids(page) == [ids[3], ids[0], ids[1], ids[2], ids[4]]
+
+
+def test_move_clip_zooms_out_until_both_places_are_on_screen_before_dragging(monkeypatch):
+    # Measured 2026-09-17: five 8 s clips at 816 px each run far past a 1280 px timeline; two zoom-outs fit them.
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    ids = _ids(page)
+
+    asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, ids[0], 4))
+
+    drag = page.clicked.index("drag 0 to 4")
+    assert page.clicked[:drag].count("Zoom out") >= 1
+    assert _ids(page)[4] == ids[0]
+
+
+def test_move_clip_gives_up_when_the_clips_never_fit_on_screen(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.zooms = False
+    session = _editor(monkeypatch, page)
+    ids = _ids(page)
+
+    with pytest.raises(LookupError, match="off screen"):
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, ids[0], 4))
+    assert page.sent == [] and not any(label.startswith("drag") for label in page.clicked)
+
+
+def test_move_clip_leaves_a_clip_already_at_that_position_alone(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    ids = _ids(page)
+
+    result = asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, ids[2], 2))
+
+    assert result["moved"] is False and result["position"] == 2 and page.loads == 0 and page.sent == []
+
+
+@pytest.mark.parametrize("position", [-1, 5, 99])
+def test_move_clip_refuses_a_position_outside_the_timeline_before_opening_the_scene(monkeypatch, position):
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(ValueError, match="position must be 0 to 4"):
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, page.server[0]["clip_id"], position))
+    assert page.loads == 0
+
+
+def test_move_clip_refuses_a_clip_id_that_is_not_on_the_timeline(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="is not on scene"):
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, "clip-nowhere", 0))
+    assert page.loads == 0
+
+
+def test_move_clip_refuses_when_the_page_shows_another_number_of_clips(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.page_clips = 3
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="shows 3 clips while Flow lists 5"):
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, page.server[0]["clip_id"], 2))
+    assert page.sent == []
+
+
+def test_move_clip_fails_when_the_drop_sends_nothing(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.sends = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="no timeline change left the page"):
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, page.server[1]["clip_id"], 3))
+
+
+def test_move_clip_fails_when_the_order_it_sent_is_not_the_one_asked_for(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.drops_at = 2
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="the timeline sent to Flow reads") as caught:
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, page.server[1]["clip_id"], 3))
+    assert "scene_clips" in str(caught.value)
+
+
+def test_a_stored_order_is_read_by_index_not_by_the_order_entries_arrive_in():
+    payload = [
+        PROJECT,
+        EDITOR_SCENE,
+        [
+            [["c2", None, None, [None, None, None, None, "wf"]], EDITOR_SCENE, [2, [8], [], [8]]],
+            [["c0", None, None, [None, None, None, None, "wf"]], EDITOR_SCENE, [None, [8], [], [8]]],
+            [["c1", None, None, [None, None, None, None, "wf"]], EDITOR_SCENE, [1, [8], [], [8]]],
+        ],
+    ]
+
+    assert scenes._saved_order(payload) == ["c0", "c1", "c2"]
+
+
+def test_move_clip_fails_when_flow_never_answers(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.answers = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="Flow never answered"):
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, page.server[1]["clip_id"], 3))
+
+
+def test_move_clip_fails_when_the_listing_does_not_show_the_new_order(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.stores = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="the listing reads"):
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, page.server[1]["clip_id"], 3))

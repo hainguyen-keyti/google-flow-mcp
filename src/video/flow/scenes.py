@@ -33,6 +33,9 @@ DOWNLOAD_WAIT_MS = 180_000
 OVERLAY = ".cdk-overlay-pane button, [role=dialog] button"
 ROW = ".cdk-overlay-pane button[role=option]"
 CLIPS = ".timeline-contents > .clip"
+MENU_ITEM = "[role=menuitem]"
+# Measured 2026-09-17: five 8 s clips at 816 px each ran far past a 1280 px wide page; two zoom-outs fit all five.
+ZOOM_OUT_MAX = 4
 # Measured 2026-09-17 (probes/scene_editor.py) on a heavily loaded machine: every request a scene click fires left the
 # page within 0.4 s, while Flow's reply to an add came 11 to 14 s later and nothing is stored until it does.
 SEND_WAIT_MS = 15_000
@@ -560,6 +563,173 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
         "seconds": after["seconds"],
         "clips": after["clips"],
         "rpcids": sorted({*calls.sent, *calls.heard}),
+    }
+
+
+def _saved_order(payload: Any) -> list[Any]:
+    """The clip ids a GoMJte request stores, in the order of their index (null for 0)."""
+    entries = parsers._at(payload, 2) or []
+    indexed = [(parsers._at(entry, 2, 0) or 0, parsers._at(entry, 0, 0)) for entry in entries]
+    return [clip_id for _, clip_id in sorted(indexed, key=lambda pair: pair[0])]
+
+
+async def _store_order(
+    session: FlowSession, project_id: str, scene_id: str, act: Any, what: str, expected: list[str]
+) -> dict[str, Any]:
+    """Do the one action that reorders a timeline, then judge it by the GoMJte it sent, Flow's answer and the listing.
+
+    Measured 2026-09-17: deleting a clip and dragging one both make the page send GoMJte with every clip that stays,
+    in its new order, and Flow keeps that list once it answers.
+    """
+    page = session.page
+    with _Calls(page, ("GoMJte",)) as calls:
+        await act()
+        sent = await calls.wait(calls.sent, "GoMJte", SEND_WAIT_MS)
+        if not sent:
+            raise RuntimeError(
+                f"{what} once and no timeline change left the page within {SEND_WAIT_MS // 1000}s; read scene_clips "
+                f"before trying again (scene {scene_id})"
+            )
+        if _saved_order(sent[-1]) != expected:
+            raise RuntimeError(
+                f"{what} once and the timeline sent to Flow reads {_saved_order(sent[-1])} instead of {expected}; "
+                f"read scene_clips before changing it again (scene {scene_id})"
+            )
+        heard = await calls.wait(calls.heard, "GoMJte", REPLY_WAIT_MS)
+    if not heard:
+        raise RuntimeError(
+            f"Flow never answered the timeline change within {REPLY_WAIT_MS // 1000}s: it may still land, so read "
+            f"scene_clips before trying again (scene {scene_id})"
+        )
+    after = await timeline(session, project_id, scene_id)
+    if [clip["clip_id"] for clip in after["clips"]] != expected:
+        titles = [clip["title"] for clip in after["clips"]]
+        raise RuntimeError(
+            f"Flow answered, but the listing reads {titles} instead of the order sent; read scene_clips before "
+            f"changing it again (scene {scene_id})"
+        )
+    return after
+
+
+async def remove_clip(session: FlowSession, project_id: str, scene_id: str, clip_id: str) -> dict[str, Any]:
+    """Take one clip, named by its clip_id from the listing, off a scene's timeline.
+
+    Measured 2026-09-17: right-clicking a clip selects it and opens Copy, Paste, Save to Project, Download and Delete,
+    and Delete asks nothing. A clip carries no id on the page, so it is found at the position the listing gives it,
+    once the page shows as many clips as the listing holds.
+    """
+    page = session.page
+    before = await timeline(session, project_id, scene_id)
+    ids = [clip["clip_id"] for clip in before["clips"]]
+    if clip_id not in ids:
+        raise LookupError(
+            f"clip {clip_id} is not on scene {scene_id}'s timeline; scene_clips lists its clip_ids"
+        )
+    index = ids.index(clip_id)
+    await _open_scene(session, project_id, scene_id)
+    clips = await _page_agrees(page, len(ids), scene_id)
+    clip = clips.nth(index)
+    await clip.click(button="right", timeout=8_000)
+    await page.wait_for_timeout(1_000)
+    marks = (await clip.get_attribute("class") or "").split()
+    if "selected" not in marks or await page.locator(f"{CLIPS}.selected").count() != 1:
+        raise LookupError(f"right-clicking clip {index} of scene {scene_id} did not select it; not deleting")
+    # An item's text runs its icon ligature into its label ("deleteDelete", measured 2026-09-17).
+    delete = page.locator(MENU_ITEM).filter(has_text=re.compile(r"Delete\s*$"))
+    expected = [each for each in ids if each != clip_id]
+    after = await _store_order(
+        session,
+        project_id,
+        scene_id,
+        lambda: _click_one(page, delete, "the Delete item of the clip menu"),
+        "clicked Delete",
+        expected,
+    )
+    return {
+        "scene_id": scene_id,
+        "clip_id": clip_id,
+        "removed_position": index,
+        "seconds": after["seconds"],
+        "clips": after["clips"],
+        "rpcids": ["GoMJte"],
+    }
+
+
+async def move_clip(
+    session: FlowSession, project_id: str, scene_id: str, clip_id: str, position: int
+) -> dict[str, Any]:
+    """Move one clip, named by its clip_id from the listing, to a position counted from 0.
+
+    Measured 2026-09-17: Flow reorders a timeline only by dragging a clip; a drag of clip 1 onto clip 3, in 15 mouse
+    steps with both clips on screen, sent GoMJte with clip 1 at index 3. Zooming out halves a clip's width and
+    survives a reload.
+    """
+    page = session.page
+    before = await timeline(session, project_id, scene_id)
+    ids = [clip["clip_id"] for clip in before["clips"]]
+    if clip_id not in ids:
+        raise LookupError(
+            f"clip {clip_id} is not on scene {scene_id}'s timeline; scene_clips lists its clip_ids"
+        )
+    if type(position) is not int or not 0 <= position < len(ids):
+        raise ValueError(f"position must be 0 to {len(ids) - 1} on scene {scene_id}, got {position!r}")
+    source = ids.index(clip_id)
+    if source == position:
+        return {
+            "scene_id": scene_id,
+            "clip_id": clip_id,
+            "position": position,
+            "moved": False,
+            "seconds": before["seconds"],
+            "clips": before["clips"],
+            "rpcids": [],
+        }
+    expected = [each for each in ids if each != clip_id]
+    expected.insert(position, clip_id)
+    await _open_scene(session, project_id, scene_id)
+    clips = await _page_agrees(page, len(ids), scene_id)
+    width = (page.viewport_size or {}).get("width") or 0
+    for zoomed in range(ZOOM_OUT_MAX + 1):
+        boxes = [await clips.nth(index).bounding_box() for index in (source, position)]
+        if all(box and box["x"] >= 0 and box["x"] + box["width"] <= width for box in boxes):
+            break
+        if zoomed == ZOOM_OUT_MAX:
+            raise LookupError(
+                f"clips {source} and {position} of scene {scene_id} are still off screen after {ZOOM_OUT_MAX} "
+                "zoom-outs; not dragging blind"
+            )
+        await _click_one(
+            page, page.get_by_role("button", name=re.compile("Zoom out", re.IGNORECASE)), "Zoom out"
+        )
+        await page.wait_for_timeout(800)
+    start = (boxes[0]["x"] + boxes[0]["width"] / 2, boxes[0]["y"] + boxes[0]["height"] / 2)
+    # Past the middle of the clip whose place it takes, on the side it comes from, as the measured drag did.
+    nudge = 12 if position > source else -12
+    end = (boxes[1]["x"] + boxes[1]["width"] / 2 + nudge, boxes[1]["y"] + boxes[1]["height"] / 2)
+
+    async def drag() -> None:
+        await page.mouse.move(*start)
+        await page.mouse.down()
+        await page.wait_for_timeout(300)
+        for step in range(1, 16):
+            await page.mouse.move(
+                start[0] + (end[0] - start[0]) * step / 15, start[1] + (end[1] - start[1]) * step / 15
+            )
+            await page.wait_for_timeout(60)
+        await page.wait_for_timeout(500)
+        await page.mouse.up()
+
+    after = await _store_order(
+        session, project_id, scene_id, drag, f"dragged clip {source} to {position}", expected
+    )
+    return {
+        "scene_id": scene_id,
+        "clip_id": clip_id,
+        "position": position,
+        "moved": True,
+        "seconds": after["seconds"],
+        "clips": after["clips"],
+        "rpcids": ["GoMJte"],
     }
 
 
