@@ -1,8 +1,8 @@
-# Test tay MCP `video`: 33 tool, có giá và có rào chắn
+# Test tay MCP `video`: 37 tool, có giá và có rào chắn
 
 Hướng dẫn để chủ repo tự test, hoặc giao cho một agent khác gọi qua MCP. Mọi hình dạng kết quả dưới đây là
 **đo thật ngày 2026-09-14 và 2026-09-15** (riêng `gen_character` và `character_create` nhận ảnh: 2026-09-16 và
-2026-09-17), không phải suy từ code.
+2026-09-17; các tool scene ghép phim: 2026-09-17), không phải suy từ code.
 
 ## 0. Trước khi bắt đầu
 
@@ -39,7 +39,7 @@ Tầng 0 đỏ thì dừng, đừng test tay tiếp: lỗi nằm ở tầng dư�
 **`project_delete` xoá vĩnh viễn cả clip, ingredient và prompt.** Đọc lại id hai lần trước khi gọi. Không bao
 giờ dán id của project thật vào tool này.
 
-## 3. Bảng 33 tool
+## 3. Bảng 37 tool
 
 Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi project; nhóm C chỉ làm trong project nháp.
 
@@ -55,6 +55,7 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `flow_tools` | `project_id` tuỳ chọn | list tool của gallery cộng đồng, giống nhau ở mọi project; số lượng đổi theo thời gian (62 ngày 14/9, 60 rồi 62 ngày 15/9). Bỏ trống `project_id` thì server tự mở project đầu tiên trên grid, vì Flow chỉ nạp gallery bên trong một project |
 | `flow_uploads` | `project_id` | `{"count": n}` và không có gì khác |
 | `scene_list` | `project_id`, `include_trashed=False` | list `{scene_id, title, trashed, created, updated}`. Mặc định ẩn scene đã xoá; `include_trashed=true` mới thấy |
+| `scene_clips` | `project_id`, `scene_id` | đọc timeline từ listing: `{scene_id, title, trashed, aspect, seconds, clips}`, `clips` theo đúng thứ tự phim chạy, mỗi clip `{position, clip_id, title, seconds}`, `position` đếm từ 0. `clip_id` là id của clip trên timeline, không phải media id: thêm một media hai lần ra hai `clip_id`. Nhãn `Total duration` của trang đổi trước khi Flow lưu (đo 2026-09-17), nên đọc lại tool này sau mỗi thay đổi |
 
 ### B. Ghi file trên máy, $0
 
@@ -75,8 +76,11 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `scene_delete` | `project_id`, `scene_id` | là "move to trash", scene vẫn còn trong `scene_list(include_trashed=true)`; lấy lại bằng `scene_restore`. Tile trên grid không mang scene id nên tool chờ grid hiện đủ một tile cho mỗi scene đang hoạt động (tối đa 15 s) rồi mới tìm theo tên đúng nguyên: tên rỗng hay chỉ ký tự vô hình, hai scene cùng tên, hay số tile không khớp, thì từ chối; bấm xong đọc lại listing, scene khác bị đổi cờ thì báo tên nó |
 | `scene_restore` | `project_id`, `scene_id` | lấy scene ra khỏi thùng rác, đọc lại listing rồi trả `{"scene_id", "trashed": false, "rpcids", "active"}`. Tile trong thùng rác không mang scene id nên tool chờ thùng rác hiện đủ một tile cho mỗi scene đã xoá (tối đa 15 s) rồi mới tìm theo tên đúng nguyên, và **từ chối khi tên rỗng hay chỉ ký tự vô hình, khi tên có ở hơn một tile**, hay khi số tile không khớp số scene đã xoá |
 | `scene_rename` | `project_id`, `scene_id`, `title` | đổi tên scene rồi đọc LẠI listing để xác nhận. Trang scene có đúng một ô sửa được trong header (đo 2026-09-16) và tool đòi đúng một ô đó; tên rỗng hay chỉ ký tự vô hình bị từ chối, vì các tool scene tìm nhau bằng tên |
-| `scene_add_clip` | `project_id`, `scene_id`, `media_id` | đặt một clip của project lên timeline của scene, đây là cách một scene thành phim nhiều cảnh. Picker không mang media id nên tool tra `media_id` ra **title** từ listing rồi khớp đúng nguyên tên; từ chối khi title rỗng, khi media khác trong project trùng title, hay khi picker hiện title đó hơn một lần. Trả `duration_before`, `duration_after`, `changed` đọc từ nhãn `Total duration` của editor. **`changed: false` thường chỉ là nhãn chưa kịp cập nhật, KHÔNG phải add hỏng**: đọc lại phim bằng `scene_download` thay vì thêm lần nữa, vì thêm hai lần là clip vào timeline hai lần |
-| `scene_download` | `project_id`, `scene_id`, `out_dir=None` | tải cả scene thành MỘT phim, không phải một clip: đo 2026-09-16, hai clip 8 s ra một mp4 **16,0 giây**. Scene rỗng bị từ chối, `out_dir` phải nằm trong `out/`. Trang scene KHÔNG có menu chọn chất lượng (khác trang clip), nên muốn 270p/720p/1080p/4k thì dùng `clip_download`. Trả thêm `attempts`: bằng 2 nghĩa là lần đầu trình duyệt chết đúng lúc phim vừa tải và tool lấy lại trong phiên mới |
+| `scene_add_clip` | `project_id`, `scene_id`, `media_id` | đặt một clip của project vào **CUỐI** timeline, đây là cách một scene thành phim nhiều cảnh: thêm theo đúng thứ tự phim chạy. Picker không mang media id nên tool tra `media_id` ra **title** từ listing rồi khớp đúng nguyên tên; từ chối khi title rỗng, khi media khác trong project trùng title, hay khi picker hiện title đó hơn một lần. Flow chỉ lưu khi trả lời lượt thêm, 11 tới 14 s sau cú bấm, nên tool chờ rồi đọc lại listing; trả `{scene_id, media_id, title, position, clip_id, seconds, clips, rpcids}`. **Lỗi sau cú bấm thì clip vẫn có thể vào: đọc `scene_clips` trước, không thêm lại khi chưa đọc**, vì thêm hai lần là clip vào phim hai lần |
+| `scene_set_aspect` | `project_id`, `scene_id`, `aspect` (`9:16` hay `16:9`) | đặt tỉ lệ khung của phim; scene mới là 16:9. Trả `{scene_id, aspect, changed, rpcids}`: tỉ lệ đúng rồi thì `changed: false` và không bấm gì; trang hiện tỉ lệ khác listing thì từ chối chứ không bấm mò |
+| `scene_move_clip` | `project_id`, `scene_id`, `clip_id`, `position` | chuyển một clip (gọi bằng `clip_id` của `scene_clips`) tới vị trí đếm từ 0, các clip ở giữa dịch một chỗ. Flow chỉ đổi thứ tự bằng kéo thả nên tool zoom out tới khi hai chỗ cùng hiện rồi kéo; kiểm thứ tự trang gửi và listing đọc lại. Clip đã đúng chỗ thì `moved: false`. Trả `clips` theo thứ tự mới |
+| `scene_remove_clip` | `project_id`, `scene_id`, `clip_id` | gỡ một clip khỏi timeline qua menu chuột phải; Flow **không hỏi xác nhận** (đo 2026-09-17), nên tool chỉ bấm khi trang hiện đúng số clip listing có và chuột phải đã chọn đúng clip. Media vẫn còn trong project, `scene_add_clip` đặt lại được vào cuối. Trả `removed_position` và `clips` còn lại |
+| `scene_download` | `project_id`, `scene_id`, `out_dir=None` | tải cả scene thành MỘT phim, không phải một clip: đo 2026-09-16, hai clip 8 s ra một mp4 **16,0 giây**. Phim được dựng ngay trong trang (đo 2026-09-17: phim 40 s mất 33 tới 42 s), tool chờ theo độ dài phim và báo ngay khi cú bấm không khởi động xuất. File chép sang tên tạm rồi mới đổi tên, không bao giờ có phim dở dưới tên trả về. Scene rỗng bị từ chối, `out_dir` phải nằm trong `out/`. Trả thêm `seconds`, `clips` của listing để đối chiếu, và `attempts`: bằng 2 là lần đầu hỏng giữa đường và tool lấy lại trong phiên mới. Trang scene KHÔNG có menu chọn chất lượng, muốn 270p/720p/1080p/4k thì dùng `clip_download` |
 | `character_create` | `project_id`, `prompt` HOẶC `image`, `name`, `personality`, `wait=90` | **không tốn credit**, nhận đúng một trong hai: `prompt` thì chân dung vẽ bằng Nano Banana 2; `image` là đường dẫn ảnh trên máy (png, jpg, jpeg, webp), tải qua nút Upload của trang New character (đo 2026-09-16: ảnh cắt cận mặt được nhận; Flow từng im lặng từ chối ảnh người mặc đồ ren, tool báo "created no character"). Trả `portrait.workflow_id`, **không phải media id**: lấy media id bằng `flow_characters` |
 | `character_delete` | `project_id`, `entity_id` | xoá vĩnh viễn nhân vật |
 | `flow_upload` | `project_id`, `path` | đường dẫn file trên máy; trả `{file, bytes, rpcids, tiles, media_id, workflow_id, size_bytes, ...}`. `media_id` là id dùng được với `flow_download`. `bytes` là file trên máy, `size_bytes` là bản Flow lưu (Flow nén ảnh lại: PNG 139 KB thành JPEG 5,6 KB). `tiles` đếm tile của view đang mở, không phải số upload |
@@ -123,6 +127,9 @@ Việc cần làm, theo thứ tự, và sau mỗi bước dán nguyên JSON tr�
 3. flow_characters, flow_tools, flow_uploads, scene_list cho <ID NHÁP>
 4. project_rename đổi tên thành "mcp manual test 2", rồi flow_projects xem tên đã đổi chưa
 5. scene_create, scene_list, scene_delete, scene_list với include_trashed=true, rồi scene_restore và scene_list lần nữa
+   5b. Trên scene đó: scene_set_aspect 9:16, scene_add_clip ba video khác tên của <ID NHÁP>, scene_clips (thứ tự và
+   position 0, 1, 2), scene_move_clip clip đầu tới position 2, scene_remove_clip clip ở position 1, scene_clips lần
+   nữa, rồi scene_download: phim phải dài đúng seconds của scene_clips
 6. character_create với prompt tuỳ bạn, flow_characters, character_delete
 7. flow_upload một file ảnh nhỏ có sẵn trên máy, rồi flow_uploads xem count tăng
 8. agent_mode bật rồi tắt

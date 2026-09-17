@@ -153,7 +153,7 @@ mặt, tay và món đồ.
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`). Server
 đang chạy không tự nạp code mới, và phiên đang mở còn giữ mô tả tool cũ: sửa code xong phải mở phiên mới.
 
-33 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
+37 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
 "unmeasured"):
 
 - **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
@@ -197,7 +197,8 @@ mặt, tay và món đồ.
 - **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
 - **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media` (luôn trả một object,
   `all_versions=true` thêm khoá `versions`), `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
-  tự mở project đầu tiên trên grid), `flow_uploads`, `scene_list`, `flow_download` (ghi file vào thư mục đích),
+  tự mở project đầu tiên trên grid), `flow_uploads`, `scene_list`, `scene_clips` (timeline của một scene),
+  `flow_download` (ghi file vào thư mục đích),
   `clip_reconcile` (đọc listing và số dư, ghi ledger, không sinh gì; trả kèm đường dẫn sổ đã đọc, sổ có tồn tại
   không và số dòng, để `jobs: []` không bị hiểu nhầm là sạch khi đọc nhầm chỗ; job gen, job agent và job editor của
   project khác ra `skipped`; sổ không có gì để chấm thì trả ngay, không mở Chrome).
@@ -210,14 +211,27 @@ mặt, tay và món đồ.
   scene trong listing (chờ tối đa 15 s; grid đếm scene đang hoạt động, thùng rác đếm scene đã xoá). Từ chối thay vì
   đoán khi: tên rỗng hay chỉ gồm ký tự vô hình sau chuẩn hoá của Playwright, tên có ở hơn một tile, hay số tile không
   bao giờ khớp số scene. Bấm xong, cả hai tool đọc lại listing và gọi tên scene khác nếu cờ thùng rác của nó đổi.
-  Cùng nhóm: `agent_mode`, `flow_upload`, và ba tool Scenebuilder dưới đây.
-- **Dựng phim trong chính Flow** (miễn phí): `scene_add_clip` đặt một clip của project lên timeline của scene,
-  `scene_download` tải **cả scene thành MỘT phim** (đo 2026-09-16: hai clip 8 s ra một mp4 16,0 giây), `scene_rename`
-  đổi tên. Picker clip không mang media id, chỉ có **title**, nên `scene_add_clip` tra title từ listing rồi khớp đúng
-  nguyên tên và từ chối khi title rỗng, khi media khác trùng title, hay khi picker hiện title đó hơn một lần. Nó trả
-  `duration_before`, `duration_after`, `changed` đọc từ nhãn `Total duration`: **`changed: false` thường chỉ là nhãn
-  chưa kịp cập nhật chứ không phải add hỏng**, nên đọc lại phim bằng `scene_download` thay vì thêm lần nữa. Trang
-  scene không có menu chất lượng, muốn chọn mức thì dùng `clip_download`.
+  Cùng nhóm: `agent_mode`, `flow_upload`, và các tool Scenebuilder dưới đây.
+- **Dựng phim trong chính Flow** (miễn phí, đo lại 2026-09-17 bằng `src/video/probes/scene_editor.py`):
+  - `scene_clips` đọc timeline từ listing (`Zzl0ze[6]`, nơi Flow giữ clip của mọi scene kèm chỉ số): clip theo đúng
+    thứ tự phim chạy, mỗi clip có `position` (đếm từ 0), `clip_id`, `title`, `seconds`, cộng tỉ lệ khung và tổng giây.
+    Thứ tự này khớp phim tải về từng đoạn. Nhãn `Total duration` của trang đổi TRƯỚC khi Flow lưu nên không còn là
+    bằng chứng: đọc lại `scene_clips` sau mỗi thay đổi.
+  - `scene_add_clip` luôn đặt clip vào **CUỐI** timeline: Flow chèn clip mới ngay sau clip đang chọn và trang vừa tải
+    chọn clip 0, nên tool chọn clip cuối trước; bấm hàng picker chỉ chọn, bấm lại hàng đang chọn là thêm luôn, nên tool
+    không bao giờ bấm hàng đã chọn sẵn và bấm "Add media" đúng một lần. Flow chỉ lưu khi trả lời request `oWTRd`
+    (11 tới 14 s sau cú bấm), nên tool kiểm request (đúng media, đúng chỉ số cuối), chờ reply rồi đọc lại listing;
+    kết quả có `position`, `clip_id`, `clips`. Lỗi sau cú bấm luôn dặn đọc `scene_clips` trước khi thêm lại. Picker
+    không mang media id, chỉ có **title**, nên title rỗng, trùng media khác hay hiện hai hàng đều bị từ chối.
+  - `scene_set_aspect` đặt 9:16 hay 16:9 (scene mới là 16:9); tỉ lệ đúng rồi thì không bấm.
+  - `scene_move_clip` (kéo thả, zoom out tới khi hai chỗ cùng hiện) và `scene_remove_clip` (menu chuột phải, Flow
+    không hỏi) gọi clip bằng `clip_id`, rồi kiểm thứ tự trang gửi (`GoMJte`) và listing đọc lại.
+  - `scene_download` tải **cả scene thành MỘT phim**. Phim được dựng ngay trong trang (spinner, snackbar "Exporting
+    your scene…"; phim 40 s mất 33 tới 42 s), nên tool chờ theo độ dài phim, báo ngay khi cú bấm không khởi động xuất,
+    và chép file sang tên tạm rồi mới đổi tên: không bao giờ có phim dở dưới tên trả về (lượt hỏng của bài test
+    dancer từng để lại phim đúng 18 MiB). Kết quả có `seconds` và `clips` của listing để đối chiếu, `attempts: 2` là
+    lần đầu hỏng giữa đường và đã lấy lại trong phiên mới.
+  - `scene_rename` đổi tên. Trang scene không có menu chất lượng, muốn chọn mức thì dùng `clip_download`.
 - **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
   hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
 
@@ -248,10 +262,11 @@ uv run python scripts/acceptance/mcp_smoke.py
 uv run python scripts/acceptance/ledger_integrity.py     # $0, offline, không cần trình duyệt
 uv run python scripts/acceptance/character_gen.py --project <id nháp>   # $0, 8 hàng, gen_character dry_run thật
 uv run python scripts/acceptance/character_gen.py compare --project <id> --job <job_id> --entity <entity_id>
+uv run python scripts/acceptance/scene_build.py --project <id nháp>     # $0, 11 hàng, ghép phim 5 clip qua MCP
 uv run pytest -q
 ```
 
-Test tay toàn bộ 33 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
+Test tay toàn bộ 37 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
 `docs/mcp-manual-test.md`.
 
 `ledger_integrity.py` canh đúng một luật: **không credit nào rời tài khoản qua clip editor mà không có

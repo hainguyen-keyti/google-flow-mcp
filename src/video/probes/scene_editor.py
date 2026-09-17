@@ -13,7 +13,8 @@ action repeats a click it has not measured: each one clicks its deciding control
 
 Actions: open, picker, add=<media_id> (reopens the scene first), addhere=<media_id> (adds on the page as it is),
 timeline, select=<index>, skip=<next|previous>, zoom=<out|in>, aspect, menu=<index>, remove=<index>:<menu item>,
-move=<from>:<to>, download, trash. Indexes count clips on the timeline from 0.
+move=<from>:<to>, download, trash, grid (read only: scene tiles on the project grid). Indexes count clips on the
+timeline from 0.
 
 Measured with this probe on 2026-09-17, five passes on scene pe-scene-1624 (376cd4f9), balance 149 before:
 - The listing holds every scene's clips, in order: Zzl0ze[6] entries read [[clip_id, _, _, [title, created, _, _,
@@ -573,6 +574,42 @@ def _artifact_files() -> dict[str, int]:
     return found
 
 
+_GRID_JS = """
+() => {
+  const containers = [...document.querySelectorAll('flow-tile-container')];
+  const scenes = containers.filter(c => c.querySelector('flow-scene-tile'));
+  const text = (e) => (e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
+  const box = (e) => { const r = e.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y),
+    Math.round(r.width), Math.round(r.height)]; };
+  const scrollers = [...document.querySelectorAll('*')].filter(e => e.scrollHeight > e.clientHeight + 20
+    && ['auto', 'scroll'].includes(getComputedStyle(e).overflowY)).map(e => ({
+      tag: e.tagName.toLowerCase(), cls: String(e.className).slice(0, 80), top: e.scrollTop,
+      height: e.scrollHeight, client: e.clientHeight}));
+  return {tiles: containers.length, scene_tiles: scenes.map(c => ({text: text(c), box: box(c)})),
+    page_height: document.documentElement.scrollHeight, viewport: window.innerHeight, scrollers};
+}
+"""
+
+
+async def act_grid(session: FlowSession, project: str, stamp: str) -> dict[str, Any]:
+    """How many scene tiles the project grid renders, before and after scrolling every scroller to its end. Read only."""
+    page = session.page
+    await session.goto(session.project_url(project), ready="flow-project-page")
+    result: dict[str, Any] = {"loaded": []}
+    for _ in range(4):
+        await page.wait_for_timeout(3_000)
+        result["loaded"].append(await page.evaluate(_GRID_JS))
+    result["shot_top"] = await _shot(page, stamp, "grid_top")
+    await page.evaluate(
+        "() => [...document.querySelectorAll('*')].filter(e => e.scrollHeight > e.clientHeight + 20)"
+        ".forEach(e => e.scrollTop = e.scrollHeight)"
+    )
+    await page.wait_for_timeout(3_000)
+    result["scrolled"] = await page.evaluate(_GRID_JS)
+    result["shot_scrolled"] = await _shot(page, stamp, "grid_scrolled")
+    return result
+
+
 async def act_download(session: FlowSession, scene_id: str, stamp: str) -> dict[str, Any]:
     """Every signal around one scene download, to learn what closes the target under a long film."""
     page = session.page
@@ -722,6 +759,8 @@ async def main() -> None:
                     record["result"] = await act_download(session, scene_id, stamp)
                 elif name == "trash":
                     record["result"] = await scenes.delete(session, args.project, scene_id)
+                elif name == "grid":
+                    record["result"] = await act_grid(session, args.project, stamp)
                 else:
                     raise ValueError(f"unknown action {name!r}")
             except Exception as exc:  # noqa: BLE001
