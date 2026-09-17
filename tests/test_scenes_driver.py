@@ -1,6 +1,8 @@
 import asyncio
+import json
 import re
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -811,10 +813,7 @@ def _media(media_id, title, kind="video"):
 
 
 def _scene_answers(monkeypatch, media, listing_after=None):
-    """reader.project for the media titles, capture for the rename, list_scenes for the confirmation."""
-
-    async def fake_project(session, project_id, *args, **kwargs):
-        return {"media": media}
+    """capture for the rename, list_scenes for the confirmation."""
 
     async def fake_capture(session, action, *, settle):
         await action()
@@ -823,161 +822,8 @@ def _scene_answers(monkeypatch, media, listing_after=None):
     async def fake_list(session, project_id, *, include_trashed=False):
         return listing_after or []
 
-    monkeypatch.setattr(scenes.reader, "project", fake_project, raising=False)
     monkeypatch.setattr(scenes, "capture", fake_capture)
     monkeypatch.setattr(scenes, "list_scenes", fake_list)
-
-
-def test_add_clip_adds_the_media_whose_title_is_exactly_the_one_asked_for(monkeypatch):
-    media = [_media(SCENE, "Model sailboat on wooden desk"), _media(OTHER, "probe_upload.png", "image")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk", "probe_upload.png"])
-    session = _SceneSession(page, media)
-
-    result = asyncio.run(scenes.add_clip(session, PROJECT, "scene-1", SCENE))
-
-    assert page.added == ["Model sailboat on wooden desk"]
-    assert result["duration_before"] == "00:00:00" and result["duration_after"] == "00:08:00"
-    assert result["changed"] is True
-    # The scene it was asked about, not the project page and not another scene.
-    assert session.urls == [f"{FlowSession.project_url(PROJECT)}/scene/scene-1"]
-
-
-def test_add_clip_goes_through_the_menu_when_the_scene_already_holds_a_clip(monkeypatch):
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], clips=1)
-
-    asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-    assert "add Add clip" in page.clicked
-    assert page.added == ["Model sailboat on wooden desk"]
-
-
-def test_add_clip_takes_the_row_whose_title_is_exactly_the_medias_not_one_containing_it(monkeypatch):
-    # The bug class plan D paid for in delete and restore: a substring match makes "Scene 1" fit "Scene 10" too.
-    media = [_media(SCENE, "Scene 1"), _media(OTHER, "Scene 10")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Scene 10", "Scene 1"])
-
-    asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-    assert page.added == ["Scene 1"]
-
-
-def test_add_clip_refuses_when_the_picker_shows_that_title_twice(monkeypatch):
-    # The listing knows one media under this title, yet the picker offers two rows: still a coin flip, still refused.
-    media = [_media(SCENE, "alpha")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["alpha", "alpha"])
-
-    with pytest.raises(RuntimeError, match="2 picker rows"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-    assert page.added == []
-
-
-def test_add_clip_refuses_when_no_picker_row_carries_that_title(monkeypatch):
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["something else"])
-
-    with pytest.raises(LookupError, match="not offered by the picker"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-    assert page.added == []
-
-
-def test_add_clip_refuses_a_media_the_project_does_not_have(monkeypatch):
-    media = [_media(OTHER, "kept")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["kept"])
-
-    with pytest.raises(LookupError, match="is not in the project"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-
-def test_add_clip_refuses_a_media_whose_title_normalizes_to_nothing(monkeypatch):
-    media = [_media(SCENE, BLANK_TITLE)]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage([BLANK_TITLE])
-
-    with pytest.raises(LookupError, match="has no title"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-    assert page.added == []
-
-
-def test_add_clip_waits_for_the_toolbar_instead_of_judging_a_half_built_page(monkeypatch):
-    # Measured 2026-09-16: a scene page dumped too early showed 7 buttons where a built one shows 27.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], builds_after=3_000)
-
-    asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-    assert page.elapsed_ms >= 3_000
-    assert page.added == ["Model sailboat on wooden desk"]
-
-
-def test_add_clip_waits_for_a_control_that_arrives_after_the_rest_of_the_toolbar(monkeypatch):
-    # Live run 2026-09-16: on a scene that already held a clip the page crossed the button count while the timeline's
-    # own Add clip button was still missing, and the driver read 0 matches and gave up. Playwright's click waits for
-    # an element; count() does not, so the wait has to be here.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], clips=1, clip_button_after=4_000)
-
-    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-    assert page.added == ["Model sailboat on wooden desk"]
-    assert result["changed"] is True
-    assert page.elapsed_ms >= 4_000
-
-
-def test_add_clip_gives_up_when_the_scene_page_never_finishes_building(monkeypatch):
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], builds_after=10_000_000)
-
-    with pytest.raises(LookupError, match="never finished building"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-
-def test_add_clip_refuses_a_menu_that_offers_only_the_paid_item(monkeypatch):
-    # The Add clip menu's second item is Extend (Veo 3.1 - Lite), 10 credits, and a scene that already holds a clip
-    # opens that menu before the picker. This pins the route, not the guard: the menu filter never matches Extend.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], clips=1)
-    page.menu_items = [("", "keyboard_double_arrow_right Extend (Veo 3.1 - Lite)")]
-
-    with pytest.raises(LookupError, match="is not offered by the picker"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-    assert page.added == []
-    assert not any("Extend" in label for label in page.clicked)
-
-
-def test_add_clip_refuses_a_menu_item_whose_paid_name_is_only_in_its_text(monkeypatch):
-    # Scoped re-review 2026-09-16: the text half of the label is the load bearing half here, because overlay items
-    # carry no aria-label, and this is the very menu that holds the 10 credit Extend.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], clips=1)
-    page.menu_items = [("", "add Add clip and extend this shot (Veo 3.1 - Lite)")]
-
-    with pytest.raises(RuntimeError, match="spends credits"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-    assert page.added == []
-
-
-def test_add_clip_refuses_a_namesake_that_differs_only_by_an_invisible_character(monkeypatch):
-    # Scoped re-review 2026-09-16: without the normalization on both sides, the clash goes unseen and the driver
-    # clicks the row of the OTHER media while still reporting the media_id it was asked for.
-    media = [_media(SCENE, "alpha"), _media(OTHER, "al" + chr(0x200B) + "pha", "image")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["alpha"])
-
-    with pytest.raises(RuntimeError, match="2 media in this project are titled"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-    assert page.added == []
 
 
 def test_create_types_the_title_into_the_one_editable_box_of_the_header(monkeypatch):
@@ -1027,111 +873,6 @@ def test_create_refuses_when_the_page_shows_more_than_one_editable_title(monkeyp
     with pytest.raises(LookupError, match="2 editable titles"):
         asyncio.run(scenes.create(_SceneSession(page, media), PROJECT, "a name"))
     assert page.typed is None
-
-
-def test_add_clip_reports_a_duration_that_never_changed_instead_of_failing(monkeypatch):
-    # The picker closes itself either way, so a click that changed nothing looks exactly like a good one. Report it
-    # and let the agent read the film back: raising after a click that DID land makes it add the clip twice.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], adds=False)
-
-    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-    assert result["changed"] is False
-    assert result["duration_before"] == result["duration_after"] == "00:00:00"
-    assert page.added == ["Model sailboat on wooden desk"]
-
-
-def test_add_clip_on_a_scene_that_already_holds_one_is_judged_by_the_duration(monkeypatch):
-    # Scoped re-review 2026-09-16: the old post-check counted timeline thumbnails, which a cold page never restores,
-    # so for every add after the first it read 0 then 8 and called a click that added nothing a success.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], clips=1, adds=False)
-
-    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-    assert result["changed"] is False
-    assert result["duration_before"] == result["duration_after"] == "00:08:00"
-
-
-def test_add_clip_waits_for_a_duration_label_that_lags_behind_the_click(monkeypatch):
-    # Measured 2026-09-16: the label was still reading 00:08:00 right after a second clip landed.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], clips=1, label_lag_ms=6_000)
-
-    result = asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-    assert result["duration_before"] == "00:08:00" and result["duration_after"] == "00:16:00"
-    assert result["changed"] is True
-    assert page.elapsed_ms >= 6_000
-
-
-def test_add_clip_does_not_reload_to_confirm_an_add_that_already_landed(monkeypatch):
-    # Live run 2026-09-16: add_clip raised "did not stick" after 20 s and the very next call downloaded the 8.0 s film
-    # anyway. Review 2026-09-16: the answer was worthless anyway, since "Download scene" only says the scene holds SOME
-    # clip, so from the second add on it said yes whatever happened. The film is the proof, not a reload.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], saves=False)
-    session = _SceneSession(page, media)
-
-    result = asyncio.run(scenes.add_clip(session, PROJECT, "scene-1", SCENE))
-
-    assert page.added == ["Model sailboat on wooden desk"]
-    assert "confirmed_after_reload" not in result
-    assert len(session.urls) == 1 and page.elapsed_ms < scenes.SAVE_WAIT_MS
-
-
-def test_add_clip_refuses_when_another_media_in_the_project_shares_the_title(monkeypatch):
-    # Review 2026-09-16: the picker is tabbed, so two media with one title can show as a single row and the click is a
-    # coin flip that still reports the media_id asked for. Judge the clash on the listing, which is already in hand.
-    media = [_media(SCENE, "probe_upload.png"), _media(OTHER, "probe_upload.png", "image")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["probe_upload.png"])
-
-    with pytest.raises(RuntimeError, match="2 media in this project are titled"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-    assert page.added == []
-
-
-def test_add_clip_adds_a_clip_whose_title_reads_like_a_paid_control(monkeypatch):
-    # Review 2026-09-16: Flow titles a clip from its prompt, so the guard meant for controls refused real clips and
-    # told the agent they spend credits. A row is a clip, not a control.
-    media = [_media(SCENE, "robot generates a sandwich")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["robot generates a sandwich"])
-
-    asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-
-    assert page.added == ["robot generates a sandwich"]
-
-
-def test_add_clip_refuses_a_control_whose_paid_name_is_only_in_its_aria_label(monkeypatch):
-    # Review 2026-09-16: these buttons keep their name in aria-label and only a ligature as text, so a guard reading
-    # the text alone was blind for every control matched by name.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    toolbar = [
-        ("Add clip Extend (Veo 3.1 - Lite)" if aria == "Add clip" else aria, text) for aria, text in TOOLBAR
-    ]
-    page = _ScenePage(["Model sailboat on wooden desk"], toolbar=toolbar)
-
-    with pytest.raises(RuntimeError, match="spends credits"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-    assert page.clicked == []
-
-
-def test_add_clip_refuses_when_two_controls_answer_to_the_same_name(monkeypatch):
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], toolbar=[*TOOLBAR, ("Add clip", "add_2")])
-
-    with pytest.raises(LookupError, match="2 controls match"):
-        asyncio.run(scenes.add_clip(_SceneSession(page, media), PROJECT, "scene-1", SCENE))
-    assert page.clicked == []
 
 
 def test_download_refuses_when_the_page_shows_two_download_buttons(monkeypatch, tmp_path):
@@ -1382,3 +1123,907 @@ def test_scene_clips_say_when_the_scene_sits_in_the_trash(monkeypatch):
     result = asyncio.run(scenes.timeline(_Session([]), PROJECT, DANCER))
 
     assert result["trashed"] is True and len(result["clips"]) == 3
+
+
+# The scene editor as probes/scene_editor.py measured it on 2026-09-17 (plan character-generation T9):
+# - the listing (Zzl0ze) is where Flow keeps a scene: [1] media descriptors, [4] scenes with the aspect ratio at [5],
+#   [6] every scene's clips with their index;
+# - a loaded page selects clip 0, and the Add clip button sits inside the selected clip, or on the empty track;
+# - Add clip on a scene holding clips opens a menu first (Add clip, Extend (Veo 3.1 - Lite)), on an empty scene the
+#   picker straight away; the picker's newest row is already selected; clicking another row only selects it, while
+#   clicking the selected row adds it at once; 'Add media' adds the selected row;
+# - an add fires oWTRd [project, scene, [media_id], index], index being the selected clip's plus one, the page shows the
+#   clip at once, and Flow stores it only when its reply comes back 11 to 14 s later, followed by GoMJte;
+# - 'Toggle aspect ratio' fires BpMsoe [project, scene, [scene_id, _, _, _, _, 1 or 2], [["aspect_ratio"]]].
+EDITOR_SCENE = "376cd4f9-51e6-404c-9198-55905ccca835"
+WALKING = ("dbc80b71-a620-42ee-a646-c3ca2979da1b", "Person walking toward camera")
+HOLDING = ("d314b53e-6b25-4a87-94bd-f884a7c4f1fe", "Person holding wooden sailboat m" + chr(0x2026))
+SMILING = ("fcefc9b5-82dc-4c10-87c5-4742d6ec9dbe", "Person walking and smiling")
+ORBIT = ("05202cf2-07c4-4a36-9123-1edc489cca24", "Slow orbit around wooden sailboat")
+CAFE = ("981ca76a-f5e6-42df-a841-d6ede6fdae7a", "Woman speaking at sidewalk cafe")
+CLIPS_SELECTOR = ".timeline-contents > .clip"
+
+
+def _batch_body(rpcid, payload):
+    return (
+        ")]}'\n\n120\n"
+        + json.dumps([["wrb.fr", rpcid, json.dumps(payload), None, None, None, "generic"]])
+        + "\n"
+    )
+
+
+class _Call:
+    def __init__(self, rpcid, payload):
+        self.url = f"https://flow.google.com/_/PinholeUi/data/batchexecute?rpcids={rpcid}&rt=c"
+        self.post_data = urlencode(
+            {"f.req": json.dumps([[[rpcid, json.dumps(payload), None, "generic"]]]), "at": "x"}
+        )
+
+
+class _Answer:
+    def __init__(self, call, rpcid, payload):
+        self.request = call
+        self.url = call.url
+        self.body = _batch_body(rpcid, payload)
+
+    async def text(self):
+        return self.body
+
+
+class _EditorElement:
+    def __init__(self, page, kind, key):
+        self.page = page
+        self.kind = kind
+        self.key = key
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self):
+        return 1
+
+    async def get_attribute(self, name):
+        return self.page.attribute(self.kind, self.key, name)
+
+    async def inner_text(self):
+        return self.page.text_of(self.kind, self.key)
+
+    async def click(self, timeout=None, button="left"):
+        self.page.click(self.kind, self.key, button)
+
+    async def scroll_into_view_if_needed(self, timeout=None):
+        pass
+
+
+class _EditorMatches:
+    """A live locator over the editor: what it matches is read off the page at every call."""
+
+    def __init__(self, page, kind, keys):
+        self.page = page
+        self.kind = kind
+        self.keys = keys
+
+    def _keys(self):
+        return self.keys()
+
+    def filter(self, has_text=None, has=None):
+        def narrowed():
+            kept = []
+            for key in self._keys():
+                text = self.page.text_of(self.kind, key)
+                if has_text is not None and not has_text.search(text):
+                    continue
+                if has is not None and not has.fits(self.page.title_of(self.kind, key)):
+                    continue
+                kept.append(key)
+            return kept
+
+        return _EditorMatches(self.page, self.kind, narrowed)
+
+    def nth(self, index):
+        keys = self._keys()
+        return _EditorElement(self.page, self.kind, keys[index] if index < len(keys) else None)
+
+    @property
+    def first(self):
+        return self.nth(0)
+
+    async def count(self):
+        return len(self._keys())
+
+
+class _Editor:
+    """The scene page and the Flow behind it, both as measured on 2026-09-17 (see the note above)."""
+
+    def __init__(self, videos, *, clips=(), aspect=2, others=()):
+        self.videos = list(videos)
+        self.others = list(others)
+        self.server = [self._clip(media) for media in clips]
+        self.aspect = aspect
+        self.shown = []
+        self.shown_aspect = aspect
+        self.selected = None
+        self.overlay = None
+        self.row = None
+        self.elapsed_ms = 0
+        self.listeners = {"request": [], "response": []}
+        self.pending = []
+        self.clicked = []
+        self.sent = []
+        self.loads = 0
+        self.listings = 0
+        # What can go wrong, each measured or reasoned from a measurement.
+        self.reply_ms = 12_000
+        self.answers = True
+        self.sends = True
+        self.stores = True
+        self.selects_on_click = True
+        self.row_click_selects = None
+        self.insert_at = None
+        self.page_clips = None
+        self.picker = None
+        self.rows_after = 0
+        self.sends_media = None
+        self.sends_aspect = None
+        self.shuffles = False
+        self.saving = False
+        self.left_while_saving = False
+        self.toolbar = list(TOOLBAR)
+        self.builds_after = 0
+        self.add_clip_after = 0
+        self.add_clip_buttons = 1
+        self.toggles = 1
+        self.menu_items = None
+
+    @staticmethod
+    def _clip(media):
+        media_id, title = media
+        return {
+            "clip_id": f"clip-{media_id[:8]}-{title[:4]}",
+            "media_id": media_id,
+            "title": title,
+            "seconds": 8,
+        }
+
+    def media(self):
+        return [*self.videos, *self.others]
+
+    def listing(self):
+        self.listings += 1
+        descriptors = [
+            [media_id, None, None, [title, [1789600000, 0], None, None, f"wf-{media_id[:8]}"], PROJECT]
+            for media_id, title in self.media()
+        ]
+        scene = [EDITOR_SCENE, "pe-scene", None, [1789637131, 0], [1789637141, 0], self.aspect, None, []]
+        entries = [
+            [
+                [
+                    clip["clip_id"],
+                    None,
+                    None,
+                    [clip["title"], [1789637209, 0], None, None, "wf", None],
+                    PROJECT,
+                ],
+                EDITOR_SCENE,
+                [index or None, [8], [], [clip["seconds"]], [1]],
+            ]
+            for index, clip in enumerate(self.server)
+        ]
+        # Flow lists clips in no particular order; reversed here so a reader that trusts listing order is caught.
+        return [None, descriptors, [], [], [scene], [], list(reversed(entries)), []]
+
+    def load(self):
+        self.loads += 1
+        self.shown = [dict(clip) for clip in self.server]
+        if self.page_clips is not None:
+            self.shown = self.shown[: self.page_clips]
+        self.shown_aspect = self.aspect
+        self.selected = 0 if self.shown else None
+        self.overlay = None
+
+    # Locators.
+    def locator(self, selector, has=None):
+        if selector == "button":
+            return _EditorMatches(self, "toolbar", self._toolbar_keys)
+        if selector == CLIPS_SELECTOR:
+            return _EditorMatches(self, "clip", lambda: list(range(len(self.shown))))
+        if selector == f"{CLIPS_SELECTOR}.selected":
+            return _EditorMatches(self, "clip", lambda: [] if self.selected is None else [self.selected])
+        if selector == scenes.ROW:
+            return _EditorMatches(self, "row", self._row_keys)
+        if selector == f"{scenes.ROW}[aria-selected=true]":
+            return _EditorMatches(self, "row", lambda: [k for k in self._row_keys() if k == self.row])
+        if selector == scenes.OVERLAY:
+            return _EditorMatches(self, "overlay", self._overlay_keys)
+        raise AssertionError(f"unexpected selector {selector!r}")
+
+    def get_by_role(self, role, name=None):
+        assert role == "button"
+        return _EditorMatches(
+            self, "named", lambda: [k for k in self._named_keys() if name.search(self.text_of("named", k))]
+        )
+
+    def get_by_text(self, text, exact=False):
+        return _Text(text, exact)
+
+    def on(self, event, handler):
+        self.listeners[event].append(handler)
+
+    def remove_listener(self, event, handler):
+        self.listeners[event].remove(handler)
+
+    async def wait_for_timeout(self, ms):
+        self.elapsed_ms += ms
+        due = [item for item in self.pending if item[0] <= self.elapsed_ms]
+        self.pending = [item for item in self.pending if item[0] > self.elapsed_ms]
+        for _, deliver in due:
+            deliver()
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    def _toolbar_keys(self):
+        count = 7 if self.elapsed_ms < self.builds_after else len(self.toolbar)
+        return list(range(count))
+
+    def _named_keys(self):
+        # Add clip and the aspect toggle depend on the page's state, so they come from it, not from the fixed toolbar.
+        stateful = ("Add clip", "Toggle aspect ratio")
+        keys = [("toolbar", i) for i in self._toolbar_keys() if not self.toolbar[i][0].startswith(stateful)]
+        on_track = not self.shown or self.selected is not None
+        if on_track and self.elapsed_ms >= self.add_clip_after:
+            keys += [("add_clip", n) for n in range(self.add_clip_buttons)]
+        keys += [("toggle", n) for n in range(self.toggles)]
+        return keys
+
+    def rows(self):
+        return self.videos if self.picker is None else self.picker
+
+    def _row_keys(self):
+        if self.overlay != "picker" or self.elapsed_ms < self.rows_after:
+            return []
+        return list(range(len(self.rows())))
+
+    def _overlay_keys(self):
+        if self.overlay == "menu":
+            items = self.menu_items or [
+                ("", "addAdd clip"),
+                ("", "keyboard_double_arrow_rightExtend (Veo 3.1 - Lite)"),
+            ]
+            return [("menu", i, label) for i, label in enumerate(items)]
+        if self.overlay == "picker":
+            return [("button", 0, ("", "uploadUpload media")), ("button", 1, ("", "Add media"))]
+        return []
+
+    def attribute(self, kind, key, name):
+        if kind == "clip":
+            if name == "class":
+                marks = ["cdk-drag", "mat-context-menu-trigger", "clip"]
+                marks += ["is-first"] if key == 0 else []
+                marks += ["is-last"] if key == len(self.shown) - 1 else []
+                marks += ["selected"] if key == self.selected else []
+                return " ".join(marks)
+            return None
+        if kind == "row":
+            return {"aria-selected": "true" if key == self.row else "false"}.get(name)
+        if kind == "overlay":
+            return key[2][0] or None if name == "aria-label" else None
+        if kind == "named":
+            return self._named_label(key)[0] if name == "aria-label" else None
+        if kind == "toolbar":
+            return self.toolbar[key][0] if name == "aria-label" else None
+        return None
+
+    def _named_label(self, key):
+        what, index = key
+        if what == "toolbar":
+            return self.toolbar[index]
+        if what == "add_clip":
+            return next(pair for pair in self.toolbar if pair[0].startswith("Add clip"))
+        return (
+            "Toggle aspect ratio",
+            "crop_portrait9:16" if self.shown_aspect == 1 else "crop_landscape16:9",
+        )
+
+    def text_of(self, kind, key):
+        if kind == "named":
+            return " ".join(part for part in self._named_label(key) if part)
+        if kind == "overlay":
+            return key[2][1]
+        if kind == "row":
+            return self.rows()[key][1]
+        if kind == "toolbar":
+            return self.toolbar[key][1]
+        return ""
+
+    def title_of(self, kind, key):
+        return self.rows()[key][1] if kind == "row" else self.text_of(kind, key)
+
+    # What a click does.
+    def click(self, kind, key, button):
+        if key is None:
+            raise AssertionError(f"clicked a {kind} that is not there")
+        if kind == "clip":
+            self.clicked.append(f"clip {key}" + (" right" if button == "right" else ""))
+            if self.selects_on_click:
+                self.selected = key
+            return
+        if kind == "named":
+            label = self._named_label(key)
+            self.clicked.append(label[0])
+            if key[0] == "add_clip":
+                self.overlay = "menu" if self.shown else "picker"
+                self.row = 0 if self.overlay == "picker" else None
+            elif key[0] == "toggle":
+                self._toggle()
+            return
+        if kind == "overlay":
+            label = key[2][1]
+            self.clicked.append(label)
+            if key[0] == "menu" and "Add clip" in label:
+                self.overlay, self.row = "picker", 0
+            elif label == "Add media":
+                self._add(self.rows()[self.row])
+            return
+        if kind == "row":
+            self.clicked.append(f"row {self.rows()[key][1]}")
+            if key == self.row:
+                self._add(self.rows()[key])
+            else:
+                self.row = key if self.row_click_selects is None else self.row_click_selects
+            return
+        raise AssertionError(f"clicked a {kind}")
+
+    def _emit(self, event, item):
+        for handler in list(self.listeners[event]):
+            handler(item)
+
+    def _later(self, ms, deliver):
+        self.pending.append((self.elapsed_ms + ms, deliver))
+
+    def _add(self, media):
+        self.overlay = None
+        if not self.sends:
+            return
+        index = (self.selected + 1 if self.shown else 0) if self.insert_at is None else self.insert_at
+        clip = self._clip(media)
+        payload = [PROJECT, EDITOR_SCENE, [self.sends_media or media[0]], index]
+        call = _Call("oWTRd", payload)
+        self.sent.append(("oWTRd", payload))
+        self._emit("request", call)
+        self.shown.insert(index, clip)
+
+        def reply():
+            if self.stores:
+                self.server.insert(index, clip)
+            if self.shuffles:
+                self.server[0], self.server[1] = self.server[1], self.server[0]
+            entry = [
+                [clip["clip_id"], None, None, [clip["title"]], PROJECT],
+                EDITOR_SCENE,
+                [index or None, [8]],
+            ]
+            self._emit(
+                "response", _Answer(call, "oWTRd", [[entry], [["wf", PROJECT, clip["clip_id"], "CAE"]]])
+            )
+            save = [
+                PROJECT,
+                EDITOR_SCENE,
+                [[[c["clip_id"]], EDITOR_SCENE, [i or None]] for i, c in enumerate(self.shown)],
+            ]
+            save_call = _Call("GoMJte", save)
+            self.sent.append(("GoMJte", save))
+            self._emit("request", save_call)
+            self.saving = True
+
+            def saved():
+                self.saving = False
+                self._emit("response", _Answer(save_call, "GoMJte", [[]]))
+
+            self._later(1_500, saved)
+
+        if self.answers:
+            self._later(self.reply_ms, reply)
+
+    def _toggle(self):
+        self.shown_aspect = 1 if self.shown_aspect == 2 else 2
+        if not self.sends:
+            return
+        payload = [
+            PROJECT,
+            EDITOR_SCENE,
+            [EDITOR_SCENE, None, None, None, None, self.sends_aspect or self.shown_aspect],
+            [["aspect_ratio"]],
+        ]
+        call = _Call("BpMsoe", payload)
+        self.sent.append(("BpMsoe", payload))
+        self._emit("request", call)
+        wanted = self.shown_aspect
+
+        def reply():
+            if self.stores:
+                self.aspect = wanted
+            self._emit(
+                "response", _Answer(call, "BpMsoe", [[EDITOR_SCENE, "pe-scene", None, None, None, wanted]])
+            )
+
+        if self.answers:
+            self._later(900, reply)
+
+
+class _EditorSession:
+    def __init__(self, page):
+        self.page = page
+        self.urls = []
+
+    async def goto(self, url, *, ready=None, timeout_ms=60_000):
+        self.urls.append(url)
+        if "/scene/" in url:
+            self.page.load()
+
+    project_url = staticmethod(FlowSession.project_url)
+
+
+def _editor(monkeypatch, page):
+    async def fake_listing(session, project_id):
+        assert project_id == PROJECT
+        session.urls.append("listing")
+        # Reading the listing leaves the scene page: a save still in flight would be cut off.
+        session.page.left_while_saving |= session.page.saving
+        return session.page.listing()
+
+    monkeypatch.setattr(scenes, "_listing", fake_listing)
+    return _EditorSession(page)
+
+
+def test_set_aspect_clicks_the_toggle_once_and_confirms_the_ratio_in_the_listing(monkeypatch):
+    page = _Editor([WALKING], clips=[WALKING], aspect=2)
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+
+    assert page.clicked == ["Toggle aspect ratio"]
+    assert page.sent == [
+        ("BpMsoe", [PROJECT, EDITOR_SCENE, [EDITOR_SCENE, None, None, None, None, 1], [["aspect_ratio"]]])
+    ]
+    assert page.aspect == 1
+    assert result == {"scene_id": EDITOR_SCENE, "aspect": "9:16", "changed": True, "rpcids": ["BpMsoe"]}
+    assert session.urls[-1] == "listing"
+
+
+def test_set_aspect_leaves_a_scene_already_at_that_ratio_alone(monkeypatch):
+    page = _Editor([WALKING], aspect=1)
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+
+    assert result == {"scene_id": EDITOR_SCENE, "aspect": "9:16", "changed": False, "rpcids": []}
+    assert page.clicked == [] and page.loads == 0
+
+
+def test_set_aspect_refuses_a_ratio_flow_does_not_offer_before_reading_anything(monkeypatch):
+    page = _Editor([WALKING])
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(ValueError, match="9:16 or 16:9"):
+        asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "4:3"))
+    assert session.urls == []
+
+
+def test_set_aspect_refuses_when_the_editor_already_shows_the_ratio_the_listing_does_not(monkeypatch):
+    # The toggle flips whatever is shown: clicking it here would set the ratio the agent did NOT ask for.
+    page = _Editor([WALKING], aspect=2)
+    session = _editor(monkeypatch, page)
+    load = page.load
+
+    def load_showing_portrait():
+        load()
+        page.shown_aspect = 1
+
+    page.load = load_showing_portrait
+
+    with pytest.raises(RuntimeError, match="not toggling"):
+        asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+    assert page.clicked == []
+
+
+def test_set_aspect_fails_when_the_listing_still_reads_the_old_ratio_after_its_one_click(monkeypatch):
+    page = _Editor([WALKING], aspect=2)
+    page.stores = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="still reads 16:9"):
+        asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+    assert page.clicked == ["Toggle aspect ratio"]
+
+
+def test_set_aspect_fails_when_the_click_sends_nothing_and_does_not_click_again(monkeypatch):
+    page = _Editor([WALKING], aspect=2)
+    page.sends = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="no aspect ratio change left the page"):
+        asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+    assert page.clicked == ["Toggle aspect ratio"]
+
+
+def test_set_aspect_refuses_a_page_with_two_toggles(monkeypatch):
+    page = _Editor([WALKING], aspect=2)
+    page.toggles = 2
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="2 Toggle aspect ratio"):
+        asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+    assert page.clicked == []
+
+
+def test_set_aspect_fails_when_the_change_it_sent_asks_for_the_other_ratio(monkeypatch):
+    page = _Editor([WALKING], aspect=2)
+    page.sends_aspect = 2
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="asked Flow for"):
+        asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+    assert page.clicked == ["Toggle aspect ratio"]
+
+
+def test_set_aspect_fails_when_flow_never_answers_the_change(monkeypatch):
+    page = _Editor([WALKING], aspect=2)
+    page.answers = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="Flow never answered the aspect ratio change"):
+        asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+    assert page.clicked == ["Toggle aspect ratio"]
+
+
+def _stored(page):
+    return [clip["title"] for clip in page.server]
+
+
+def test_add_clip_selects_the_last_clip_first_so_the_new_clip_lands_at_the_end(monkeypatch):
+    # Measured 2026-09-17: a new clip goes right after the SELECTED clip and a loaded page selects clip 0, so without
+    # selecting the last clip this add would have gone between WALKING and HOLDING.
+    page = _Editor([CAFE, SMILING, HOLDING, WALKING], clips=[WALKING, HOLDING])
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SMILING[0]))
+
+    assert page.sent[0] == ("oWTRd", [PROJECT, EDITOR_SCENE, [SMILING[0]], 2])
+    assert page.clicked[0] == "clip 1"
+    assert _stored(page) == [WALKING[1], HOLDING[1], SMILING[1]]
+    assert result["position"] == 2 and result["clip_id"] == page.server[2]["clip_id"]
+    assert [clip["title"] for clip in result["clips"]] == [WALKING[1], HOLDING[1], SMILING[1]]
+    assert (result["scene_id"], result["media_id"], result["title"]) == (EDITOR_SCENE, SMILING[0], SMILING[1])
+    assert result["seconds"] == 24 and result["rpcids"] == ["GoMJte", "oWTRd"]
+
+
+def test_add_clip_on_an_empty_scene_adds_at_position_0_without_selecting_a_clip(monkeypatch):
+    page = _Editor([CAFE, WALKING])
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert page.sent[0] == ("oWTRd", [PROJECT, EDITOR_SCENE, [WALKING[0]], 0])
+    assert _stored(page) == [WALKING[1]] and result["position"] == 0
+    assert not any(label.startswith("clip ") for label in page.clicked)
+
+
+def test_add_clip_selects_its_row_then_clicks_add_media_exactly_once(monkeypatch):
+    # Measured 2026-09-17: clicking a row only selects it; 'Add media' is what adds.
+    page = _Editor([CAFE, WALKING])
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert page.clicked == ["Add clip", f"row {WALKING[1]}", "Add media"]
+
+
+def test_add_clip_never_clicks_the_row_the_picker_already_selected(monkeypatch):
+    # Measured by the dancer test on 2026-09-17: clicking the row the picker already selected adds it at once, so a
+    # driver that clicked it and then 'Add media' put the clip on twice.
+    page = _Editor([WALKING, CAFE])
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert page.clicked == ["Add clip", "Add media"]
+    assert _stored(page) == [WALKING[1]]
+
+
+def test_add_clip_waits_for_flow_to_store_the_clip_before_reading_the_listing_back(monkeypatch):
+    # The page shows the clip at once; Flow stores it only when its reply comes back, 11 to 14 s later (2026-09-17).
+    page = _Editor([CAFE, WALKING])
+    page.reply_ms = 40_000
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert page.elapsed_ms >= 40_000
+    assert result["position"] == 0 and _stored(page) == [WALKING[1]]
+
+
+def test_add_clip_fails_when_its_click_sends_no_add_and_never_clicks_again(monkeypatch):
+    page = _Editor([CAFE, WALKING])
+    page.sends = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="no add request left the page"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert page.clicked.count("Add media") == 1
+
+
+def test_add_clip_fails_when_flow_never_answers_and_says_to_read_the_timeline_before_adding_again(
+    monkeypatch,
+):
+    page = _Editor([CAFE, WALKING])
+    page.answers = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="Flow never answered the add") as caught:
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert "scene_clips before adding again" in str(caught.value)
+    assert page.clicked.count("Add media") == 1
+
+
+def test_add_clip_fails_when_flow_answers_but_the_listing_does_not_hold_the_clip(monkeypatch):
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    page.stores = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="the listing reads") as caught:
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert "scene_clips before adding again" in str(caught.value)
+
+
+def test_add_clip_reports_a_clip_that_landed_anywhere_but_the_end(monkeypatch):
+    page = _Editor([CAFE, SMILING, WALKING], clips=[WALKING, CAFE])
+    page.insert_at = 0
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="position 0 instead of 2") as caught:
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SMILING[0]))
+    assert "scene_move_clip" in str(caught.value) and "do not add it again" in str(caught.value)
+
+
+def test_add_clip_refuses_when_the_page_shows_fewer_clips_than_flow_lists(monkeypatch):
+    # Clips carry no id on the page, so the last one is only the last one when the page and the listing agree.
+    page = _Editor([CAFE, SMILING, WALKING], clips=[WALKING, CAFE])
+    page.page_clips = 1
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="shows 1 clips while Flow lists 2"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SMILING[0]))
+    assert page.sent == [] and page.clicked == []
+
+
+def test_add_clip_refuses_when_clicking_the_last_clip_does_not_select_it(monkeypatch):
+    page = _Editor([CAFE, SMILING, WALKING], clips=[WALKING, CAFE])
+    page.selects_on_click = False
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="did not select it"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SMILING[0]))
+    assert page.sent == [] and "Add clip" not in page.clicked
+
+
+def test_add_clip_refuses_when_the_picker_selects_another_row_than_its_own(monkeypatch):
+    page = _Editor([CAFE, SMILING, WALKING])
+    page.row_click_selects = 1
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="not adding"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert "Add media" not in page.clicked and page.sent == []
+
+
+def test_add_clip_lets_the_pages_own_save_land_before_leaving_the_scene(monkeypatch):
+    # Measured 2026-09-17: right after Flow answers the add, the page sends the whole ordered clip list (GoMJte).
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert page.left_while_saving is False
+
+
+def test_add_clip_fails_when_the_add_it_sent_names_another_media(monkeypatch):
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    page.sends_media = CAFE[0]
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(
+        RuntimeError, match=f"names media \\['{CAFE[0]}'\\] instead of {WALKING[0]}"
+    ) as caught:
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert "scene_remove_clip" in str(caught.value) and "do not add it again" in str(caught.value)
+
+
+def test_add_clip_fails_when_the_clips_already_there_no_longer_keep_their_order(monkeypatch):
+    page = _Editor([CAFE, SMILING, WALKING], clips=[WALKING, CAFE])
+    page.shuffles = True
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="the listing reads"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SMILING[0]))
+
+
+def test_add_clip_waits_for_picker_rows_that_render_after_the_dialog_opens(monkeypatch):
+    page = _Editor([CAFE, WALKING])
+    page.rows_after = 4_000
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert _stored(page) == [WALKING[1]]
+
+
+def test_add_clip_goes_through_the_menu_when_the_scene_already_holds_a_clip(monkeypatch):
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert "addAdd clip" in page.clicked
+    assert _stored(page) == [CAFE[1], WALKING[1]]
+
+
+def test_add_clip_takes_the_row_whose_title_is_exactly_the_medias_not_one_containing_it(monkeypatch):
+    # The bug class plan D paid for in delete and restore: a substring match makes "Scene 1" fit "Scene 10" too.
+    page = _Editor([(OTHER, "Scene 10"), (SCENE, "Scene 1")])
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SCENE))
+
+    assert _stored(page) == ["Scene 1"]
+
+
+def test_add_clip_refuses_when_the_picker_shows_that_title_twice(monkeypatch):
+    # The listing knows one media under this title, yet the picker offers two rows: still a coin flip, still refused.
+    page = _Editor([(SCENE, "alpha")])
+    page.picker = [(SCENE, "alpha"), (OTHER, "alpha")]
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="2 picker rows"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SCENE))
+    assert page.sent == []
+
+
+def test_add_clip_refuses_when_no_picker_row_carries_that_title(monkeypatch):
+    page = _Editor([(SCENE, "Model sailboat on wooden desk")])
+    page.picker = [(OTHER, "something else")]
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="not offered by the picker"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SCENE))
+    assert page.sent == []
+
+
+def test_add_clip_refuses_a_media_the_project_does_not_have(monkeypatch):
+    page = _Editor([(OTHER, "kept")])
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="is not in the project"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SCENE))
+    assert page.loads == 0
+
+
+def test_add_clip_refuses_a_media_whose_title_normalizes_to_nothing(monkeypatch):
+    page = _Editor([(SCENE, BLANK_TITLE)])
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="has no title"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SCENE))
+    assert page.loads == 0
+
+
+def test_add_clip_waits_for_the_toolbar_instead_of_judging_a_half_built_page(monkeypatch):
+    # Measured 2026-09-16: a scene page dumped too early showed 7 buttons where a built one shows 27.
+    page = _Editor([CAFE, WALKING])
+    page.builds_after = 3_000
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert page.elapsed_ms >= 3_000 and _stored(page) == [WALKING[1]]
+
+
+def test_add_clip_waits_for_a_control_that_arrives_after_the_rest_of_the_toolbar(monkeypatch):
+    # Live run 2026-09-16: on a scene that already held a clip the page crossed the button count while the timeline's
+    # own Add clip button was still missing, and the driver read 0 matches and gave up.
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    page.add_clip_after = 4_000
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert _stored(page) == [CAFE[1], WALKING[1]]
+
+
+def test_add_clip_gives_up_when_the_scene_page_never_finishes_building(monkeypatch):
+    page = _Editor([CAFE, WALKING])
+    page.builds_after = 10_000_000
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="never finished building"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+
+def test_add_clip_refuses_a_menu_that_offers_only_the_paid_item(monkeypatch):
+    # The Add clip menu's second item is Extend (Veo 3.1 - Lite), 10 credits, still there on 2026-09-17. This pins the
+    # route, not the guard: the menu filter never matches Extend.
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    page.menu_items = [("", "keyboard_double_arrow_rightExtend (Veo 3.1 - Lite)")]
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="is not offered by the picker"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert page.sent == [] and not any("Extend" in label for label in page.clicked)
+
+
+def test_add_clip_refuses_a_menu_item_whose_paid_name_is_only_in_its_text(monkeypatch):
+    # Scoped re-review 2026-09-16: overlay items carry no aria-label, so the text is the load bearing half here.
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    page.menu_items = [("", "addAdd clip and extend this shot (Veo 3.1 - Lite)")]
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="spends credits"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert page.sent == []
+
+
+def test_add_clip_refuses_a_namesake_that_differs_only_by_an_invisible_character(monkeypatch):
+    # Scoped re-review 2026-09-16: without the normalization on both sides, the clash goes unseen and the driver
+    # clicks the row of the OTHER media while still reporting the media_id it was asked for.
+    page = _Editor([(SCENE, "alpha")], others=[(OTHER, "al" + chr(0x200B) + "pha")])
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="2 media in this project are titled"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SCENE))
+    assert page.loads == 0
+
+
+def test_add_clip_refuses_when_another_media_in_the_project_shares_the_title(monkeypatch):
+    # Review 2026-09-16: the picker is tabbed, so two media with one title can show as a single row and the click is a
+    # coin flip that still reports the media_id asked for. Judge the clash on the listing, which is already in hand.
+    page = _Editor([(SCENE, "probe_upload.png")], others=[(OTHER, "probe_upload.png")])
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="2 media in this project are titled"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SCENE))
+    assert page.loads == 0
+
+
+def test_add_clip_adds_a_clip_whose_title_reads_like_a_paid_control(monkeypatch):
+    # Review 2026-09-16: Flow titles a clip from its prompt, so the guard meant for controls refused real clips and
+    # told the agent they spend credits. A row is a clip, not a control.
+    page = _Editor([CAFE, (SCENE, "robot generates a sandwich")])
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SCENE))
+
+    assert _stored(page) == ["robot generates a sandwich"]
+
+
+def test_add_clip_refuses_a_control_whose_paid_name_is_only_in_its_aria_label(monkeypatch):
+    # Review 2026-09-16: these buttons keep their name in aria-label and only a ligature as text, so a guard reading
+    # the text alone was blind for every control matched by name.
+    page = _Editor([CAFE, WALKING])
+    page.toolbar = [
+        ("Add clip Extend (Veo 3.1 - Lite)" if aria == "Add clip" else aria, text) for aria, text in TOOLBAR
+    ]
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="spends credits"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert page.clicked == []
+
+
+def test_add_clip_refuses_when_two_controls_answer_to_the_same_name(monkeypatch):
+    page = _Editor([CAFE, WALKING])
+    page.add_clip_buttons = 2
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="2 controls match"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert page.clicked == []

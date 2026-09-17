@@ -49,6 +49,7 @@ MUTATING = (
     "scene_restore",
     "scene_add_clip",
     "scene_rename",
+    "scene_set_aspect",
     "project_create",
     "project_rename",
     "project_delete",

@@ -247,6 +247,9 @@ class Backend:
     async def scene_clips(self, project_id: str, scene_id: str) -> dict[str, Any]:
         return await self._with(lambda s: scenes_mod.timeline(s, project_id, scene_id))
 
+    async def scene_set_aspect(self, project_id: str, scene_id: str, aspect: str) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.set_aspect(s, project_id, scene_id, aspect))
+
     async def agent_mode(self, project_id: str, enabled: bool) -> dict[str, Any]:
         return await self._with(lambda s: agent_mod.set_mode(s, project_id, enabled))
 
@@ -647,14 +650,15 @@ async def scene_restore(project_id: str, scene_id: str) -> str:
 @server.tool(
     name="scene_add_clip",
     description=(
-        "Put one of the project's clips onto a scene's timeline, which is how a scene becomes a film made of "
-        "several clips. The picker carries no media id, only the media's title, so the media id is resolved to "
-        "its title through the listing and refused rather than guessed when that title is blank, when another "
-        "media in the project shares it, or when the picker shows it more than once. The result carries "
-        "duration_before, duration_after and changed, read off the editor's own Total duration, the one measure of "
-        "a scene that survives a page load. changed=false usually means the label had not caught up yet rather than "
-        "that the add failed, so read the film back with scene_download instead of adding again: a second add puts "
-        "the same clip on the timeline twice. Free."
+        "Put one of the project's clips at the end of a scene's timeline, which is how a scene becomes a film made "
+        "of several clips: add them in the order the film should play them. The picker carries no media id, only "
+        "the media's title, so the media id is resolved to its title through the listing and refused rather than "
+        "guessed when that title is blank, when another media in the project shares it, or when the picker shows it "
+        "more than once. Flow stores a clip only when it answers the add, 11 to 14 s after the click (measured "
+        "2026-09-17), so the call waits for that answer and then reads the listing back: the result carries the "
+        "clip's position (counted from 0), its clip_id, the scene's seconds and every clip in order. If the call "
+        "fails after the click, the clip may still land: read scene_clips first and never add it again before you "
+        "have, or the film gets it twice. Free."
     ),
 )
 async def scene_add_clip(project_id: str, scene_id: str, media_id: str) -> str:
@@ -709,6 +713,23 @@ async def scene_clips(project_id: str, scene_id: str) -> str:
     _require(project_id, "project_id")
     _require(scene_id, "scene_id")
     return _json(await backend.scene_clips(project_id, scene_id))
+
+
+@server.tool(
+    name="scene_set_aspect",
+    description=(
+        "Set the aspect ratio a scene's film is exported in: 9:16 (portrait) or 16:9 (landscape); a new scene starts "
+        "at 16:9 (measured 2026-09-17). The editor offers one toggle, so a scene already at the ratio asked for is "
+        "left alone, and a scene whose page shows another ratio than Flow's listing is refused rather than toggled "
+        "blind. Confirmed by reading the listing back; scene_clips shows the ratio as aspect. Free."
+    ),
+)
+async def scene_set_aspect(project_id: str, scene_id: str, aspect: str) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    if aspect not in scenes_mod.ASPECTS.values():
+        raise ValueError(f"aspect must be 9:16 or 16:9, got {aspect!r}")
+    return _json(await backend.scene_set_aspect(project_id, scene_id, aspect))
 
 
 @server.tool(

@@ -5,14 +5,18 @@ under the project's Trash view. The scene editor's own 'Move to trash' button di
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
+from urllib.parse import parse_qs
 
+from gflow_cli.api.transports.batchexecute import parse_frames
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from video.flow import parsers, reader
+from video.flow import parsers
 from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
@@ -23,14 +27,16 @@ TOOLBAR_MIN = 20
 TOOLBAR_WAIT_MS = 15_000
 CONTROL_WAIT_MS = 10_000
 SAVE_WAIT_MS = 20_000
-# The Total duration label was measured still reading the old value right after a clip landed, so an add waits for it
-# to move. It replaces a thumbnail count: a cold page rebuilds no thumbnails at all, so that count read 0 then 8 for
-# every add after the first, whatever the click did (scoped review 2026-09-16).
-DURATION_WAIT_MS = 20_000
 # Measured 2026-09-16: a scene film lands within seconds of the click. The editor's 600 s, copied at first, turned one
 # click that fired no download at all into a ten minute hang.
 DOWNLOAD_WAIT_MS = 180_000
 OVERLAY = ".cdk-overlay-pane button, [role=dialog] button"
+ROW = ".cdk-overlay-pane button[role=option]"
+CLIPS = ".timeline-contents > .clip"
+# Measured 2026-09-17 (probes/scene_editor.py) on a heavily loaded machine: every request a scene click fires left the
+# page within 0.4 s, while Flow's reply to an add came 11 to 14 s later and nothing is stored until it does.
+SEND_WAIT_MS = 15_000
+REPLY_WAIT_MS = 90_000
 # Add clip's menu offers Extend (Veo 3.1 - Lite), 10 credits, right next to the item this driver wants, and the same
 # page carries Start generation. "generation" is listed on its own because "generate" is not a substring of it, which
 # left the one certain spender on that page unguarded (review 2026-09-16).
@@ -151,6 +157,120 @@ async def timeline(session: FlowSession, project_id: str, scene_id: str) -> dict
     return timeline_from_listing(await _listing(session, project_id), scene_id)
 
 
+class _Calls:
+    """What the page sent and heard for the named rpcs while one control was clicked.
+
+    A scene click is judged by the request it fires, not by the page: measured 2026-09-17, the Total duration label
+    moved within 1.3 s of an add that Flow only stored 11 to 14 s later, when its reply came back.
+    """
+
+    def __init__(self, page: Any, rpcids: tuple[str, ...]) -> None:
+        self.page = page
+        self.rpcids = rpcids
+        self.sent: dict[str, list[Any]] = {}
+        self.heard: dict[str, list[Any]] = {}
+        self._reads: list[asyncio.Future[None]] = []
+
+    def _on_request(self, request: Any) -> None:
+        if "batchexecute" not in request.url:
+            return
+        try:
+            entries = json.loads(parse_qs(request.post_data or "").get("f.req", ["[]"])[0])[0]
+        except (ValueError, TypeError, IndexError):
+            return
+        for entry in entries if isinstance(entries, list) else []:
+            rpcid, inner = parsers._at(entry, 0), parsers._at(entry, 1)
+            if rpcid not in self.rpcids or not isinstance(inner, str):
+                continue
+            try:
+                self.sent.setdefault(rpcid, []).append(json.loads(inner))
+            except ValueError:
+                continue
+
+    def _on_response(self, response: Any) -> None:
+        if "batchexecute" in response.url:
+            self._reads.append(asyncio.ensure_future(self._read(response)))
+
+    async def _read(self, response: Any) -> None:
+        try:
+            body = await response.text()
+        except Exception:  # noqa: BLE001
+            return
+        for rpcid, payload in parse_frames(body):
+            if rpcid in self.rpcids:
+                self.heard.setdefault(rpcid, []).append(payload)
+
+    def __enter__(self) -> Self:
+        self.page.on("request", self._on_request)
+        self.page.on("response", self._on_response)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.page.remove_listener("request", self._on_request)
+        self.page.remove_listener("response", self._on_response)
+
+    async def wait(self, seen: dict[str, list[Any]], rpcid: str, limit_ms: int) -> list[Any] | None:
+        waited = 0
+        while rpcid not in seen:
+            if waited >= limit_ms:
+                return None
+            await self.page.wait_for_timeout(500)
+            waited += 500
+        return seen[rpcid]
+
+
+async def set_aspect(session: FlowSession, project_id: str, scene_id: str, aspect: str) -> dict[str, Any]:
+    """Set a scene to 9:16 or 16:9 through 'Toggle aspect ratio', confirmed by the listing.
+
+    Measured 2026-09-17: the button flips whatever the page shows and fires BpMsoe with the new ratio under the field
+    mask aspect_ratio; the listing and a reloaded page kept it. A scene already at the ratio is left alone, since a
+    click there would set the other one.
+    """
+    wanted = next((code for code, name in ASPECTS.items() if name == aspect), None)
+    if wanted is None:
+        raise ValueError(f"aspect must be 9:16 or 16:9, got {aspect!r}")
+    before = await timeline(session, project_id, scene_id)
+    if before["aspect"] == aspect:
+        return {"scene_id": scene_id, "aspect": aspect, "changed": False, "rpcids": []}
+    if before["aspect"] is None:
+        raise LookupError(f"the listing names no aspect ratio for scene {scene_id}; not toggling blind")
+    page = session.page
+    await _open_scene(session, project_id, scene_id)
+    toggle = page.get_by_role("button", name=re.compile("Toggle aspect ratio", re.IGNORECASE))
+    button = await _one_of(
+        page, toggle, "{count} Toggle aspect ratio buttons on the scene page; not guessing"
+    )
+    shown = " ".join((await button.inner_text() or "").split())
+    if aspect in shown or before["aspect"] not in shown:
+        raise RuntimeError(
+            f"the editor shows {shown!r} while the listing reads {before['aspect']} for scene {scene_id}; not toggling"
+        )
+    with _Calls(page, ("BpMsoe",)) as calls:
+        await _click_one(page, toggle, "the Toggle aspect ratio button")
+        sent = await calls.wait(calls.sent, "BpMsoe", SEND_WAIT_MS)
+        if not sent:
+            raise RuntimeError(
+                f"clicked Toggle aspect ratio once and no aspect ratio change left the page for scene {scene_id}; "
+                "read scene_clips before trying again"
+            )
+        if parsers._at(sent[0], 2, 0) != scene_id or parsers._at(sent[0], 2, 5) != wanted:
+            raise RuntimeError(
+                f"clicked Toggle aspect ratio once and the page asked Flow for {sent[0]!r} instead"
+            )
+        heard = await calls.wait(calls.heard, "BpMsoe", REPLY_WAIT_MS)
+    if not heard:
+        raise RuntimeError(
+            f"Flow never answered the aspect ratio change for scene {scene_id} within {REPLY_WAIT_MS // 1000}s; "
+            "read scene_clips before trying again"
+        )
+    after = await timeline(session, project_id, scene_id)
+    if after["aspect"] != aspect:
+        raise RuntimeError(
+            f"clicked Toggle aspect ratio once; the listing still reads {after['aspect']} for scene {scene_id}"
+        )
+    return {"scene_id": scene_id, "aspect": aspect, "changed": True, "rpcids": ["BpMsoe"]}
+
+
 async def create(session: FlowSession, project_id: str, title: str | None = None) -> dict[str, Any]:
     page = session.page
     await session.goto(session.project_url(project_id), ready=PROJECT_READY)
@@ -198,27 +318,6 @@ async def _open_scene(session: FlowSession, project_id: str, scene_id: str) -> N
             )
         await page.wait_for_timeout(1_000)
         waited += 1_000
-
-
-async def _total_duration(page: Any) -> str | None:
-    """What the scene editor says the whole timeline lasts, as mm:ss:ff.
-
-    Read without a regex escape on purpose (the editing tool here doubles backslashes). This label is the only
-    measure of a scene's contents that survives a page load: the timeline thumbnails are not restored on a cold
-    page (measured 2026-09-16), so counting them cannot tell a new clip from a strip that finally rendered.
-    """
-    text = await page.locator(BUILDER).first.inner_text() or ""
-    key = "Total duration:"
-    at = text.find(key)
-    if at < 0:
-        return None
-    value = ""
-    for char in text[at + len(key) :].strip():
-        if char.isdigit() or char == ":":
-            value += char
-        else:
-            break
-    return value or None
 
 
 async def _holds_a_clip(page: Any) -> bool:
@@ -320,16 +419,48 @@ async def rename(session: FlowSession, project_id: str, scene_id: str, title: st
     return {"scene_id": scene_id, "title": title, "rpcids": sorted(frames)}
 
 
-async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_id: str) -> dict[str, Any]:
-    """Put one of the project's clips on a scene's timeline.
+async def _page_agrees(page: Any, expected: int, scene_id: str) -> Any:
+    """The timeline's clips, once the page shows as many as the listing holds: clips carry no id on the page, so a
+    position means the same clip on both only when the counts agree."""
+    clips = page.locator(CLIPS)
+    waited = 0
+    while (shown := await clips.count()) != expected:
+        if waited >= CONTROL_WAIT_MS:
+            raise LookupError(
+                f"the timeline shows {shown} clips while Flow lists {expected} for scene {scene_id}; not guessing "
+                "which clip is which"
+            )
+        await page.wait_for_timeout(1_000)
+        waited += 1_000
+    return clips
 
-    Measured 2026-09-16: a picker row carries NO media id, only the media's title, and titles do collide in this
-    account, so the media is resolved to its title from the listing and a title more than one row shows is refused
-    instead of guessed. An empty scene answers 'Add clip' with the picker, a scene that already holds a clip answers
-    with a menu first. Clicking the row IS the add: the picker closes itself and no confirm button follows.
+
+async def _select_clip(page: Any, clips: Any, index: int, scene_id: str) -> None:
+    """Select one clip by clicking it; a locator click scrolls it into view first (measured 2026-09-17: a click at an
+    off screen coordinate selected nothing, a locator click on the last of five selected it)."""
+    clip = clips.nth(index)
+    await clip.click(timeout=8_000)
+    await page.wait_for_timeout(1_000)
+    marks = (await clip.get_attribute("class") or "").split()
+    if "selected" not in marks or await page.locator(f"{CLIPS}.selected").count() != 1:
+        raise LookupError(
+            f"clicking clip {index} of scene {scene_id} did not select it; not guessing where Flow would put the change"
+        )
+
+
+async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_id: str) -> dict[str, Any]:
+    """Put one of the project's clips at the END of a scene's timeline, confirmed by the listing.
+
+    Picker rows carry no media id, only the media's title, and titles do collide in this account, so the media is
+    resolved to a title no other media shares. Measured 2026-09-17 (probes/scene_editor.py): a new clip goes right
+    after the selected clip and a loaded page selects clip 0, so the last clip is selected first; clicking a row only
+    selects it, clicking the row already selected adds it, and 'Add media' adds the selected row. The page shows the
+    clip at once, yet Flow stores it only when its reply to oWTRd comes back 11 to 14 s later, so the add is judged by
+    that request, that reply and the listing read afterwards, never by the page.
     """
     page = session.page
-    media = (await reader.project(session, project_id))["media"]
+    listing = await _listing(session, project_id)
+    media = parsers.media(listing)
     item = next((m for m in media if m.get("id") == media_id), None)
     if item is None:
         raise LookupError(f"media {media_id} is not in the project listing")
@@ -348,8 +479,11 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
             f"{len(namesakes)} media in this project are titled {title!r} ({', '.join(namesakes)}); picker rows "
             "carry no media id, so adding would guess which one"
         )
+    before = timeline_from_listing(listing, scene_id)["clips"]
     await _open_scene(session, project_id, scene_id)
-    before = await _total_duration(page)
+    clips = await _page_agrees(page, len(before), scene_id)
+    if before:
+        await _select_clip(page, clips, len(before) - 1, scene_id)
     # By accessible name, not by text: measured 2026-09-16, this button's text is only the ligature "add_2" while
     # "Add clip" lives in its aria-label, so a text match finds nothing at all (live run of scene_build).
     await _click_one(
@@ -362,34 +496,70 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
     if await menu.count():
         await _click_one(page, menu, "the Add clip menu item")
         await page.wait_for_timeout(2_000)
-    rows = page.locator(OVERLAY).filter(has=page.get_by_text(title, exact=True))
-    matching = await rows.count()
+    rows = page.locator(ROW).filter(has=page.get_by_text(title, exact=True))
+    waited = 0
+    while (matching := await rows.count()) == 0 and waited < CONTROL_WAIT_MS:
+        await page.wait_for_timeout(1_000)
+        waited += 1_000
     if matching == 0:
         raise LookupError(f"media {media_id} titled {title!r} is not offered by the picker")
     if matching > 1:
         raise RuntimeError(
             f"{matching} picker rows show {title!r}; rows carry no media id, so adding would guess"
         )
-    frames = await capture(
-        session, lambda: _click_one(page, rows, "the picker row", guard_paid=False), settle=6.0
-    )
-    # Reported, never raised on. An add that really landed must not come back looking like a failure, or the agent
-    # adds the same clip again and the film gets it twice (live run 2026-09-16). The film itself, through
-    # scene_download, stays the proof; this only says whether the editor admitted the change while we watched.
-    waited = 0
-    while (after := await _total_duration(page)) == before:
-        if waited >= DURATION_WAIT_MS:
-            break
-        await page.wait_for_timeout(2_000)
-        waited += 2_000
+    if await rows.first.get_attribute("aria-selected") != "true":
+        await rows.first.click(timeout=8_000)
+        await page.wait_for_timeout(1_000)
+    chosen = page.locator(f"{ROW}[aria-selected=true]")
+    if await chosen.count() != 1 or await chosen.filter(has=page.get_by_text(title, exact=True)).count() != 1:
+        raise RuntimeError(f"the picker did not select the one row titled {title!r}; not adding")
+    add = page.locator(OVERLAY).filter(has_text=re.compile(r"^\s*Add media\s*$", re.IGNORECASE))
+    with _Calls(page, ("oWTRd", "GoMJte")) as calls:
+        await _click_one(page, add, "the Add media button")
+        sent = await calls.wait(calls.sent, "oWTRd", SEND_WAIT_MS)
+        if not sent:
+            raise RuntimeError(
+                f"clicked Add media once and no add request left the page within {SEND_WAIT_MS // 1000}s; read "
+                f"scene_clips before adding again (scene {scene_id})"
+            )
+        heard = await calls.wait(calls.heard, "oWTRd", REPLY_WAIT_MS)
+        if heard:
+            # The page saves the whole ordered list right after the reply; leaving before it lands is not measured.
+            await calls.wait(calls.heard, "GoMJte", SEND_WAIT_MS)
+    if not heard:
+        raise RuntimeError(
+            f"Flow never answered the add of media {media_id} within {REPLY_WAIT_MS // 1000}s: the clip may still "
+            f"land, so read scene_clips before adding again (scene {scene_id})"
+        )
+    after = timeline_from_listing(await _listing(session, project_id), scene_id)
+    titles = [clip["title"] for clip in after["clips"]]
+    if parsers._at(sent[0], 2) != [media_id]:
+        raise RuntimeError(
+            f"the add Flow received names media {parsers._at(sent[0], 2)} instead of {media_id}; the listing reads "
+            f"{titles}: remove the wrong clip with scene_remove_clip, do not add it again"
+        )
+    added = parsers._at(heard[0], 0, 0, 0, 0)
+    position = next((clip["position"] for clip in after["clips"] if clip["clip_id"] == added), None)
+    if position is None:
+        raise RuntimeError(
+            f"Flow answered the add with clip {added} but the listing reads {titles} without it; read scene_clips "
+            f"before adding again (scene {scene_id})"
+        )
+    others = [clip["clip_id"] for clip in after["clips"] if clip["clip_id"] != added]
+    if position != len(before) or others != [clip["clip_id"] for clip in before]:
+        raise RuntimeError(
+            f"clip {added} landed at position {position} instead of {len(before)}; the listing reads {titles}: use "
+            "scene_move_clip to move it, do not add it again"
+        )
     return {
         "scene_id": scene_id,
         "media_id": media_id,
         "title": title,
-        "duration_before": before,
-        "duration_after": after,
-        "changed": after != before,
-        "rpcids": sorted(frames),
+        "position": position,
+        "clip_id": added,
+        "seconds": after["seconds"],
+        "clips": after["clips"],
+        "rpcids": sorted({*calls.sent, *calls.heard}),
     }
 
 

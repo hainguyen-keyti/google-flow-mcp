@@ -47,8 +47,10 @@ EXPECTED_TOOLS = {
     "scene_add_clip",
     "scene_download",
     "scene_rename",
-    # Plan character-generation T10: the listing read that lets an agent name a clip on a timeline, added on purpose.
+    # Plan character-generation T10: the listing read that lets an agent name a clip on a timeline, and the aspect
+    # ratio a film is exported in, added on purpose.
     "scene_clips",
+    "scene_set_aspect",
     "agent_mode",
     "agent_send",
     "clip_download",
@@ -105,6 +107,7 @@ TOOL_CALLS: dict[str, dict] = {
     "scene_download": {"project_id": "P", "scene_id": "S", "out_dir": "out/films"},
     "scene_rename": {"project_id": "P", "scene_id": "S", "title": "a name"},
     "scene_clips": {"project_id": "P", "scene_id": "S"},
+    "scene_set_aspect": {"project_id": "P", "scene_id": "S", "aspect": "9:16"},
     "agent_mode": {"project_id": "P", "enabled": True},
     "agent_send": {"project_id": "P", "message": "hello", "job_id": "job-agent"},
     "clip_download": {"project_id": "P", "media_id": "M"},
@@ -1811,3 +1814,61 @@ def test_scene_clips_tells_the_agent_the_order_is_the_films_and_how_clips_are_na
     text = served_tool_objects()["scene_clips"].description
     for phrase in ("order the film plays", "position", "from 0", "clip_id", "aspect", "Free."):
         assert phrase in text, phrase
+
+
+@pytest.mark.parametrize("aspect", ["4:3", "9x16", "portrait", ""])
+def test_scene_set_aspect_refuses_a_ratio_flow_does_not_offer_before_a_browser_opens(
+    monkeypatch, tmp_path, aspect
+):
+    sessions = []
+
+    async def fake_with(self, fn):
+        sessions.append(fn)
+        return {}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        return await s.call_tool("scene_set_aspect", {"project_id": "P", "scene_id": "S", "aspect": aspect})
+
+    result = with_client(fn)
+    assert result.is_error and "9:16 or 16:9" in _texts([result])[0]
+    assert sessions == []
+
+
+def test_scene_set_aspect_reaches_the_driver_with_the_ratio_asked_for(monkeypatch, tmp_path):
+    seen = {}
+
+    async def fake_with(self, fn):
+        return await fn("session")
+
+    async def fake_set_aspect(session, project_id, scene_id, aspect):
+        seen.update(session=session, project_id=project_id, scene_id=scene_id, aspect=aspect)
+        return {"scene_id": scene_id, "aspect": aspect, "changed": True, "rpcids": ["BpMsoe"]}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.scenes_mod, "set_aspect", fake_set_aspect)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        return await s.call_tool("scene_set_aspect", {"project_id": "P", "scene_id": "S", "aspect": "16:9"})
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])[0]
+    assert seen == {"session": "session", "project_id": "P", "scene_id": "S", "aspect": "16:9"}
+
+
+def test_scene_set_aspect_tells_the_agent_both_ratios_and_that_a_scene_already_there_is_left_alone():
+    text = served_tool_objects()["scene_set_aspect"].description
+    for phrase in ("9:16", "16:9", "already", "scene_clips", "Free."):
+        assert phrase in text, phrase
+
+
+def test_scene_add_clip_tells_the_agent_the_clip_goes_last_and_to_read_the_timeline_rather_than_add_again():
+    # The dancer test (2026-09-17) followed the old text, "changed=false usually means the label had not caught up",
+    # while its timeline was empty: Flow had changed its picker and nothing had been added at all.
+    text = served_tool_objects()["scene_add_clip"].description
+    for phrase in ("at the end", "position", "clip_id", "scene_clips", "never add it again", "Free."):
+        assert phrase in text, phrase
+    assert "changed" not in text and "usually" not in text

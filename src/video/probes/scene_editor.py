@@ -20,6 +20,8 @@ Measured with this probe on 2026-09-17, five passes on scene pe-scene-1624 (376c
   clip_workflow_id, _, updated], project_id], scene_id, [index or null for 0, [length], [start], [end], [1]]]. The
   order matched the downloaded film frame by frame, and the dancer scenes (8c6c91da three clips, cae71b29 five).
   Zzl0ze[4] entry [5] is the scene's aspect ratio, 1 for 9:16 and 2 for 16:9, not a status.
+- 'Add clip' on a scene that already holds a clip opens a menu first, Add clip and Extend (Veo 3.1 - Lite), as on
+  2026-09-16; an empty scene opens the picker at once.
 - The picker is a dialog of rows (button[role=option], newest video first) and the first row is already selected
   (aria-selected, asset-item-active). Clicking a row only selects it; its detail pane holds one 'Add media' button.
 - 'Add media' fires oWTRd [project, scene, [media_id], index] within 0.4 s, index being the selected clip's plus one
