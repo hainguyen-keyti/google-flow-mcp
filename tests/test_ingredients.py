@@ -1453,6 +1453,21 @@ def test_submit_calls_a_job_flow_reported_failed_a_failure(monkeypatch, tmp_path
     assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["status"] == "failed"
 
 
+def test_submit_never_says_flow_refused_a_job_flow_last_reported_running(monkeypatch, tmp_path):
+    # The story path settles an unmoved balance as failed whatever Flow last said; only status 4 is a refusal.
+    log = []
+    _install(
+        monkeypatch,
+        tmp_path,
+        log,
+        balance_reads=(200, 200, 200),
+        replies={"click": [SUBMIT_REPLY, _status_reply(2)]},
+    )
+    with pytest.raises(RuntimeError, match="nothing was generated within 0s, spent 0 credits") as raised:
+        _submit(_SubmitSession(log), tmp_path, log)
+    assert "refused" not in str(raised.value)
+
+
 def test_submit_never_says_charged_nothing_when_the_balance_moved(monkeypatch, tmp_path):
     # The story path settles a moved balance as failed too, so the refusal wording must read the balance itself.
     log = []
