@@ -44,9 +44,10 @@ MENU_ITEM = "[role=menuitem]"
 # Measured 2026-09-17: five 8 s clips at 816 px each ran far past a 1280 px wide page; two zoom-outs fit all five.
 ZOOM_OUT_MAX = 4
 # Measured 2026-09-17 (probes/scene_editor.py) on a heavily loaded machine: every request a scene click fires left the
-# page within 0.4 s, while Flow's reply to an add came 11 to 14 s later and nothing is stored until it does.
+# page within 0.4 s, while Flow's reply to an add came 11 to 14 s later and nothing is stored until it does. The wait is
+# far longer than that because two adds of the same run passed 90 s with no reply at all, one of them having landed.
 SEND_WAIT_MS = 15_000
-REPLY_WAIT_MS = 90_000
+REPLY_WAIT_MS = 180_000
 # Add clip's menu offers Extend (Veo 3.1 - Lite), 10 credits, right next to the item this driver wants, and the same
 # page carries Start generation. "generation" is listed on its own because "generate" is not a substring of it, which
 # left the one certain spender on that page unguarded (review 2026-09-16).
@@ -554,11 +555,6 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
         if heard:
             # The page saves the whole ordered list right after the reply; leaving before it lands is not measured.
             await calls.wait(calls.heard, "GoMJte", SEND_WAIT_MS)
-    if not heard:
-        raise RuntimeError(
-            f"Flow never answered the add of media {media_id} within {REPLY_WAIT_MS // 1000}s: the clip may still "
-            f"land, so read scene_clips before adding again (scene {scene_id})"
-        )
     after = timeline_from_listing(await _listing(session, project_id), scene_id)
     titles = [clip["title"] for clip in after["clips"]]
     if parsers._at(sent[0], 2) != [media_id]:
@@ -566,7 +562,19 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
             f"the add Flow received names media {parsers._at(sent[0], 2)} instead of {media_id}; the listing reads "
             f"{titles}: remove the wrong clip with scene_remove_clip, do not add it again"
         )
-    added = parsers._at(heard[0], 0, 0, 0, 0)
+    added = parsers._at(heard[0], 0, 0, 0, 0) if heard else None
+    if added is None:
+        # Measured 2026-09-17 (acceptance run 3): two adds passed the reply wait with nothing heard and one of them had
+        # landed all the same, so the listing decides, not the silence.
+        fresh = [
+            clip for clip in after["clips"] if clip["clip_id"] not in {each["clip_id"] for each in before}
+        ]
+        if len(fresh) != 1 or fresh[0]["title"] != title:
+            raise RuntimeError(
+                f"Flow never answered the add of media {media_id} within {REPLY_WAIT_MS // 1000}s and the listing "
+                f"reads {titles}; read scene_clips before adding again (scene {scene_id})"
+            )
+        added = fresh[0]["clip_id"]
     position = next((clip["position"] for clip in after["clips"] if clip["clip_id"] == added), None)
     if position is None:
         raise RuntimeError(
@@ -585,6 +593,7 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
         "title": title,
         "position": position,
         "clip_id": added,
+        "answered": heard is not None,
         "seconds": after["seconds"],
         "clips": after["clips"],
         "rpcids": sorted({*calls.sent, *calls.heard}),

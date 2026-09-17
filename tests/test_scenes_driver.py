@@ -1685,6 +1685,10 @@ class _Editor:
                 self.server.insert(index, clip)
             if self.shuffles:
                 self.server[0], self.server[1] = self.server[1], self.server[0]
+            if not self.answers:
+                # Flow stored the clip and its answer never reached this browser: measured on 2026-09-17, two adds
+                # passed 90 s with no reply and one of them had landed.
+                return
             entry = [
                 [clip["clip_id"], None, None, [clip["title"]], PROJECT],
                 EDITOR_SCENE,
@@ -1709,8 +1713,7 @@ class _Editor:
 
             self._later(1_500, saved)
 
-        if self.answers:
-            self._later(self.reply_ms, reply)
+        self._later(self.reply_ms, reply)
 
     def _toggle(self):
         self.shown_aspect = 1 if self.shown_aspect == 2 else 2
@@ -1947,17 +1950,39 @@ def test_add_clip_fails_when_its_click_sends_no_add_and_never_clicks_again(monke
     assert page.clicked.count("Add media") == 1
 
 
-def test_add_clip_fails_when_flow_never_answers_and_says_to_read_the_timeline_before_adding_again(
-    monkeypatch,
-):
-    page = _Editor([CAFE, WALKING])
+def test_add_clip_answers_from_the_listing_when_flows_own_reply_never_arrives(monkeypatch):
+    # Measured 2026-09-17 (acceptance run 3): two adds passed 90 s with no reply and one of them had landed anyway, so
+    # the listing, not the reply, decides whether the clip is there.
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
     page.answers = False
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert result["position"] == 1 and result["title"] == WALKING[1] and result["answered"] is False
+    assert _stored(page) == [CAFE[1], WALKING[1]]
+    assert page.clicked.count("Add media") == 1
+
+
+def test_add_clip_fails_when_flow_neither_answers_nor_puts_the_clip_on(monkeypatch):
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    page.answers = False
+    page.stores = False
     session = _editor(monkeypatch, page)
 
     with pytest.raises(RuntimeError, match="Flow never answered the add") as caught:
         asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
     assert "scene_clips before adding again" in str(caught.value)
     assert page.clicked.count("Add media") == 1
+
+
+def test_add_clip_that_flow_answers_says_so(monkeypatch):
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert result["answered"] is True and result["position"] == 1
 
 
 def test_add_clip_fails_when_flow_answers_but_the_listing_does_not_hold_the_clip(monkeypatch):

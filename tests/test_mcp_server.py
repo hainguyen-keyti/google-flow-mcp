@@ -1971,6 +1971,7 @@ def test_scene_add_clip_tells_the_agent_the_clip_goes_last_and_to_read_the_timel
     # The dancer test (2026-09-17) followed the old text, "changed=false usually means the label had not caught up",
     # while its timeline was empty: Flow had changed its picker and nothing had been added at all.
     text = served_tool_objects()["scene_add_clip"].description
-    for phrase in ("at the end", "position", "clip_id", "scene_clips", "never add it again", "Free."):
+    phrases = ("at the end", "position", "clip_id", "scene_clips", "never add it again", "answered", "Free.")
+    for phrase in phrases:
         assert phrase in text, phrase
     assert "changed" not in text and "usually" not in text

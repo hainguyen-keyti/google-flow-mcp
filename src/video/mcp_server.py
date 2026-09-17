@@ -670,9 +670,10 @@ async def scene_restore(project_id: str, scene_id: str) -> str:
         "guessed when that title is blank, when another media in the project shares it, or when the picker shows it "
         "more than once. Flow stores a clip only when it answers the add, 11 to 14 s after the click (measured "
         "2026-09-17), so the call waits for that answer and then reads the listing back: the result carries the "
-        "clip's position (counted from 0), its clip_id, the scene's seconds and every clip in order. If the call "
-        "fails after the click, the clip may still land: read scene_clips first and never add it again before you "
-        "have, or the film gets it twice. Free."
+        "clip's position (counted from 0), its clip_id, the scene's seconds, every clip in order, and answered, "
+        "which is false when Flow's own answer never arrived and the listing alone showed the clip on the timeline. "
+        "If the call fails after the click, the clip may still land: read scene_clips first and never add it again "
+        "before you have, or the film gets it twice. Free."
     ),
 )
 async def scene_add_clip(project_id: str, scene_id: str, media_id: str) -> str:
