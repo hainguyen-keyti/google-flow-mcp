@@ -1289,6 +1289,10 @@ class _Editor:
         self.deletes_index = None
         self._mouse = _Mouse(self)
         self.viewport_size = {"width": 1280, "height": 720}
+        self.twice_selected = False
+        self.two_rows_selected = False
+        self.row_click_adds = False
+        self.sends_scene = None
         self.exporting = False
         self.snacks = []
         self.download = None
@@ -1354,15 +1358,19 @@ class _Editor:
         if selector == CLIPS_SELECTOR:
             return _EditorMatches(self, "clip", lambda: list(range(len(self.shown))))
         if selector == f"{CLIPS_SELECTOR}.selected":
-            return _EditorMatches(self, "clip", lambda: [] if self.selected is None else [self.selected])
+            return _EditorMatches(self, "clip", self._selected_keys)
         if selector == scenes.ROW:
             return _EditorMatches(self, "row", self._row_keys)
         if selector == f"{scenes.ROW}[aria-selected=true]":
-            return _EditorMatches(self, "row", lambda: [k for k in self._row_keys() if k == self.row])
+            return _EditorMatches(
+                self,
+                "row",
+                lambda: [k for k in self._row_keys() if k == self.row or (self.two_rows_selected and k == 0)],
+            )
         if selector == scenes.OVERLAY:
             return _EditorMatches(self, "overlay", self._overlay_keys)
         if selector == scenes.MENU_ITEM:
-            return _EditorMatches(self, "overlay", self._context_keys)
+            return _EditorMatches(self, "overlay", self._menu_item_keys)
         if selector == scenes.SNACKBAR:
             return _EditorMatches(self, "snack", lambda: list(range(len(self.snacks))))
         raise AssertionError(f"unexpected selector {selector!r}")
@@ -1419,6 +1427,12 @@ class _Editor:
         self._clamp()
 
     def clip_at(self, x, y):
+        # Measured 2026-09-17: the Add clip button belongs to the selected clip and sits 5 to 29 px past its right edge,
+        # over the next clip, so a press there grabs the selected clip.
+        if self.selected is not None and 490 <= y <= 514:
+            right = self.box(self.selected)["x"] + self.box(self.selected)["width"]
+            if right + 5 <= x <= right + 29:
+                return self.selected
         index = int((x - 21 + self.scroll) // self.clip_width())
         return index if 471 <= y <= 533 and 0 <= index < len(self.shown) else None
 
@@ -1437,6 +1451,17 @@ class _Editor:
         self.clicked.append(f"drag {source} to {target}")
         self.shown.insert(target, self.shown.pop(source))
         self._save()
+
+    def _selected_keys(self):
+        if self.selected is None:
+            return []
+        return [self.selected, 0] if self.twice_selected else [self.selected]
+
+    def _menu_item_keys(self):
+        """Both menus are made of role=menuitem items: Add clip's (Add clip, Extend) and a clip's right-click menu."""
+        if self.overlay == "menu":
+            return self._overlay_keys()
+        return self._context_keys()
 
     def _context_keys(self):
         if not (isinstance(self.overlay, tuple) and self.overlay[0] == "context"):
@@ -1533,7 +1558,9 @@ class _Editor:
             ]
             return [("menu", i, label) for i, label in enumerate(items)]
         if self.overlay == "picker":
-            return [("button", 0, ("", "uploadUpload media")), ("button", 1, ("", "Add media"))]
+            # Measured 2026-09-17: the picker's rows are buttons in the same overlay pane as its controls.
+            rows = [("rowbutton", i, ("", title)) for i, (_, title) in enumerate(self.rows())]
+            return [*rows, ("button", 0, ("", "uploadUpload media")), ("button", 1, ("", "Add media"))]
         return []
 
     def attribute(self, kind, key, name):
@@ -1609,6 +1636,8 @@ class _Editor:
             elif label[0] == "Download scene":
                 self._export()
             return
+        if kind == "overlay" and key[0] == "rowbutton":
+            return self.click("row", key[1], button)
         if kind == "overlay":
             label = key[2][1]
             self.clicked.append(label)
@@ -1625,7 +1654,7 @@ class _Editor:
             return
         if kind == "row":
             self.clicked.append(f"row {self.rows()[key][1]}")
-            if key == self.row:
+            if key == self.row or self.row_click_adds:
                 self._add(self.rows()[key])
             else:
                 self.row = key if self.row_click_selects is None else self.row_click_selects
@@ -1690,7 +1719,14 @@ class _Editor:
         payload = [
             PROJECT,
             EDITOR_SCENE,
-            [EDITOR_SCENE, None, None, None, None, self.sends_aspect or self.shown_aspect],
+            [
+                self.sends_scene or EDITOR_SCENE,
+                None,
+                None,
+                None,
+                None,
+                self.sends_aspect or self.shown_aspect,
+            ],
             [["aspect_ratio"]],
         ]
         call = _Call("BpMsoe", payload)
@@ -2446,7 +2482,9 @@ def test_download_waits_out_the_export_and_copies_the_finished_film_into_the_fol
     film = Path(result["path"])
     assert film.parent == room and film.name.startswith(EDITOR_SCENE) and film.suffix == ".mp4"
     assert film.read_bytes() == page.film and result["bytes"] == len(page.film)
-    assert result["seconds"] == 40 and result["clips"] == 5 and result["suggested"].endswith(".mp4")
+    assert result["seconds"] == 40 and result["suggested"].endswith(".mp4")
+    # A list like every other scene tool answers with, so the film can be checked clip by clip (review 2026-09-17).
+    assert [clip["title"] for clip in result["clips"]] == [title for _, title in FIVE]
     assert page.clicked == ["Download scene"] and page.elapsed_ms >= page.export_ms
     assert sorted(path.name for path in room.iterdir()) == [film.name]
 
@@ -2572,3 +2610,187 @@ def test_download_refuses_a_copy_shorter_than_the_film_the_browser_wrote(monkeyp
     with pytest.raises(OSError, match="copied 10 of"):
         asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=room))
     assert list(room.iterdir()) == []
+
+
+# Review of plan character-generation T10 (2026-09-17): one blocking finding, one drag finding, and rules no test held.
+def test_add_clip_on_an_empty_scene_never_takes_a_picker_row_for_the_add_clip_menu(monkeypatch):
+    # Blocking finding: an empty scene opens the picker at once, whose rows are buttons in the same overlay pane. A
+    # newest media titled with the words "add clip" was clicked as the menu item, and clicking the row the picker had
+    # selected added that other media on the spot.
+    newest = ("5b0e3a1c-8d2f-4e6a-9c7b-1a2b3c4d5e6f", "How to add clip transitions")
+    page = _Editor([newest, WALKING])
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert _stored(page) == [WALKING[1]] and result["media_id"] == WALKING[0]
+    assert f"row {newest[1]}" not in page.clicked
+    assert [payload[2] for rpc, payload in page.sent if rpc == "oWTRd"] == [[WALKING[0]]]
+
+
+def test_add_clip_says_so_when_an_add_leaves_before_its_own_add_media_click(monkeypatch):
+    # Should Flow ever add on a row click again, as it did before 2026-09-17, that add must not pass unnoticed.
+    page = _Editor([CAFE, WALKING])
+    page.row_click_adds = True
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="before Add media was clicked") as caught:
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert "scene_clips before adding again" in str(caught.value)
+    assert "Add media" not in page.clicked
+
+
+def test_add_clip_refuses_when_more_than_one_clip_reads_selected(monkeypatch):
+    page = _Editor([CAFE, SMILING, WALKING], clips=[WALKING, CAFE])
+    page.twice_selected = True
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="did not select it"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, SMILING[0]))
+    assert page.sent == []
+
+
+def test_add_clip_refuses_when_the_picker_shows_more_than_one_selected_row(monkeypatch):
+    page = _Editor([CAFE, SMILING, WALKING])
+    page.two_rows_selected = True
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="not adding"):
+        asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+    assert page.sent == []
+
+
+def test_remove_clip_refuses_when_more_than_one_clip_reads_selected(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.twice_selected = True
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="did not select it"):
+        asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, page.server[3]["clip_id"]))
+    assert page.sent == []
+
+
+def test_move_clip_never_presses_on_the_add_clip_button_beside_the_selected_clip(monkeypatch):
+    # Drag finding: at the fourth zoom-out an 8 s clip is 51 px wide, and the middle of clip 1 falls on the Add clip
+    # button of the selected clip 0, which would drag clip 0 instead.
+    many = [(f"{n:08d}-0000-4000-8000-000000000000", f"clip number {n}") for n in range(13)]
+    page = _Editor(many, clips=many)
+    session = _editor(monkeypatch, page)
+    ids = _ids(page)
+
+    asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, ids[1], 12))
+
+    assert page.zoom == 4
+    assert _ids(page) == [ids[0], *ids[2:], ids[1]]
+
+
+def test_move_clip_refuses_a_clip_scrolled_off_the_left_of_the_screen(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    page.zooms = False
+    page.scroll = 5_000
+    session = _editor(monkeypatch, page)
+    ids = _ids(page)
+
+    with pytest.raises(LookupError, match="off screen"):
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, ids[0], 4))
+    assert page.sent == []
+
+
+@pytest.mark.parametrize("position", [True, 2.0, "2"])
+def test_move_clip_refuses_a_position_that_is_not_a_whole_number(monkeypatch, position):
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(ValueError, match="position must be 0 to 4"):
+        asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, page.server[0]["clip_id"], position))
+    assert page.loads == 0
+
+
+def test_set_aspect_refuses_a_toggle_that_shows_neither_ratio(monkeypatch):
+    # The toggle flips whatever is shown, so a label naming no ratio gives no ground to click on.
+    page = _Editor([WALKING], aspect=2)
+    session = _editor(monkeypatch, page)
+    label = page._named_label
+    page._named_label = lambda key: (
+        ("Toggle aspect ratio", "crop_landscape") if key[0] == "toggle" else label(key)
+    )
+
+    with pytest.raises(RuntimeError, match="not toggling"):
+        asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+    assert page.clicked == []
+
+
+def test_set_aspect_fails_when_the_change_it_sent_names_another_scene(monkeypatch):
+    page = _Editor([WALKING], aspect=2)
+    page.sends_scene = OTHER
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="asked Flow for"):
+        asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+
+
+def test_scene_changes_leave_no_listener_behind_on_the_page(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE[:4], aspect=2)
+    session = _editor(monkeypatch, page)
+
+    asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+    asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, CAFE[0]))
+    asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, page.server[0]["clip_id"], 2))
+    asyncio.run(scenes.remove_clip(session, PROJECT, EDITOR_SCENE, page.server[1]["clip_id"]))
+
+    assert page.listeners == {"request": [], "response": []}
+
+
+def test_download_never_overwrites_a_film_that_appears_while_the_scene_exports(monkeypatch, tmp_path):
+    # The check before the click cannot see a file written during a 30 to 40 s export (CLAUDE.md rule 5).
+    page, session = _downloading(monkeypatch, tmp_path)
+    monkeypatch.setattr(scenes.time, "strftime", lambda fmt: "20260917_120000")
+    target = tmp_path / f"{EDITOR_SCENE}_20260917_120000.mp4"
+    export = page._export
+
+    def export_and_collide():
+        export()
+        page._later(1_000, lambda: target.write_bytes(b"older film"))
+
+    page._export = export_and_collide
+
+    with pytest.raises(FileExistsError):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path))
+    assert target.read_bytes() == b"older film"
+    assert sorted(path.name for path in tmp_path.iterdir() if path.is_file()) == [target.name]
+
+
+def test_download_keeps_counting_an_export_whose_snackbar_went_away(monkeypatch, tmp_path):
+    # Once the page showed an export, a later poll that looks idle is not "no export started".
+    page, session = _downloading(monkeypatch, tmp_path)
+    page.handoff_ms = 24_000
+    export = page._export
+
+    def export_then_dismiss():
+        export()
+        page._later(page.export_ms + 500, lambda: setattr(page, "snacks", []))
+
+    page._export = export_then_dismiss
+
+    result = asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path / "films"))
+
+    assert result["bytes"] == len(page.film)
+
+
+def test_download_gives_the_browser_twice_its_own_limits_so_its_own_errors_come_first(monkeypatch, tmp_path):
+    # Review 2026-09-17: the loop counts only its sleeps, so on a slow page Playwright's timeout could fire first and turn
+    # a stuck export into a retried "waiting for event" instead of the plain "did not finish".
+    page, session = _downloading(monkeypatch, tmp_path, clips=[WALKING])
+    asked = []
+    expect = page.expect_download
+
+    def recording(timeout=None):
+        asked.append(timeout)
+        return expect(timeout=timeout)
+
+    page.expect_download = recording
+
+    asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path / "films"))
+
+    own = scenes.EXPORT_START_MS + scenes.EXPORT_MIN_MS + scenes.HANDOFF_WAIT_MS
+    assert asked == [2 * own]

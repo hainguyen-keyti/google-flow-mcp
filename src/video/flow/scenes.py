@@ -494,37 +494,55 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
     clips = await _page_agrees(page, len(before), scene_id)
     if before:
         await _select_clip(page, clips, len(before) - 1, scene_id)
-    # By accessible name, not by text: measured 2026-09-16, this button's text is only the ligature "add_2" while
-    # "Add clip" lives in its aria-label, so a text match finds nothing at all (live run of scene_build).
-    await _click_one(
-        page,
-        page.get_by_role("button", name=re.compile("Add clip", re.IGNORECASE)),
-        "the Add clip button",
-    )
-    await page.wait_for_timeout(1_500)
-    menu = page.locator(OVERLAY).filter(has_text=re.compile("Add clip", re.IGNORECASE))
-    if await menu.count():
-        await _click_one(page, menu, "the Add clip menu item")
-        await page.wait_for_timeout(2_000)
-    rows = page.locator(ROW).filter(has=page.get_by_text(title, exact=True))
-    waited = 0
-    while (matching := await rows.count()) == 0 and waited < CONTROL_WAIT_MS:
-        await page.wait_for_timeout(1_000)
-        waited += 1_000
-    if matching == 0:
-        raise LookupError(f"media {media_id} titled {title!r} is not offered by the picker")
-    if matching > 1:
-        raise RuntimeError(
-            f"{matching} picker rows show {title!r}; rows carry no media id, so adding would guess"
-        )
-    if await rows.first.get_attribute("aria-selected") != "true":
-        await rows.first.click(timeout=8_000)
-        await page.wait_for_timeout(1_000)
-    chosen = page.locator(f"{ROW}[aria-selected=true]")
-    if await chosen.count() != 1 or await chosen.filter(has=page.get_by_text(title, exact=True)).count() != 1:
-        raise RuntimeError(f"the picker did not select the one row titled {title!r}; not adding")
-    add = page.locator(OVERLAY).filter(has_text=re.compile(r"^\s*Add media\s*$", re.IGNORECASE))
+    # Listening from before the first click: an add that leaves before the one deliberate 'Add media' click, like a click
+    # on a row the picker had already selected, must not pass unnoticed.
     with _Calls(page, ("oWTRd", "GoMJte")) as calls:
+
+        def no_add_yet(after: str) -> None:
+            if "oWTRd" in calls.sent:
+                raise RuntimeError(
+                    f"an add request left the page after {after}, before Add media was clicked, naming media "
+                    f"{parsers._at(calls.sent['oWTRd'][0], 2)}; read scene_clips before adding again (scene {scene_id})"
+                )
+
+        # By accessible name, not by text: measured 2026-09-16, this button's text is only the ligature "add_2" while
+        # "Add clip" lives in its aria-label, so a text match finds nothing at all (live run of scene_build).
+        await _click_one(
+            page,
+            page.get_by_role("button", name=re.compile("Add clip", re.IGNORECASE)),
+            "the Add clip button",
+        )
+        await page.wait_for_timeout(1_500)
+        # A scene holding clips answers with a menu first (measured 2026-09-17). Its items are menuitems; an empty scene
+        # opens the picker straight away, whose rows are buttons in the same pane and can carry "add clip" in a title.
+        menu = page.locator(MENU_ITEM).filter(has_text=re.compile("Add clip", re.IGNORECASE))
+        if await menu.count():
+            await _click_one(page, menu, "the Add clip menu item")
+            await page.wait_for_timeout(2_000)
+        no_add_yet("the Add clip button")
+        rows = page.locator(ROW).filter(has=page.get_by_text(title, exact=True))
+        waited = 0
+        while (matching := await rows.count()) == 0 and waited < CONTROL_WAIT_MS:
+            await page.wait_for_timeout(1_000)
+            waited += 1_000
+        if matching == 0:
+            raise LookupError(f"media {media_id} titled {title!r} is not offered by the picker")
+        if matching > 1:
+            raise RuntimeError(
+                f"{matching} picker rows show {title!r}; rows carry no media id, so adding would guess"
+            )
+        if await rows.first.get_attribute("aria-selected") != "true":
+            await rows.first.click(timeout=8_000)
+            await page.wait_for_timeout(1_000)
+            no_add_yet(f"the picker row titled {title!r}")
+        chosen = page.locator(f"{ROW}[aria-selected=true]")
+        if (
+            await chosen.count() != 1
+            or await chosen.filter(has=page.get_by_text(title, exact=True)).count() != 1
+        ):
+            raise RuntimeError(f"the picker did not select the one row titled {title!r}; not adding")
+        no_add_yet("the picker opened")
+        add = page.locator(OVERLAY).filter(has_text=re.compile(r"^\s*Add media\s*$", re.IGNORECASE))
         await _click_one(page, add, "the Add media button")
         sent = await calls.wait(calls.sent, "oWTRd", SEND_WAIT_MS)
         if not sent:
@@ -709,7 +727,9 @@ async def move_clip(
             page, page.get_by_role("button", name=re.compile("Zoom out", re.IGNORECASE)), "Zoom out"
         )
         await page.wait_for_timeout(800)
-    start = (boxes[0]["x"] + boxes[0]["width"] / 2, boxes[0]["y"] + boxes[0]["height"] / 2)
+    # Pressed in the clip's right quarter: the selected clip's Add clip button covers 5 to 29 px of the next clip's left
+    # edge (measured 2026-09-17), which is the middle of a clip once four zoom-outs make it 51 px wide.
+    start = (boxes[0]["x"] + boxes[0]["width"] * 0.75, boxes[0]["y"] + boxes[0]["height"] / 2)
     # Past the middle of the clip whose place it takes, on the side it comes from, as the measured drag did.
     nudge = 12 if position > source else -12
     end = (boxes[1]["x"] + boxes[1]["width"] / 2 + nudge, boxes[1]["y"] + boxes[1]["height"] / 2)
@@ -783,7 +803,9 @@ async def download(session: FlowSession, project_id: str, scene_id: str, *, out_
     # Same as Add clip: the label is the aria-label, the text is just the ligature "download".
     button = page.get_by_role("button", name=re.compile("Download scene", re.IGNORECASE))
     limit = max(EXPORT_MIN_MS, int(scene["seconds"] * EXPORT_MS_PER_SECOND))
-    async with page.expect_download(timeout=EXPORT_START_MS + limit + HANDOFF_WAIT_MS) as info:
+    # Twice the loop's own limits, which count only its sleeps: on a slow page Playwright's timeout would otherwise fire
+    # first and turn a stuck export into a retried "waiting for event" (review 2026-09-17).
+    async with page.expect_download(timeout=2 * (EXPORT_START_MS + limit + HANDOFF_WAIT_MS)) as info:
         await _click_one(page, button, "the Download scene button")
         waited, started, exported = 0, False, None
         while not info.is_done():
@@ -832,7 +854,7 @@ async def download(session: FlowSession, project_id: str, scene_id: str, *, out_
         "suggested": handed.suggested_filename,
         "bytes": target.stat().st_size,
         "seconds": scene["seconds"],
-        "clips": len(scene["clips"]),
+        "clips": scene["clips"],
     }
 
 

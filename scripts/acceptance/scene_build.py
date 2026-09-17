@@ -250,7 +250,9 @@ async def run(project: str, rows: list[dict[str, Any]], state: dict[str, Any]) -
                     f"titles_match={_titles(clips) == wanted} seconds={(read or {}).get('seconds')} error={error}",
                 )
 
-                expected = [wanted[1], wanted[2], wanted[0], wanted[3], wanted[4]]
+                # From the order just read, so B5 judges the move alone and not whether B4 was right (review 2026-09-17).
+                read_titles = _titles(clips)
+                expected = [*read_titles[1:3], *read_titles[:1], *read_titles[3:]]
                 moving = clips[0]["clip_id"] if clips else "none"
                 moved, error, took = await call(
                     session, "scene_move_clip", {**scene, "clip_id": moving, "position": 2}

@@ -1877,6 +1877,28 @@ def test_scene_move_clip_refuses_a_negative_position_before_a_browser_opens(monk
     assert sessions == []
 
 
+@pytest.mark.parametrize("tool", ["scene_remove_clip", "scene_move_clip"])
+def test_scene_clip_tools_refuse_a_blank_clip_id_before_a_browser_opens(monkeypatch, tmp_path, tool):
+    sessions = []
+
+    async def fake_with(self, fn):
+        sessions.append(fn)
+        return {}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+    arguments = {"project_id": "P", "scene_id": "S", "clip_id": "  "}
+    if tool == "scene_move_clip":
+        arguments["position"] = 1
+
+    async def fn(s):
+        return await s.call_tool(tool, arguments)
+
+    result = with_client(fn)
+    assert result.is_error and "clip_id is required" in _texts([result])[0]
+    assert sessions == []
+
+
 def test_scene_remove_clip_tells_the_agent_flow_asks_nothing_and_the_media_stays():
     text = served_tool_objects()["scene_remove_clip"].description
     for phrase in ("clip_id", "scene_clips", "asks nothing", "stays in the project", "Free."):
