@@ -932,12 +932,15 @@ async def gen_r2v(
         "8 s at x1; omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 credits "
         "by Flow's own price table, unmeasured. The live price line is read first and a different price is refused "
         "before the click. dry_run=true returns the quote and the chips, clicks nothing, writes no ledger row, leaves "
-        "the composer empty and needs no job_id; for a real run,"
+        "the composer empty and needs no job_id (each chip's id is the character's entity id or the image's workflow "
+        "id); for a real run,"
         + _JOB_ID_RULE
-        + " Flow can refuse a run under its content filters and charges nothing for it: the error then carries Flow's "
-        "own status and reason, for example status 4 with PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED for a character "
-        "made from a real person's photo (measured 2026-09-17); do not retry the same inputs hoping they pass. Allow 3-7 "
-        "min for a real run, about 1-2 min for a dry run."
+        + " Flow can refuse a run under its content filters and charges nothing for it: the error then opens with that "
+        "and carries Flow's own status, reason and words, for example status 4 with "
+        "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED for a character made from a real person's photo (measured "
+        "2026-09-17). The filter judges the generated video, so the same character can pass one run and be refused the "
+        "next, and a dry run cannot tell in advance; do not retry the same inputs hoping they pass. Allow 3-7 min for a "
+        "real run, about 1-2 min for a dry run."
     ),
 )
 async def gen_character(

@@ -1434,17 +1434,71 @@ def test_submit_leaves_a_job_flow_still_reports_running_unknown_rather_than_noth
     assert (last["status"], last["candidates"], last["spent"]) == ("unknown", [], 0)
 
 
+REFUSAL = "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"
+FLOW_NOTICE = (
+    "This prompt might violate our policies about generating prominent people. Please try a different prompt. "
+    "You have not been charged for this generation."
+)
+
+
 def test_submit_calls_a_job_flow_reported_failed_a_failure(monkeypatch, tmp_path):
     # Measured 2026-09-17 (plan E, L4): statuses 6, 2, 4 with PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED, no charge.
     log = []
-    filtered = _status_reply(4, extra=[["PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"]])
+    filtered = _status_reply(4, extra=[[REFUSAL]])
     replies = {"click": [SUBMIT_REPLY, _status_reply(2)], "poll": [filtered]}
     _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
-    with pytest.raises(RuntimeError, match="nothing was generated") as raised:
+    with pytest.raises(RuntimeError, match="Flow refused this job and charged nothing") as raised:
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
-    reason = "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"
-    assert f"Flow failed workflow {JOB_WORKFLOW} (status 4) with {reason}" in str(raised.value)
+    assert f"Flow failed workflow {JOB_WORKFLOW} (status 4) with {REFUSAL}" in str(raised.value)
     assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["status"] == "failed"
+
+
+def test_submit_never_says_charged_nothing_when_the_balance_moved(monkeypatch, tmp_path):
+    # The story path settles a moved balance as failed too, so the refusal wording must read the balance itself.
+    log = []
+    replies = {"click": [SUBMIT_REPLY, _status_reply(2)], "poll": [_status_reply(4, extra=[[REFUSAL]])]}
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 188, 188), replies=replies)
+    with pytest.raises(RuntimeError, match="nothing was generated within 0s, spent 12 credits") as raised:
+        _submit(_SubmitSession(log), tmp_path, log)
+    assert "charged nothing" not in str(raised.value)
+
+
+def test_submit_stops_waiting_once_flow_reports_the_job_failed(monkeypatch, tmp_path):
+    # dancer-1 (2026-09-17): Flow showed a Failed tile about 30 s after the click and the agent still waited 360 s.
+    log = []
+    replies = {"click": [SUBMIT_REPLY, _status_reply(2)], "poll": [_status_reply(4, extra=[[REFUSAL]])]}
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
+    slept = []
+    real_sleep = asyncio.sleep
+
+    async def sleep(seconds):
+        slept.append(seconds)
+        await real_sleep(0)
+
+    monkeypatch.setattr(composer.asyncio, "sleep", sleep)
+    with pytest.raises(RuntimeError, match="Flow refused this job and charged nothing"):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True, wait=600.0)
+    assert len(slept) <= 1 and log.count("snapshot") <= 3
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["status"] == "failed"
+
+
+def test_submit_leads_a_refusal_with_its_advice_and_flows_own_words_within_the_mcp_cut(monkeypatch, tmp_path):
+    # dancer-1 (2026-09-17): the refusal opened with "nothing was generated" and Flow's own notice was cut at 500.
+    log = []
+    replies = {"click": [SUBMIT_REPLY, _status_reply(2)], "poll": [_status_reply(4, extra=[[REFUSAL]])]}
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
+
+    async def notice(page):
+        return FLOW_NOTICE
+
+    monkeypatch.setattr(composer, "_notice", notice)
+    with pytest.raises(RuntimeError) as raised:
+        _submit(_SubmitSession(log), tmp_path, log, job_id=LONG_JOB, strict_output=True)
+    assert str(raised.value).startswith(
+        "Flow refused this job and charged nothing: do not retry the same inputs hoping they pass, tell the owner"
+    )
+    seen = _agent_sees(raised.value)
+    assert REFUSAL in seen and FLOW_NOTICE[:60] in seen, seen
 
 
 @pytest.mark.parametrize(

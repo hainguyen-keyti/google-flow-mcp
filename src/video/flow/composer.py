@@ -195,6 +195,16 @@ class FlowReplies:
         kept = _about_the_job(rpcids) or "PUBLIC_ERROR" in text or len(text) <= SMALL_REPLY
         return rpcids, text if kept else ""
 
+    def reported_failed(self) -> bool:
+        """Whether a reply already read says Flow failed the job (status 4); never waits for a body still arriving and
+        never raises, since it runs inside the wait after a paid click."""
+        try:
+            bodies = [read.result() for read in self._reads if read.done() and not read.cancelled()]
+            statuses = self._judge([(rpcids, text) for rpcids, text in bodies if text])["statuses"]
+            return bool(statuses) and statuses[-1] == STATUS_FAILED
+        except Exception:  # noqa: BLE001
+            return False
+
     async def report(self) -> dict[str, Any]:
         """Never raises: it runs after a paid click, where an exception would cost the outcome row."""
         try:
@@ -682,6 +692,9 @@ async def _submit(
                 output = pick_output(fresh, prompt)
             if output is not None and clips.is_done(output):
                 break
+            # dancer-1 (2026-09-17): Flow reported the refusal about 30 s after the click and the wait still ran 360 s.
+            if output is None and replies.reported_failed():
+                break
             if asyncio.get_running_loop().time() >= deadline:
                 break
             await asyncio.sleep(15)
@@ -778,6 +791,13 @@ async def _submit(
             "check flow_media and flow_credits again in a few minutes and never run this job again under a new "
             f"job_id: Flow had not finished the job when the {wait:.0f}s wait ended and nothing new was listed; "
             f"{_flow_said(flow)}{page_note}; job {job_id}"
+        )
+    if status == "failed" and spent == 0 and statuses and statuses[-1] == STATUS_FAILED:
+        # The advice, the reason and Flow's own words lead: an agent sees at most 500 characters (dancer-1, 2026-09-17).
+        raise RuntimeError(
+            "Flow refused this job and charged nothing: do not retry the same inputs hoping they pass, tell the owner; "
+            f"{_flow_said(flow)}; Flow said: {notice or '(no message captured)'}{page_note}; rpcids {sorted(frames)}; "
+            f"settings {settings['applied']}; job {job_id}"
         )
     if status == "failed":
         raise RuntimeError(

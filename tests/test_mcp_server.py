@@ -1144,6 +1144,11 @@ def test_gen_character_tells_the_agent_a_filtered_run_costs_nothing_and_must_not
     description = served_tool_objects()["gen_character"].description
     assert "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED" in description
     assert "charges nothing" in description and "do not retry the same inputs" in description
+    # dancer-1 (2026-09-17): a dry run passed all its checks and the real run was refused; mf0916 passed some runs.
+    assert "a dry run cannot tell in advance" in description
+    assert "the same character can pass one run and be refused the next" in description
+    # dancer-1 (2026-09-17): the brief said a chip carries an entity_id, the result carries "id".
+    assert "each chip's id is the character's entity id or the image's workflow id" in description
 
 
 def test_character_create_takes_exactly_one_of_prompt_and_image_before_a_browser_opens(monkeypatch, tmp_path):
