@@ -758,7 +758,7 @@ def test_gen_character_writes_where_out_dir_points(monkeypatch, tmp_path):
 
     payload = _payload(with_client(fn))
     assert payload["out_dir"] == str(room)
-    assert reached == [("gen_character", "job-character"), "browser"]
+    assert reached == ["browser", ("gen_character", "job-character")]
 
 
 def test_a_job_id_in_the_ledger_of_gen_characters_own_out_dir_is_refused(monkeypatch, tmp_path):

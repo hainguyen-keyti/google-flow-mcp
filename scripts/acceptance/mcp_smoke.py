@@ -19,6 +19,12 @@ MUTATION TOOLS ARE NEVER CALLED (invariant I4). `agent_mode`, `scene_create`, `s
 `project_create`, `project_delete` and `flow_upload` cost nothing but change the owner's real project;
 a gate that ran them would quietly litter it on every run. The roster check below asserts they exist and
 the run asserts they stayed untouched.
+
+ONE spending tool is called, on its refusal path only (Plan H T5): `gen_character` with an out_dir outside out/ is
+turned down inside the server before a browser opens and before anything can be spent, and the row fails unless the
+reply says exactly that. The unit test that keeps the refusal ahead of the browser
+(`test_an_editor_out_dir_outside_the_out_folder_is_refused_before_a_browser_opens`) goes red first if that order
+ever changes, so this row cannot start costing money quietly.
 """
 
 from __future__ import annotations
@@ -409,6 +415,30 @@ async def run(findings):
                     filtered_media(project_id, MEDIA_LIMIT, MEDIA_CEILING),
                 )
                 findings.append({"name": "flow_media filtered", "status": status, "detail": detail})
+
+                # The one spending tool this gate may touch, because the refusal happens before a browser opens and
+                # before a single credit can move: an out_dir outside out/ has to be turned down, not obeyed.
+                refusal = await session.call_tool(
+                    "gen_character",
+                    {
+                        "project": project_id,
+                        "prompt": "never submitted",
+                        "characters": ["not-an-entity"],
+                        "job_id": "smoke-out-dir-refusal",
+                        "out_dir": "/tmp/outside-the-out-folder",
+                    },
+                )
+                text, _ = payload_of(refusal)
+                accepted = not refusal.is_error or "out_dir must be inside" not in text
+                findings.append(
+                    {
+                        "name": "gen_character out_dir",
+                        "status": "FAIL" if accepted else "PASS",
+                        "detail": f"an out_dir outside out/ was not refused: {text[:90]}"
+                        if accepted
+                        else "an out_dir outside out/ is refused before a browser opens",
+                    }
+                )
         finally:
             serve.cancel()
 

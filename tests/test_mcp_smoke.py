@@ -83,8 +83,12 @@ def _replies(first=PROJECT, empty=False):
     }
 
 
-class _Account:
+class _Account(mcp_server.Backend):
+    """The real Backend with its reads answered from canned replies: everything it does NOT override, the refusal
+    of an out_dir outside out/ among it, runs the server's own code rather than a double of it."""
+
     def __init__(self, replies):
+        super().__init__()
         self.replies = replies
 
     async def lane(self):
@@ -139,7 +143,7 @@ def _failing(rows):
 def test_a_healthy_account_passes_every_row(monkeypatch):
     rows = _rows(monkeypatch, _replies())
 
-    assert len(rows) == 14
+    assert len(rows) == 15
     assert _failing(rows) == {}
 
 
@@ -170,7 +174,7 @@ def test_an_empty_project_passes_every_row(monkeypatch):
 
     rows = _rows(monkeypatch, replies)
 
-    assert len(rows) == 14
+    assert len(rows) == 15
     assert _failing(rows) == {"scene_clips": "the project holds no scene to read"}
     assert rows["scene_clips"][0] == "SKIP"
     assert "timeline_asked_for" not in replies

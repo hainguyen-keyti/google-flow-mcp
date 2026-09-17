@@ -472,7 +472,12 @@ class Backend:
         aspect: str = "9:16",
         dry_run: bool = False,
         job_id: str | None = None,
+        out_dir: str | None = None,
     ) -> dict[str, Any]:
+        # A dry run spends nothing but still opens a browser for a minute or two, so a folder that could not hold
+        # the clip or its ledger is refused here rather than after the wait.
+        target = self._editor_out_dir(out_dir)
+
         def run() -> Awaitable[Any]:
             return self._with(
                 lambda s: ingredients_mod.generate(
@@ -484,13 +489,13 @@ class Backend:
                     model=model,
                     aspect=aspect,
                     job_id=job_id,
-                    out_dir=self.out_dir,
+                    out_dir=target,
                     dry_run=dry_run,
                 )
             )
 
         # A dry run clicks nothing and writes no row, so there is no job to guard.
-        return await run() if dry_run else await self._spend_once(job_id, self.out_dir, run)
+        return await run() if dry_run else await self._spend_once(job_id, target, run)
 
     async def generate(
         self,
@@ -1153,7 +1158,9 @@ async def gen_r2v(
         "by Flow's own price table, unmeasured. The live price line is read first and a different price is refused "
         "before the click. dry_run=true returns the quote and the chips, clicks nothing, writes no ledger row, leaves "
         "the composer empty and needs no job_id (each chip's id is the character's entity id or the image's workflow "
-        "id); for a real run,"
+        "id). out_dir puts the clip and its ledger in a folder of your own, which keeps one film's takes together; "
+        "it must be inside out/, and a job_id is refused when ANY ledger under out/ already holds it, that folder's "
+        "included. For a real run,"
         + _JOB_ID_RULE
         + " Flow can refuse a run under its content filters and charges nothing for it: the error then opens with that "
         "and carries Flow's own status, reason and words, for example status 4 with "
@@ -1172,6 +1179,7 @@ async def gen_character(
     model: str = VIDEO_DEFAULT_MODEL,
     aspect: str = "9:16",
     dry_run: bool = False,
+    out_dir: str | None = None,
 ) -> str:
     _require(project, "project")
     _require(prompt, "prompt")
@@ -1189,7 +1197,9 @@ async def gen_character(
     if not dry_run:
         _require(job_id or "", "job_id")
     return _json(
-        await backend.gen_character(project, prompt, characters, media_ids, model, aspect, dry_run, job_id)
+        await backend.gen_character(
+            project, prompt, characters, media_ids, model, aspect, dry_run, job_id, out_dir
+        )
     )
 
 
