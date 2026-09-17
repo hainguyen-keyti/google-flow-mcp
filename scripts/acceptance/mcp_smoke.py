@@ -35,6 +35,11 @@ from video import mcp_server
 
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 
+# What the filtered row asks for and what it refuses to accept back (Plan H T3): 20 newest rows have to fit well
+# under the size a client chokes on, the whole point of having filters at all.
+MEDIA_LIMIT = 20
+MEDIA_CEILING = 20_000
+
 # Free AND side-effect free: safe to call on the owner's live account on every run.
 READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits", "flow_tools")
 READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_uploads", "scene_list")
@@ -183,6 +188,45 @@ def versions_of(project_id):
                 return "a version record belongs to another project"
             if not isinstance(record.get("type"), str) or not record.get("workflow_id"):
                 return "a record has no type or workflow_id: grid rows came back instead of versions"
+        return None
+
+    return check
+
+
+def filtered_media(project_id, limit, ceiling):
+    """The filters have to make the answer SMALLER and say what they cut, or an agent is back to a reply its
+    client cannot hold: measured 2026-09-17, a full listing with versions weighs 122,919 characters."""
+
+    def check(payload):
+        if not isinstance(payload, dict):
+            return f"expected an object, got {type(payload).__name__}"
+        rows = []
+        for key in ("media", "versions"):
+            if not isinstance(payload.get(key), list):
+                return f"{key} is {type(payload.get(key)).__name__}, expected a list"
+            rows += payload[key]
+            total = payload.get(f"{key}_total")
+            if not isinstance(total, int) or total < len(payload[key]):
+                return f"{key}_total is {total!r} for {len(payload[key])} rows: the answer hides what it cut"
+            if len(payload[key]) > limit:
+                return f"{key} holds {len(payload[key])} rows, more than the limit of {limit}"
+        kinds = {row.get("kind") for row in rows}
+        if kinds - {"video"}:
+            return f"kind=video still answered {sorted(kinds)}"
+        if any("url" in row for row in rows):
+            return "brief=true still carries a url"
+        long_prompt = [len(row["prompt"]) for row in rows if len(row.get("prompt") or "") > 121]
+        if long_prompt:
+            return f"brief=true left prompts of {long_prompt} characters"
+        dropped = any(payload[f"{key}_total"] > len(payload[key]) for key in ("media", "versions"))
+        if payload.get("truncated") is not dropped:
+            return (
+                f"truncated is {payload.get('truncated')!r} while "
+                f"{'rows were' if dropped else 'no row was'} dropped"
+            )
+        size = len(json.dumps(payload, ensure_ascii=False, default=str))
+        if size > ceiling:
+            return f"the filtered answer is {size} characters, over the {ceiling} an agent can hold"
         return None
 
     return check
@@ -351,6 +395,20 @@ async def run(findings):
                     versions_of(project_id),
                 )
                 findings.append({"name": "flow_media all", "status": status, "detail": detail})
+
+                status, detail, _ = await call(
+                    session,
+                    "flow_media",
+                    {
+                        "project_id": project_id,
+                        "all_versions": True,
+                        "kind": "video",
+                        "limit": MEDIA_LIMIT,
+                        "brief": True,
+                    },
+                    filtered_media(project_id, MEDIA_LIMIT, MEDIA_CEILING),
+                )
+                findings.append({"name": "flow_media filtered", "status": status, "detail": detail})
         finally:
             serve.cancel()
 

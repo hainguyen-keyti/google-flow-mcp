@@ -96,10 +96,16 @@ class _Account:
     async def credits(self):
         return self.replies["credits"]
 
-    async def media(self, project_id, all_versions=False):
+    async def media(self, project_id, all_versions=False, kind=None, since=None, limit=None, brief=False):
+        # Only the browser is faked: the filters run through the server's own rules, so a smoke row that checks a
+        # filtered answer is checking the real ones.
         if not all_versions:
-            return self.replies["media"]
-        return self.replies.get("media_all", {**self.replies["media"], "versions": self.replies["versions"]})
+            listing = self.replies["media"]
+        else:
+            listing = self.replies.get(
+                "media_all", {**self.replies["media"], "versions": self.replies["versions"]}
+            )
+        return mcp_server.media_filters(listing, kind, since, limit, brief)
 
     async def characters(self, project_id):
         return self.replies["characters"]
@@ -133,7 +139,7 @@ def _failing(rows):
 def test_a_healthy_account_passes_every_row(monkeypatch):
     rows = _rows(monkeypatch, _replies())
 
-    assert len(rows) == 13
+    assert len(rows) == 14
     assert _failing(rows) == {}
 
 
@@ -164,7 +170,7 @@ def test_an_empty_project_passes_every_row(monkeypatch):
 
     rows = _rows(monkeypatch, replies)
 
-    assert len(rows) == 13
+    assert len(rows) == 14
     assert _failing(rows) == {"scene_clips": "the project holds no scene to read"}
     assert rows["scene_clips"][0] == "SKIP"
     assert "timeline_asked_for" not in replies
@@ -229,7 +235,8 @@ CORRUPTIONS = [
     ("flow_credits", _null_balance),
     ("flow_media", _meta_of_another_project),
     ("flow_media all", _grid_rows_instead_of_versions),
-    ("flow_media all", _versions_as_a_bare_list),
+    # A bare list breaks both reads of the versions, the plain one and the filtered one.
+    (("flow_media all", "flow_media filtered"), _versions_as_a_bare_list),
     ("flow_characters", _character_without_entity),
     ("flow_tools", _no_tools),
     ("scene_list", _trashed_scene_in_default_listing),
@@ -248,4 +255,4 @@ def test_a_reply_of_the_right_type_but_the_wrong_content_fails_its_own_row(monke
 
     rows = _rows(monkeypatch, replies)
 
-    assert set(_failing(rows)) == {row}
+    assert set(_failing(rows)) == ({row} if isinstance(row, str) else set(row))

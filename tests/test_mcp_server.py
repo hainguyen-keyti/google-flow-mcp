@@ -3,6 +3,7 @@ import importlib.util
 import json
 import re
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -311,7 +312,7 @@ def test_flow_media_can_ask_for_every_version(monkeypatch):
     # tool reached only reader.project, which is how this had to be done in raw Python on 2026-09-13.
     called = []
 
-    async def fake_media(project_id, all_versions=False):
+    async def fake_media(project_id, all_versions=False, *_filters, **_kwargs):
         called.append((project_id, all_versions))
         versions = {"versions": [{"workflow_id": "w1"}, {"workflow_id": "w2"}]} if all_versions else {}
         return {"meta": {}, "models": [], "media": [], **versions}
@@ -1316,11 +1317,16 @@ def test_flow_media_since_takes_a_date_or_an_epoch_and_drops_older_rows(monkeypa
     kept = [row["id"] for row in rows if row["created"] >= cut]
     assert 0 < len(kept) < len(rows), "fixture must hold rows on both sides of the cut"
     by_epoch = _payload(_call_media(monkeypatch, since=cut))
-    by_date = _payload(_call_media(monkeypatch, since="2026-09-11"))
     assert [row["id"] for row in by_epoch["media"]] == kept
-    assert [row["id"] for row in by_date["media"]] == [
-        row["id"] for row in rows if row["created"] >= 1789156800
+    # 2026-09-11T00:00:00Z is epoch 1789084800, the same instant in every time zone.
+    zoned = _payload(_call_media(monkeypatch, since="2026-09-11T00:00:00+00:00"))
+    assert [row["id"] for row in zoned["media"]] == [
+        row["id"] for row in rows if row["created"] >= 1789084800
     ]
+    # A date with no zone is this machine's own day, which is what an agent asking for today means.
+    local = _payload(_call_media(monkeypatch, since="2026-09-11"))
+    midnight = time.mktime((2026, 9, 11, 0, 0, 0, 0, 0, -1))
+    assert [row["id"] for row in local["media"]] == [row["id"] for row in rows if row["created"] >= midnight]
 
 
 def test_flow_media_brief_drops_the_fields_that_weigh_the_answer_down(monkeypatch):
@@ -1332,7 +1338,11 @@ def test_flow_media_brief_drops_the_fields_that_weigh_the_answer_down(monkeypatc
         assert "url" not in row
         assert len(row.get("prompt") or "") <= 121
     assert [row["id"] for row in brief["media"]] == [row["id"] for row in full["media"]]
-    assert len(json.dumps(brief)) < len(json.dumps(full)) / 2
+    assert len(json.dumps(brief)) < len(json.dumps(full))
+    # The fixture redacts its urls to 42 characters, so only the prompt cut can show here; the live saving is
+    # measured by the smoke's own row, on the answer that really weighs 122,919 characters.
+    trimmed = [row for row in brief["media"] if (row.get("prompt") or "").endswith("…")]
+    assert len(trimmed) == 9, [len(row.get("prompt") or "") for row in full["media"]]
 
 
 def test_flow_media_counts_nothing_as_cut_when_no_filter_asks_for_it(monkeypatch):

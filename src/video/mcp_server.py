@@ -8,6 +8,7 @@ import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,103 @@ from video.session import FlowSession
 # Left empty, gflow lets Flow reuse the composer's last model (cli_video.py:185-196), so the price was unknowable.
 VIDEO_DEFAULT_MODEL = "omni-flash"
 OMNI_FLASH_SECONDS = 10
+
+
+MEDIA_KINDS = ("image", "video")
+BRIEF_PROMPT_CHARS = 120
+
+
+def _media_kind(kind: str | None) -> str | None:
+    if kind is None or kind == "":
+        return None
+    wanted = kind.strip().lower()
+    if wanted not in MEDIA_KINDS:
+        raise ValueError(f"kind must be one of {', '.join(MEDIA_KINDS)}, got {kind!r}")
+    return wanted
+
+
+def _positive_limit(limit: int | None) -> int | None:
+    if limit is None:
+        return None
+    if limit <= 0:
+        raise ValueError(f"limit must be a positive number of rows, got {limit}")
+    return int(limit)
+
+
+def _since_epoch(since: str | float | None) -> float | None:
+    """A row's created time is epoch seconds while an agent thinks in dates, so take either; a date with no zone
+    is this machine's own day, which is what an agent asking for today means."""
+    if since is None or since == "":
+        return None
+    if isinstance(since, (int, float)):
+        return float(since)
+    text = str(since).strip()
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"since must be epoch seconds or an ISO date like 2026-09-17 or 2026-09-17T08:30, got {since!r}"
+        ) from exc
+    return moment.timestamp()
+
+
+def _filter_rows(
+    rows: list[dict[str, Any]], kind: str | None, after: float | None, limit: int | None
+) -> list[dict[str, Any]]:
+    kept = [
+        row
+        for row in rows
+        if (kind is None or row.get("kind") == kind) and (after is None or (row.get("created") or 0) >= after)
+    ]
+    if limit is not None and len(kept) > limit:
+        kept = sorted(kept, key=lambda row: row.get("created") or 0, reverse=True)[:limit]
+    return kept
+
+
+def _brief_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Measured 2026-09-17: url and prompt carry 52,812 of the 122,919 characters a full listing weighs."""
+    out = {key: value for key, value in row.items() if key != "url"}
+    prompt = out.get("prompt")
+    if isinstance(prompt, str) and len(prompt) > BRIEF_PROMPT_CHARS:
+        out["prompt"] = prompt[:BRIEF_PROMPT_CHARS] + "…"
+    return out
+
+
+def _check_media_filters(kind: str | None, since: str | float | None, limit: int | None) -> None:
+    _media_kind(kind)
+    _since_epoch(since)
+    _positive_limit(limit)
+
+
+def media_filters(
+    listing: dict[str, Any],
+    kind: str | None = None,
+    since: str | float | None = None,
+    limit: int | None = None,
+    brief: bool = False,
+) -> dict[str, Any]:
+    """The filters a project listing is cut down by, apart from the browser so the same rules serve the smoke's
+    offline account. A filtered answer always says what it left out, so a short list never reads as a whole project."""
+    after = _since_epoch(since)
+    wanted = _media_kind(kind)
+    rows = _positive_limit(limit)
+    if wanted is None and after is None and rows is None and not brief:
+        return listing
+    out = dict(listing)
+    cut = False
+    for key in ("media", "versions"):
+        if key not in listing:
+            continue
+        kept = _filter_rows(listing[key], wanted, after, rows)
+        cut = cut or len(kept) < len(listing[key])
+        out[key] = [_brief_row(row) for row in kept] if brief else kept
+        out[f"{key}_total"] = len(listing[key])
+    out["truncated"] = cut
+    return out
 
 
 def _video_settings(
@@ -152,10 +250,21 @@ class Backend:
     async def credits(self) -> dict[str, Any]:
         return await self._with(reader.credits)
 
-    async def media(self, project_id: str, all_versions: bool = False) -> dict[str, Any]:
+    async def media(
+        self,
+        project_id: str,
+        all_versions: bool = False,
+        kind: str | None = None,
+        since: str | float | None = None,
+        limit: int | None = None,
+        brief: bool = False,
+    ) -> dict[str, Any]:
         # The grid collapses a media to one row, so an Omni edit that stacks a new version onto the same
         # media id is invisible there; `versions` is the only view that shows every version.
-        return await self._with(lambda s: reader.project(s, project_id, versions=all_versions))
+        # A filter that cannot be honoured is refused before a browser opens, never quietly ignored.
+        _check_media_filters(kind, since, limit)
+        listing = await self._with(lambda s: reader.project(s, project_id, versions=all_versions))
+        return media_filters(listing, kind, since, limit, brief)
 
     async def characters(self, project_id: str) -> list[dict[str, Any]]:
         return await self._with(lambda s: characters_mod.list_characters(s, project_id))
@@ -507,15 +616,28 @@ async def flow_credits() -> str:
 @server.tool(
     name="flow_media",
     description=(
-        "A project's media (id, kind, model, size, url), meta and models, always as one object. "
+        "A project's media (id, kind, model, size, url), meta and models, always as one object, newest first. "
         "all_versions=true adds a versions list holding every generation record: each Omni edit or upscale "
         "stacks another version onto the SAME media id, and only that list shows them, so it is how you find "
-        "the clip an edit produced. Free."
+        "the clip an edit produced. A whole project is big (measured 2026-09-17: 28,378 characters, and 122,919 "
+        "with all_versions), so four filters cut it and the answer then also carries media_total, versions_total "
+        "and truncated, telling you what was left out: kind is 'video' or 'image'; since keeps rows made at or "
+        "after epoch seconds or an ISO date (2026-09-17, or 2026-09-17T08:30+07:00; a date with no zone is this "
+        "machine's day); limit keeps that many newest rows; brief=true drops each row's url and cuts its prompt "
+        "to 120 characters, which is where most of the weight sits. A filter it cannot honour is refused, never "
+        "silently ignored. Free."
     ),
 )
-async def flow_media(project_id: str, all_versions: bool = False) -> str:
+async def flow_media(
+    project_id: str,
+    all_versions: bool = False,
+    kind: str | None = None,
+    since: str | float | None = None,
+    limit: int | None = None,
+    brief: bool = False,
+) -> str:
     _require(project_id, "project_id")
-    return _json(await backend.media(project_id, all_versions))
+    return _json(await backend.media(project_id, all_versions, kind, since, limit, brief))
 
 
 @server.tool(
