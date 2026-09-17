@@ -42,6 +42,25 @@ Measured with this probe on 2026-09-17, five passes on scene pe-scene-1624 (376c
   41.5 s to the download event, 36.5 MB, 40.000 s, no page or context closed. Playwright's Python save_as streams
   the file in 1 MiB chunks (playwright/_impl/_artifact.py save_as uses saveAsStream), which fits the film of exactly
   18 MiB the dancer test's failed run left under its final name. What closed that browser was not reproduced.
+
+Plan H T1 measured with gridscan and media on 2026-09-17, project 118aece2 (8 active scenes, 37 trashed), $0:
+- The project grid and the trash share one scroller, div.cdk-virtual-scrollable.page-container (the trash adds
+  has-trash-action-bar), 720 px tall over a 4419 to 6250 px page, and it VIRTUALIZES: at the top the grid rendered
+  7 scene tiles of 8 and the trash 16 of 37, which is why delete and restore, waiting for one tile per listed
+  scene, refuse every project with more scenes than one screen holds.
+- A tile's offset inside the scroller (scrollTop + its box, rounded) is stable across scrolls and unique per tile:
+  the grid collected 8 distinct offsets for 8 active scenes and the trash 37 for 37 trashed, with the grid's 8th
+  tile appearing only from scrollTop 1728. Rows sit 293 px apart, the trash two tiles per row (left 16 and 524).
+- Scrolling in steps of 80 % of the viewport, 1.5 s apart, swept the whole grid in 9 steps (26 s) and the trash in
+  11 (29 s). scrollHeight GREW during the sweep (4419 to 4991, 5678 to 6250) as media tiles loaded, so the end has
+  to be re-read every step, and a far tile is unrendered again (step 4 held 2 scene tiles of 8).
+- A tile's text before its thumbnail loads reads 'movie_edit <title> movie', after it '<title> play_circle <n>
+  add <m> movie', so a title must be matched against an element's own text, never the tile's whole text: the
+  latter also makes 'dancer-test' match the tile of 'dancer-test-2'.
+- flow_media on the same project: default 28.378 characters over 45 media rows, all_versions=true 122.919 over 135
+  version rows (media 28.210, versions 94.527). Inside the version rows url weighs 28.205 and prompt 24.607, id,
+  project_id and workflow_id 15.410 together. Cutting to the newest 20 rows alone leaves 14.804 (default) and
+  40.234 (all_versions), so rows alone do not fit a client limit: the heavy FIELDS have to go too.
 """
 
 from __future__ import annotations
@@ -65,6 +84,7 @@ from video.probes._common import OUT_DIR
 from video.session import FlowSession
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+PROJECT_ACTIONS = ("grid", "gridscan", "media")
 ROW = ".cdk-overlay-pane button[role=option]"
 LABEL_POLL_S = 20.0
 
@@ -591,6 +611,108 @@ _GRID_JS = """
 """
 
 
+_SCROLLER_FIND = """
+  const scroller = document.querySelector('.cdk-virtual-scrollable')
+    || [...document.querySelectorAll('*')].filter(e => e.scrollHeight > e.clientHeight + 20
+      && ['auto', 'scroll'].includes(getComputedStyle(e).overflowY))
+      .sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
+"""
+
+_GRID_SCAN_JS = (
+    "() => {"
+    + _SCROLLER_FIND
+    + """
+  if (!scroller) return {scroller: null, tiles: []};
+  const host = scroller.getBoundingClientRect();
+  const text = (e) => (e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
+  const all = [...document.querySelectorAll('flow-tile-container')];
+  const tiles = all.filter(c => c.querySelector('flow-scene-tile')).map(c => {
+    const r = c.getBoundingClientRect();
+    return {text: text(c), top: Math.round(r.y - host.y + scroller.scrollTop),
+      left: Math.round(r.x - host.x), height: Math.round(r.height), visible: r.bottom > host.top && r.top < host.bottom};
+  });
+  return {scroller: String(scroller.className).slice(0, 80), top: Math.round(scroller.scrollTop),
+    height: scroller.scrollHeight, client: scroller.clientHeight, containers: all.length, tiles};
+}"""
+)
+
+_GRID_SCROLL_JS = (
+    "(top) => {"
+    + _SCROLLER_FIND
+    + """
+  if (!scroller) return null;
+  scroller.scrollTop = top;
+  return Math.round(scroller.scrollTop);
+}"""
+)
+
+
+async def act_gridscan(session: FlowSession, project: str, stamp: str, where: str) -> dict[str, Any]:
+    """Every scene tile the virtual grid renders while it is scrolled to the end, each with its offset inside the
+    scroller, so a driver can tell a recycled tile from a new one and know when it has seen the whole list. Read only."""
+    page = session.page
+    url = session.project_url(project) + ("/trash" if where == "trash" else "")
+    await session.goto(url, ready="flow-project-page")
+    await page.wait_for_timeout(4_000)
+    steps: list[dict[str, Any]] = []
+    seen: dict[tuple[int, int], str] = {}
+    for step in range(20):
+        snap = await page.evaluate(_GRID_SCAN_JS)
+        for tile in snap["tiles"]:
+            seen.setdefault((tile["top"], tile["left"]), tile["text"])
+        steps.append(snap)
+        if step == 0:
+            snap["shot"] = await _shot(page, stamp, f"{where}scan_top")
+        if not snap.get("scroller") or snap["top"] + snap["client"] >= snap["height"] - 2:
+            break
+        moved = await page.evaluate(_GRID_SCROLL_JS, snap["top"] + int(snap["client"] * 0.8))
+        await page.wait_for_timeout(1_500)
+        if moved == snap["top"]:
+            break
+    steps[-1]["shot"] = await _shot(page, stamp, f"{where}scan_end")
+    listed = await scenes.list_scenes(session, project, include_trashed=True)
+    return {
+        "where": where,
+        "steps": steps,
+        "collected": [{"top": top, "left": left, "text": text} for (top, left), text in sorted(seen.items())],
+        "distinct_tiles": len(seen),
+        "listing_active": sum(1 for s in listed if not s["trashed"]),
+        "listing_trashed": sum(1 for s in listed if s["trashed"]),
+        "listing_titles": [s["title"] for s in listed if s["trashed"] == (where == "trash")],
+    }
+
+
+def _chars(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, default=str))
+
+
+async def act_media(session: FlowSession, project: str) -> dict[str, Any]:
+    """How big flow_media's answer is and where its characters sit: what an agent's client has to swallow today,
+    and what the same answer would weigh cut to the newest 20 rows."""
+    out: dict[str, Any] = {}
+    for versions in (False, True):
+        data = await reader.project(session, project, versions=versions)
+        entry: dict[str, Any] = {
+            "chars": _chars(data),
+            "media_rows": len(data["media"]),
+            "sections": {key: _chars(value) for key, value in data.items()},
+        }
+        rows = data.get("versions") or []
+        if rows:
+            entry["version_rows"] = len(rows)
+            entry["version_fields"] = {
+                field: sum(_chars(row.get(field)) for row in rows) for field in rows[0]
+            }
+        newest = sorted(data["media"], key=lambda r: r.get("created") or 0, reverse=True)[:20]
+        cut = {**data, "media": newest}
+        if rows:
+            cut["versions"] = sorted(rows, key=lambda r: r.get("created") or 0, reverse=True)[:20]
+        entry["chars_newest_20"] = _chars(cut)
+        entry["kinds"] = sorted({str(row.get("kind")) for row in data["media"]})
+        out["all_versions" if versions else "default"] = entry
+    return out
+
+
 async def act_grid(session: FlowSession, project: str, stamp: str) -> dict[str, Any]:
     """How many scene tiles the project grid renders, before and after scrolling every scroller to its end. Read only."""
     page = session.page
@@ -694,8 +816,9 @@ async def main() -> None:
     ap.add_argument("--create")
     ap.add_argument("--do", action="append", default=[], dest="actions")
     args = ap.parse_args()
-    if bool(args.scene) == bool(args.create):
-        ap.error("give exactly one of --scene and --create")
+    project_only = all(action.partition("=")[0] in PROJECT_ACTIONS for action in args.actions)
+    if bool(args.scene) == bool(args.create) and not (project_only and not args.scene and not args.create):
+        ap.error("give exactly one of --scene and --create, or neither for project-wide actions")
     stamp = time.strftime("%Y%m%d_%H%M%S")
     report_path = OUT_DIR / f"scene_editor_{stamp}.json"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -761,6 +884,10 @@ async def main() -> None:
                     record["result"] = await scenes.delete(session, args.project, scene_id)
                 elif name == "grid":
                     record["result"] = await act_grid(session, args.project, stamp)
+                elif name == "gridscan":
+                    record["result"] = await act_gridscan(session, args.project, stamp, value or "grid")
+                elif name == "media":
+                    record["result"] = await act_media(session, args.project)
                 else:
                     raise ValueError(f"unknown action {name!r}")
             except Exception as exc:  # noqa: BLE001
