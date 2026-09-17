@@ -262,6 +262,13 @@ class FlowReplies:
         }
 
 
+def _page_note(url: str | None, project_id: str) -> str:
+    """Where the page stood right after the click, when that was no longer the project (sg-bf-2, 2026-09-17)."""
+    if not url or urlsplit(url).path.rstrip("/").endswith(f"/project/{project_id}"):
+        return ""
+    return f"; the page had moved to {url} after the click"
+
+
 def _flow_said(flow: dict[str, Any]) -> str:
     if flow.get("error"):
         return f"Flow's replies could not be read ({flow['error']})"
@@ -644,7 +651,7 @@ async def _submit(
     )
     digest = _job_digest(job_id)
     frames: dict[str, list[Any]] | None = None
-    output, fresh, candidates = None, [], []
+    output, fresh, candidates, page_after_click = None, [], [], None
     replies = FlowReplies()
     session.page.on("response", replies.on_response)
     try:
@@ -655,6 +662,7 @@ async def _submit(
         finally:
             if watch is not None:
                 session.page.remove_listener("request", watch.on_request)
+        page_after_click = session.page.url
         notice = await _notice(session.page)
         # Flow can take the click, fire the rpcids, create nothing and charge nothing; the only way to see
         # why is to look at the screen while the refusal is still on it (measured 2026-09-13 on tryon2-04).
@@ -703,12 +711,13 @@ async def _submit(
             rpcids=None if frames is None else sorted(frames),
             **({"body_check": watch.report()} if watch is not None else {}),
             flow=flow,
+            page_after_click=page_after_click,
         )
         # The advice leads: an agent sees at most 500 characters and a job_id can be long (re-review A, 2026-09-17).
         raise RuntimeError(
             "Start generation was clicked, so credits may already be spent: check flow_media and flow_credits and "
-            f"never run this job again under a new job_id; it then failed with {detail}; {_flow_said(flow)}; "
-            f"job {job_id}"
+            f"never run this job again under a new job_id; it then failed with {detail}; {_flow_said(flow)}"
+            f"{_page_note(page_after_click, project_id)}; job {job_id}"
         ) from exc
     session.page.remove_listener("response", replies.on_response)
     flow = await replies.report()
@@ -717,12 +726,16 @@ async def _submit(
     videos = [r for r in fresh if r.get("kind") == "video"]
     unclaimed = candidates if len(candidates) > 1 else videos
     watched = {"body_check": watch.report()} if watch is not None else {}
+    # Flow's last word on the job was not "failed" (sg-bf-2, 2026-09-17: statuses 6, 2), so it may still finish and bill.
+    statuses = flow.get("statuses") or []
+    flow_open = bool(statuses) and statuses[-1] != STATUS_FAILED
+    page_note = _page_note(page_after_click, project_id)
     if path:
         status = "done"
     elif output is not None:
         status = "pending"
-    elif strict_output and (unclaimed or spent):
-        # A new video or a moved balance is never "nothing was generated" (re-review B, 2026-09-17).
+    elif strict_output and (unclaimed or spent or flow_open):
+        # A new video, a moved balance or a job Flow still runs is never "nothing was generated" (re-reviews B, F3).
         status = "unknown"
     else:
         status = "failed"
@@ -740,6 +753,7 @@ async def _submit(
         **({"error": fetch_error} if fetch_error else {}),
         **({"candidates": [c["id"] for c in unclaimed]} if status == "unknown" else {}),
         flow=flow,
+        page_after_click=page_after_click,
     )
     if status == "pending":
         why = fetch_error or f"still rendering after {wait:.0f}s"
@@ -751,16 +765,23 @@ async def _submit(
         raise RuntimeError(
             "check flow_media and never run this job again under a new job_id: "
             f"{len(unclaimed)} new records could be this job's clip ({[c['id'] for c in unclaimed]}), so none is "
-            f"taken; spent {spent} credits; {_flow_said(flow)}; job {job_id}"
+            f"taken; spent {spent} credits; {_flow_said(flow)}{page_note}; job {job_id}"
+        )
+    if status == "unknown" and spent:
+        raise RuntimeError(
+            "check flow_media and flow_credits and never run this job again under a new job_id: no new video showed "
+            f"up within {wait:.0f}s, yet the balance moved by {spent} credits; {_flow_said(flow)}{page_note}; "
+            f"job {job_id}"
         )
     if status == "unknown":
         raise RuntimeError(
-            "check flow_media and flow_credits and never run this job again under a new job_id: no new video showed "
-            f"up within {wait:.0f}s, yet the balance moved by {spent} credits; {_flow_said(flow)}; job {job_id}"
+            "check flow_media and flow_credits again in a few minutes and never run this job again under a new "
+            f"job_id: Flow had not finished the job when the {wait:.0f}s wait ended and nothing new was listed; "
+            f"{_flow_said(flow)}{page_note}; job {job_id}"
         )
     if status == "failed":
         raise RuntimeError(
-            f"nothing was generated within {wait:.0f}s, spent {spent} credits; {_flow_said(flow)}; rpcids "
+            f"nothing was generated within {wait:.0f}s, spent {spent} credits; {_flow_said(flow)}{page_note}; rpcids "
             f"{sorted(frames)}; settings {settings['applied']}; Flow said: {notice or '(no message captured)'}; "
             f"job {job_id}"
         )

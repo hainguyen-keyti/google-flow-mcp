@@ -664,6 +664,7 @@ class _Box:
 class _SubmitPage:
     def __init__(self, log):
         self.log = log
+        self.url = "https://flow.google.com/project/p-1"
         self.listeners = []
         self.responders = []
         self.mentions = 0
@@ -1405,7 +1406,7 @@ def test_submit_records_what_flow_replied_about_the_job_it_submitted(monkeypatch
         ],
     }
     _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
-    with pytest.raises(RuntimeError, match="nothing was generated") as raised:
+    with pytest.raises(RuntimeError, match="again in a few minutes") as raised:
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
     assert (flow["workflow_id"], flow["media_id"], flow["statuses"]) == (JOB_WORKFLOW, JOB_MEDIA, [6, 2, 5])
@@ -1413,11 +1414,64 @@ def test_submit_records_what_flow_replied_about_the_job_it_submitted(monkeypatch
     assert "status 5" in str(raised.value) and "PUBLIC_ERROR_UNSAFE_FACE" in str(raised.value)
 
 
+def test_submit_leaves_a_job_flow_still_reports_running_unknown_rather_than_nothing_generated(
+    monkeypatch, tmp_path
+):
+    # sg-bf-2 (2026-09-17): statuses 6, 2, no new video, balance unmoved; the job was written failed "nothing was
+    # generated" while Flow's last word was that it was running.
+    log = []
+    replies = {"click": [SUBMIT_REPLY, _status_reply(2)]}
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
+    with pytest.raises(RuntimeError) as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    message = str(raised.value)
+    assert message.startswith(
+        "check flow_media and flow_credits again in a few minutes and never run this job again under a new job_id"
+    )
+    assert f"Flow last reported status 2 for workflow {JOB_WORKFLOW}" in message
+    assert "nothing was generated" not in message
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert (last["status"], last["candidates"], last["spent"]) == ("unknown", [], 0)
+
+
+def test_submit_calls_a_job_flow_reported_failed_a_failure(monkeypatch, tmp_path):
+    # Measured 2026-09-17 (plan E, L4): statuses 6, 2, 4 with PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED, no charge.
+    log = []
+    filtered = _status_reply(4, extra=[["PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"]])
+    replies = {"click": [SUBMIT_REPLY, _status_reply(2)], "poll": [filtered]}
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
+    with pytest.raises(RuntimeError, match="nothing was generated") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+    expected = f"Flow failed workflow {JOB_WORKFLOW} (status 4) with PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"
+    assert expected in str(raised.value)
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("url", "moved"),
+    [
+        ("https://flow.google.com/project/p-1", False),
+        ("https://flow.google.com/project/p-1/edit/m-w-before", True),
+    ],
+    ids=["still on the project", "moved into a clip editor"],
+)
+def test_submit_records_the_page_it_found_right_after_the_click(monkeypatch, tmp_path, url, moved):
+    # sg-bf-2 (2026-09-17): the page was found in the editor of the job before, with nothing in the row to say so.
+    log = []
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200))
+    session = _SubmitSession(log)
+    session.page.url = url
+    with pytest.raises(RuntimeError, match="nothing was generated") as raised:
+        _submit(session, tmp_path, log, strict_output=True)
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["page_after_click"] == url
+    assert (f"the page had moved to {url} after the click" in str(raised.value)) is moved
+
+
 def test_submit_says_what_flow_last_reported_when_no_failure_reply_came(monkeypatch, tmp_path):
     log = []
     replies = {"click": [SUBMIT_REPLY, _status_reply(None), _status_reply(2)]}
     _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
-    with pytest.raises(RuntimeError, match="nothing was generated") as raised:
+    with pytest.raises(RuntimeError, match="again in a few minutes") as raised:
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
     assert (flow["statuses"], flow["unmeasured"], flow["reasons"]) == ([6, None, 2], None, [])
@@ -1454,7 +1508,7 @@ def test_submit_skips_a_reply_whose_body_cannot_be_read(monkeypatch, tmp_path):
     _install(
         monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY, broken]}
     )
-    with pytest.raises(RuntimeError, match="nothing was generated"):
+    with pytest.raises(RuntimeError, match="again in a few minutes"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     flow = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]
     assert (flow["workflow_id"], flow["statuses"], flow["unmeasured"]) == (JOB_WORKFLOW, [6], None)
@@ -1496,7 +1550,7 @@ def test_submit_never_waits_past_its_bound_for_a_reply_body(monkeypatch, tmp_pat
     _install(
         monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY, stuck]}
     )
-    with pytest.raises(RuntimeError, match="nothing was generated"):
+    with pytest.raises(RuntimeError, match="again in a few minutes"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]["statuses"] == [6]
 
@@ -1520,7 +1574,7 @@ def test_submit_keeps_no_signed_url_from_a_failed_reply(monkeypatch, tmp_path):
     signed = "https://flow-content.google/video/x?Expires=1789608354&KeyName=labs-flow-prod-cdn-key&Signature=MOP4f"
     replies = {"click": [SUBMIT_REPLY, _status_reply(5, extra=[signed])]}
     _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
-    with pytest.raises(RuntimeError, match="nothing was generated"):
+    with pytest.raises(RuntimeError, match="again in a few minutes"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     head = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]["unmeasured"]["head"]
     assert JOB_WORKFLOW in head and "Signature=" not in head and "Expires=" not in head
@@ -1659,13 +1713,13 @@ class _EscapedReply(_FlowReply):
 
 
 def test_flow_replies_keep_no_signed_query_an_escaped_reply_naming_the_job_carries(monkeypatch, tmp_path):
-    # Re-review H1 (2026-09-17): the excerpt was cut from the raw body, where = hid the query from the redaction.
+    # Re-review H1 (2026-09-17): the excerpt was cut from the raw body, where an escaped '=' hid the query.
     log = []
     naming = _EscapedReply("Kp2Wfd", [[JOB_MEDIA, "poster", SIGNED_URL]])
     _install(
         monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY, naming]}
     )
-    with pytest.raises(RuntimeError, match="nothing was generated"):
+    with pytest.raises(RuntimeError, match="again in a few minutes"):
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
     excerpt = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow"]["named_by"]["Kp2Wfd"]
     ledger_text = (tmp_path / "ledger.jsonl").read_text(encoding="utf-8")
@@ -1780,7 +1834,7 @@ async def _timed(run):
 
 
 def test_flow_replies_redact_an_escaped_signed_query_in_a_reply_without_frames():
-    # Re-review F3 (2026-09-17): a body with no wrb.fr frame was redacted raw, where = hid the query.
+    # Re-review F3 (2026-09-17): a body with no wrb.fr frame was redacted raw, where an escaped '=' hid the query.
     body = ')]}\'\n\n[["er", null, "' + JOB_MEDIA + " " + SIGNED_URL.replace("=", "\\u003d") + '"]]'
     raw = _FlowReply("Kp2Wfd", [])
     raw.body = body
