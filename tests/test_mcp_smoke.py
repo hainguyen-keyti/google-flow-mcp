@@ -91,6 +91,11 @@ class _Account(mcp_server.Backend):
         super().__init__()
         self.replies = replies
 
+    async def _with(self, fn):
+        # The unit suite never talks to Flow (CLAUDE.md rule 6). Inheriting the real Backend means an unguarded
+        # path would otherwise launch Chrome from a test rather than fail it (review 2026-09-18).
+        raise AssertionError("the offline account must never open a browser")
+
     async def lane(self):
         return self.replies["lane"]
 

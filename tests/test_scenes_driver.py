@@ -69,15 +69,16 @@ class _Button:
 
 
 class _Tile:
-    def __init__(self, page, title):
+    def __init__(self, page, where=None, title=None):
         self.page = page
+        self.where = where
         self.title = title
 
     async def scroll_into_view_if_needed(self, timeout=None):
         # Measured 2026-09-17 (Plan H T1): the grid and the trash sit in one div.cdk-virtual-scrollable, which renders
         # a window of tiles; scrolling the last rendered one into view is what brings the next window in.
-        if self.title is not None:
-            self.page.scroll_to(self.title)
+        if self.where is not None:
+            self.page.scroll_to(self.where)
 
     async def count(self):
         return 0 if self.title is None else 1
@@ -97,33 +98,45 @@ class _Tile:
 class _Tiles:
     """A live locator: what it matches is read off the page each time, so a late tile shows up in a later count."""
 
-    def __init__(self, page, pattern=None, text=None):
+    def __init__(self, page, pattern=None, text=None, scenes_only=False):
         self.page = page
         self.pattern = pattern
         self.text = text
+        # The grid holds media tiles too (measured 2026-09-17: 22 to 50 containers for at most 8 scene tiles), and
+        # 'More options' on one of those is not a scene menu, so the driver has to say which kind it wants.
+        self.scenes_only = scenes_only
 
-    def _titles(self):
-        # Measured 2026-09-15 and 2026-09-16 (plan D T1): a scene tile's text is its title between two icon ligatures,
-        # and the title sits in an element of its own.
+    def _matches(self):
+        """The rendered tiles this locator matches, each with its place in the whole view so that scrolling one
+        into view moves to THAT tile and not to the first one sharing its text.
+
+        Measured 2026-09-15 and 2026-09-16 (plan D T1): a scene tile's text is its title between two icon
+        ligatures, and the title sits in an element of its own."""
         return [
-            title
-            for title in self.page.shown()
-            if (self.pattern is None or self.pattern.search(f"movie_edit {title} movie"))
+            (where, title)
+            for where, (title, is_scene) in self.page.shown()
+            if (not self.scenes_only or is_scene)
+            and (self.pattern is None or self.pattern.search(f"movie_edit {title} movie"))
             and (self.text is None or self.text.fits(title))
         ]
 
+    def _titles(self):
+        return [title for _, title in self._matches()]
+
     def filter(self, has_text=None, has=None):
-        return _Tiles(self.page, has_text or self.pattern, has or self.text)
+        scenes_only = self.scenes_only or has == "flow-scene-tile"
+        text = self.text if has == "flow-scene-tile" else (has or self.text)
+        return _Tiles(self.page, has_text or self.pattern, text, scenes_only)
 
     @property
     def first(self):
-        titles = self._titles()
-        return _Tile(self.page, titles[0] if titles else None)
+        matches = self._matches()
+        return _Tile(self.page, *(matches[0] if matches else (None, None)))
 
     @property
     def last(self):
-        titles = self._titles()
-        return _Tile(self.page, titles[-1] if titles else None)
+        matches = self._matches()
+        return _Tile(self.page, *(matches[-1] if matches else (None, None)))
 
     async def count(self):
         return len(self._titles())
@@ -139,7 +152,11 @@ class _TrashPage:
     each shown title to the millisecond it appears, or lists titles shown at once, repeats allowed."""
 
     def __init__(self, titles, window=None):
-        self.titles = list(titles.items()) if isinstance(titles, dict) else [(title, 0) for title in titles]
+        given = list(titles.items()) if isinstance(titles, dict) else [(title, 0) for title in titles]
+        # A title written "media:<text>" is a tile with no flow-scene-tile inside, the kind the grid holds many of.
+        self.titles = [
+            (title.removeprefix("media:"), at, not title.startswith("media:")) for title, at in given
+        ]
         self.elapsed_ms = 0
         self.restored = []
         # None means every tile renders at once, as a short view really does; a number is the virtual window measured
@@ -147,22 +164,20 @@ class _TrashPage:
         self.window = window
         self.offset = 0
 
-    def _rendered(self):
-        painted = [title for title, at in self.titles if at <= self.elapsed_ms]
+    def _painted(self):
+        return [(title, is_scene) for title, at, is_scene in self.titles if at <= self.elapsed_ms]
+
+    def scroll_to(self, where):
+        if self.window is None:
+            return
+        # The tile scrolled into view ends up at the top of the window, and the view stops at the last one.
+        self.offset = max(0, min(where, len(self._painted()) - self.window))
+
+    def shown(self):
+        painted = list(enumerate(self._painted()))
         if self.window is None:
             return painted
         return painted[self.offset : self.offset + self.window]
-
-    def scroll_to(self, title):
-        if self.window is None:
-            return
-        painted = [name for name, at in self.titles if at <= self.elapsed_ms]
-        # The tile scrolled into view ends up at the top of the window, and the view stops at the last one.
-        wanted = painted.index(title) if title in painted else self.offset
-        self.offset = max(0, min(wanted, len(painted) - self.window))
-
-    def shown(self):
-        return self._rendered()
 
     def locator(self, selector, has=None):
         if selector == "flow-scene-tile":
@@ -299,6 +314,20 @@ def test_restore_refuses_when_two_trashed_scenes_share_the_exact_title(monkeypat
     with pytest.raises(RuntimeError, match=re.escape("2 trashed scenes are titled 'alpha'")):
         asyncio.run(scenes.restore(session, PROJECT, SCENE))
     assert session.page.restored == []
+
+
+def test_restore_looks_only_at_scene_tiles_when_a_media_tile_shows_the_same_title(monkeypatch):
+    # The trash view holds media tiles too, and hovering one offers its own Restore for the clip, not for the scene.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "scene thu", True)),
+        RESTORED,
+        _listing(_entry(SCENE, "scene thu", False)),
+    )
+    session = _Session(["media:scene thu", "scene thu", "media:bravo"], window=2)
+
+    assert asyncio.run(scenes.restore(session, PROJECT, SCENE))["trashed"] is False
+    assert session.page.restored == ["scene thu"]
 
 
 def test_restore_refuses_a_scene_without_a_title(monkeypatch):
@@ -493,6 +522,22 @@ def test_delete_refuses_a_title_two_active_scenes_share_even_when_one_is_off_scr
     with pytest.raises(RuntimeError, match=re.escape("2 active scenes are titled 'scene 00'")):
         asyncio.run(scenes.delete(session, PROJECT, _id(0)))
     assert session.page.trashed == []
+
+
+def test_delete_looks_only_at_scene_tiles_when_a_media_tile_shows_the_same_title(monkeypatch):
+    # Review 2026-09-18: the grid holds media tiles as well (22 to 50 containers for at most 8 scene tiles), and
+    # nothing pinned that the driver asks for the ones holding a flow-scene-tile. 'More options' on a media tile
+    # opens a different menu, so a title a clip and a scene share must not turn into a refusal or a wrong click.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "alpha", False)),
+        TRASHED,
+        _listing(_entry(SCENE, "alpha", True)),
+    )
+    session = _Session(["media:alpha", "alpha", "media:bravo"], _GridPage, window=2)
+
+    assert asyncio.run(scenes.delete(session, PROJECT, SCENE))["trashed"] is True
+    assert session.page.trashed == ["alpha"]
 
 
 def test_delete_refuses_when_two_tiles_on_the_page_show_the_title(monkeypatch):

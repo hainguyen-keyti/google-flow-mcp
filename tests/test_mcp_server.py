@@ -1410,6 +1410,11 @@ def test_flow_media_since_takes_a_date_or_an_epoch_and_drops_older_rows(monkeypa
     local = _payload(_call_media(monkeypatch, since="2026-09-11"))
     midnight = time.mktime((2026, 9, 11, 0, 0, 0, 0, 0, -1))
     assert [row["id"] for row in local["media"]] == [row["id"] for row in rows if row["created"] >= midnight]
+    # Review 2026-09-18: 20260911 is an ISO date too, and reading it as an epoch puts it in August 1970, which
+    # filters nothing and says so nowhere. A date is tried before a number, so both spellings agree.
+    compact = _payload(_call_media(monkeypatch, since="20260911"))
+    assert [row["id"] for row in compact["media"]] == [row["id"] for row in local["media"]]
+    assert len(compact["media"]) < compact["media_total"]
 
 
 def test_flow_media_brief_drops_the_fields_that_weigh_the_answer_down(monkeypatch):
@@ -1436,14 +1441,22 @@ def test_flow_media_counts_nothing_as_cut_when_no_filter_asks_for_it(monkeypatch
     assert payload["media_total"] == 15 and len(payload["media"]) == 15
 
 
-def test_flow_media_refuses_a_filter_it_cannot_honour(monkeypatch):
+def test_flow_media_refuses_a_filter_it_cannot_honour_before_opening_a_browser(monkeypatch):
     # Rule 10: a tool that takes an argument it cannot honour and answers anyway is a silent wrong answer. Each of
-    # these must fail loudly instead of quietly listing everything.
+    # these must fail loudly instead of quietly listing everything, and each must fail before a browser is worth
+    # 15 to 50 s of the agent's time (review 2026-09-18: nothing pinned where the refusal happened).
     for arguments in ({"kind": "clip"}, {"limit": 0}, {"limit": -3}, {"since": "yesterday"}):
-        result = _call_media(monkeypatch, **arguments)
+        _, frames = _media_frames()
+        session = _offline_backend(monkeypatch, lambda url, frames=frames: frames)
+
+        async def fn(s, arguments=arguments):
+            return await s.call_tool("flow_media", {"project_id": "P", **arguments})
+
+        result = with_client(fn)
         assert result.is_error, f"{arguments} was accepted"
         text = "".join(getattr(c, "text", "") for c in result.content)
         assert any(word in text for word in ("video", "image", "positive", "date")), text
+        assert session.urls == [], f"{arguments} opened a page before being refused"
 
 
 def _gallery_account(grid_payload):

@@ -402,7 +402,7 @@ async def run(findings):
                 )
                 findings.append({"name": "flow_media all", "status": status, "detail": detail})
 
-                status, detail, _ = await call(
+                status, detail, filtered = await call(
                     session,
                     "flow_media",
                     {
@@ -414,6 +414,14 @@ async def run(findings):
                     },
                     filtered_media(project_id, MEDIA_LIMIT, MEDIA_CEILING),
                 )
+                if status == "PASS":
+                    # The size IS the point of this row, so it goes in the table rather than in a truncated echo.
+                    size = len(json.dumps(filtered, ensure_ascii=False, default=str))
+                    detail = (
+                        f"{size} characters under a ceiling of {MEDIA_CEILING}: "
+                        f"{len(filtered['media'])} of {filtered['media_total']} media, "
+                        f"{len(filtered['versions'])} of {filtered['versions_total']} versions"
+                    )
                 findings.append({"name": "flow_media filtered", "status": status, "detail": detail})
 
                 # The one spending tool this gate may touch, because the refusal happens before a browser opens and

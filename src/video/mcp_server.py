@@ -60,23 +60,26 @@ def _positive_limit(limit: int | None) -> int | None:
 
 def _since_epoch(since: str | float | None) -> float | None:
     """A row's created time is epoch seconds while an agent thinks in dates, so take either; a date with no zone
-    is this machine's own day, which is what an agent asking for today means."""
+    is this machine's own day, which is what an agent asking for today means.
+
+    A date is tried BEFORE a number: '20260911' is a valid ISO date and would otherwise read as epoch 20,260,911,
+    which is August 1970 and filters nothing, silently (review 2026-09-18). Epoch seconds are ten digits, which
+    fromisoformat refuses, so nothing else changes hands."""
     if since is None or since == "":
         return None
     if isinstance(since, (int, float)):
         return float(since)
     text = str(since).strip()
     try:
-        return float(text)
+        return datetime.fromisoformat(text).timestamp()
     except ValueError:
         pass
     try:
-        moment = datetime.fromisoformat(text)
+        return float(text)
     except ValueError as exc:
         raise ValueError(
             f"since must be epoch seconds or an ISO date like 2026-09-17 or 2026-09-17T08:30, got {since!r}"
         ) from exc
-    return moment.timestamp()
 
 
 def _filter_rows(
@@ -623,16 +626,19 @@ async def flow_credits() -> str:
 @server.tool(
     name="flow_media",
     description=(
-        "A project's media (id, kind, model, size, url), meta and models, always as one object, newest first. "
+        "A project's media (id, kind, model, size, url), meta and models, always as one object, in Flow's own "
+        "listing order, which is NOT sorted by age: read `created` (epoch seconds) to tell what is new. "
         "all_versions=true adds a versions list holding every generation record: each Omni edit or upscale "
         "stacks another version onto the SAME media id, and only that list shows them, so it is how you find "
         "the clip an edit produced. A whole project is big (measured 2026-09-17: 28,378 characters, and 122,919 "
-        "with all_versions), so four filters cut it and the answer then also carries media_total, versions_total "
-        "and truncated, telling you what was left out: kind is 'video' or 'image'; since keeps rows made at or "
+        "with all_versions), so four filters cut it: kind is 'video' or 'image'; since keeps rows made at or "
         "after epoch seconds or an ISO date (2026-09-17, or 2026-09-17T08:30+07:00; a date with no zone is this "
-        "machine's day); limit keeps that many newest rows; brief=true drops each row's url and cuts its prompt "
-        "to 120 characters, which is where most of the weight sits. A filter it cannot honour is refused, never "
-        "silently ignored. Free."
+        "machine's day); limit keeps that many rows of EACH list, the newest by created, and puts them newest "
+        "first; brief=true drops each row's url and cuts its prompt to 120 characters plus an ellipsis, which is "
+        "where most of the weight sits. Ask for any of them and the answer also carries media_total (and "
+        "versions_total with all_versions) plus truncated, which say how many ROWS were dropped; brief cuts "
+        "fields, not rows, so it leaves truncated false. A filter it cannot honour is refused, never silently "
+        "ignored. Free."
     ),
 )
 async def flow_media(
@@ -1033,7 +1039,8 @@ async def clip_extend(
         "Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledgered: every edit measured "
         "on this account cost 20 credits, while Flow's own price table lists Omni Flash Edit at 40, so budget for "
         "40 and expect 20. This tool does not read the live price line before it clicks, so what stands between a "
-        "changed price and a surprise bill is the balance read before and after, reported as `spent`. Takes about "
+        "changed price and a surprise bill is the balance read before and after, answered as credits_before and "
+        "credits_after (the ledger row holds their difference as `spent`). Takes about "
         "2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out folder."
         + _JOB_ID_RULE
     ),

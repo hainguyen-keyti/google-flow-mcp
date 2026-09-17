@@ -199,8 +199,10 @@ mặt, tay và món đồ.
 - **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
 - **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media` (luôn trả một object,
   `all_versions=true` thêm khoá `versions`; bốn bộ lọc `kind` là `video` hay `image`, `since` nhận epoch hoặc ngày
-  ISO, `limit` giữ N dòng mới nhất, `brief=true` bỏ `url` và cắt `prompt` còn 120 ký tự. Có lọc thì kết quả mang
-  thêm `media_total`, `versions_total`, `truncated`; lọc sai giá trị bị từ chối. Đo 2026-09-17 trên project nháp:
+  ISO, `limit` giữ N dòng mới nhất của từng list và xếp mới trước, `brief=true` bỏ `url` và cắt `prompt` còn 120 ký
+  tự. Không lọc thì thứ tự là thứ tự listing của Flow, KHÔNG sắp theo tuổi: đọc `created`. Có lọc thì kết quả mang
+  thêm `media_total`, `truncated` (và `versions_total` khi `all_versions=true`), trong đó `truncated` đếm dòng bị
+  bỏ chứ không đếm trường mà `brief` cắt; lọc sai giá trị bị từ chối trước khi mở browser. Đo 2026-09-17 trên project nháp:
   không lọc 28.378 ký tự, `all_versions=true` 122.919, trong đó `url` 28.205 và `prompt` 24.607),
   `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
   tự mở project đầu tiên trên grid), `flow_uploads`, `scene_list`, `scene_clips` (timeline của một scene),

@@ -83,8 +83,12 @@ async def _scroll_to_tile(page: Any, tiles: Any, match: Any, title: str, where: 
 
     Measured 2026-09-17 (Plan H T1): the grid and the trash share one div.cdk-virtual-scrollable, tiles render a
     window at a time and a far one is dropped again, so a view is swept by bringing its last rendered tile into
-    view until nothing new arrives. Two tiles showing the title is still a refusal: the page can hold a tile the
-    listing does not know."""
+    view until nothing new arrives. That works because the rendered window runs well past the visible area (31 to
+    50 containers over a 720 px viewport), which is what makes the last rendered tile a step forward.
+
+    Two tiles showing the title is still a refusal, but only among the tiles rendered together: a namesake the
+    listing does not know, sitting in another window, is caught after the click instead, by the listing read that
+    would name the scene wrongly moved."""
     windows: set[tuple[str, ...]] = set()
     waited_ms = 0
     for _ in range(TILE_SWEEP_STEPS):
@@ -899,8 +903,8 @@ async def download(session: FlowSession, project_id: str, scene_id: str, *, out_
 async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[str, Any]:
     """Move a scene to the project's trash; verified by the trashed flag in the listing.
 
-    Measured 2026-09-16: the grid holds one tile per active scene and none for a trashed one, and a tile carries no
-    scene id, so wait for that many tiles before matching the exact title, as restore does for the trash."""
+    A grid tile carries no scene id (2026-09-16) and the grid renders only a window of tiles (2026-09-17), so the
+    listing decides that one active scene wears this title and the view is swept until its tile renders."""
     page = session.page
     scenes = await list_scenes(session, project_id, include_trashed=True)
     scene = next((s for s in scenes if s["scene_id"] == scene_id), None)
@@ -961,9 +965,9 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
     """Bring a scene back from the project's Trash; verified by the trashed flag in the listing.
 
     Measured 2026-09-15: /project/<id>/trash opens directly, a trashed tile carries no scene id, hovering it shows
-    Restore and Delete permanently, and Restore fires BpMsoe with no confirm dialog. The tile can only be found
-    by its exact title, so a scene with no title, or a title more than one trash tile shows, is refused instead of
-    guessed."""
+    Restore and Delete permanently, and Restore fires BpMsoe with no confirm dialog. The tile can only be found by
+    its exact title, so a scene with no title, or a title more than one trashed scene wears, is refused instead of
+    guessed; the trash renders a window at a time (16 tiles of 37 on 2026-09-17), so it is swept, not counted."""
     page = session.page
     scenes = await list_scenes(session, project_id, include_trashed=True)
     scene = next((s for s in scenes if s["scene_id"] == scene_id), None)
