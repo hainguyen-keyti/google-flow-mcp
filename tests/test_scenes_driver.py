@@ -292,11 +292,11 @@ def test_restore_waits_for_every_trashed_scene_tile_then_restores_the_exact_titl
     assert session.page.elapsed_ms >= 2_000
 
 
-def test_restore_refuses_when_two_trashed_scenes_have_the_exact_title(monkeypatch):
+def test_restore_refuses_when_two_trashed_scenes_share_the_exact_title(monkeypatch):
     _flow_answers(monkeypatch, _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "alpha", True)))
     session = _Session(["alpha", "alpha"])
 
-    with pytest.raises(RuntimeError, match=re.escape("2 trash tiles match 'alpha'")):
+    with pytest.raises(RuntimeError, match=re.escape("2 trashed scenes are titled 'alpha'")):
         asyncio.run(scenes.restore(session, PROJECT, SCENE))
     assert session.page.restored == []
 
@@ -332,24 +332,37 @@ def test_restore_refuses_a_title_that_is_only_whitespace_or_zero_width(monkeypat
     assert session.page.restored == []
 
 
-def test_restore_gives_up_when_the_trash_never_shows_every_trashed_scene(monkeypatch):
-    _flow_answers(monkeypatch, _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", True)))
+def test_restore_does_not_wait_for_a_trashed_scene_it_was_not_asked_about(monkeypatch):
+    # Until Plan H the trash had to render one tile per trashed scene before anything was clicked, which a virtual
+    # scroll never does (16 tiles of 37, measured 2026-09-17). What kept it honest was never the tile count: it is the
+    # listing saying this title belongs to one trashed scene, and the exact-text match on the tile itself.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "alpha", True), _entry(OTHER, "bravo", True)),
+        RESTORED,
+        _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "bravo", True)),
+    )
     session = _Session(["alpha"])
 
-    with pytest.raises(LookupError, match="shows 1 scene tiles for 2 trashed scenes"):
-        asyncio.run(scenes.restore(session, PROJECT, SCENE))
-    assert session.page.restored == []
+    assert asyncio.run(scenes.restore(session, PROJECT, SCENE))["trashed"] is False
+    assert session.page.restored == ["alpha"]
 
 
-def test_restore_refuses_when_the_trash_shows_more_scene_tiles_than_trashed_scenes(monkeypatch):
+def test_restore_waits_past_tiles_the_listing_does_not_know_for_the_exact_title(monkeypatch):
     # Re-review 2026-09-15: the wait ended once the tiles reached the trashed count, so with a tile the listing does not
     # know ("Scene 1 draft") the loop stopped before "Scene 1" rendered and the draft was the only match, and restored.
-    _flow_answers(monkeypatch, _listing(_entry(SCENE, "Scene 1", True)))
+    # The exact-text match is what rules the draft out; the loop now keeps looking until the real tile renders.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "Scene 1", True)),
+        RESTORED,
+        _listing(_entry(SCENE, "Scene 1", False)),
+    )
     session = _Session({"Scene 1 draft": 0, "bravo": 0, "Scene 1": 2_000})
 
-    with pytest.raises(LookupError, match="shows 2 scene tiles for 1 trashed scenes"):
-        asyncio.run(scenes.restore(session, PROJECT, SCENE))
-    assert session.page.restored == []
+    assert asyncio.run(scenes.restore(session, PROJECT, SCENE))["trashed"] is False
+    assert session.page.restored == ["Scene 1"]
+    assert session.page.elapsed_ms >= 2_000
 
 
 def test_restore_counts_a_tile_that_appears_during_the_last_wait(monkeypatch):
@@ -511,7 +524,7 @@ def test_delete_refuses_when_two_active_scenes_show_the_exact_title(monkeypatch)
     )
     session = _Session(["alpha", "alpha"], _GridPage)
 
-    with pytest.raises(RuntimeError, match=re.escape("2 scene tiles show 'alpha'")):
+    with pytest.raises(RuntimeError, match=re.escape("2 active scenes are titled 'alpha'")):
         asyncio.run(scenes.delete(session, PROJECT, SCENE))
     assert session.page.trashed == []
 
@@ -564,27 +577,36 @@ def test_delete_waits_for_the_grid_to_show_every_active_scene_then_trashes_the_e
     assert session.page.elapsed_ms >= 2_500
 
 
-def test_delete_gives_up_when_the_grid_never_shows_every_active_scene(monkeypatch):
+def test_delete_gives_up_when_the_grid_never_shows_the_scenes_own_tile(monkeypatch):
     _flow_answers(monkeypatch, _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "bravo", False)))
     session = _Session(["bravo"], _GridPage)
 
-    with pytest.raises(LookupError, match="grid shows 1 scene tiles for 2 active scenes"):
+    with pytest.raises(LookupError, match=re.escape("titled 'alpha' not found on the grid")):
         asyncio.run(scenes.delete(session, PROJECT, SCENE))
     assert session.page.trashed == []
+    # It gives up at the wait limit, not at the sweep's own backstop: a grid that renders nothing new is done.
+    assert scenes.TILE_WAIT_MS <= session.page.elapsed_ms <= scenes.TILE_WAIT_MS + 3 * scenes.TILE_STEP_MS
 
 
-def test_delete_refuses_when_the_grid_shows_more_scene_tiles_than_active_scenes(monkeypatch):
-    # A tile the listing does not know would end the wait early and can be the only title match before the right one
-    # renders, which is how restore once restored a namesake.
-    _flow_answers(monkeypatch, _listing(_entry(SCENE, "Scene 1", False)))
+def test_delete_waits_past_tiles_the_listing_does_not_know_for_the_exact_title(monkeypatch):
+    # A tile the listing does not know used to end the wait early and could be the only title match before the right
+    # one rendered, which is how restore once restored a namesake. The exact-text match rules the draft out.
+    _flow_answers(
+        monkeypatch,
+        _listing(_entry(SCENE, "Scene 1", False)),
+        TRASHED,
+        _listing(_entry(SCENE, "Scene 1", True)),
+    )
     session = _Session({"Scene 1 draft": 0, "bravo": 0, "Scene 1": 2_000}, _GridPage)
 
-    with pytest.raises(LookupError, match="grid shows 2 scene tiles for 1 active scenes"):
-        asyncio.run(scenes.delete(session, PROJECT, SCENE))
-    assert session.page.trashed == []
+    assert asyncio.run(scenes.delete(session, PROJECT, SCENE))["trashed"] is True
+    assert session.page.trashed == ["Scene 1"]
+    assert session.page.elapsed_ms >= 2_000
 
 
-def test_delete_counts_a_tile_that_appears_during_the_last_wait(monkeypatch):
+def test_delete_does_not_wait_for_an_unrelated_tile_that_has_not_rendered(monkeypatch):
+    # Plan H: waiting for every active scene to render is what broke on a virtual grid. Once this scene's own tile is
+    # on the page and the listing says no other active scene carries that title, there is nothing left to wait for.
     _flow_answers(
         monkeypatch,
         _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "bravo", False)),
@@ -595,7 +617,7 @@ def test_delete_counts_a_tile_that_appears_during_the_last_wait(monkeypatch):
 
     assert asyncio.run(scenes.delete(session, PROJECT, SCENE))["trashed"] is True
     assert session.page.trashed == ["alpha"]
-    assert session.page.elapsed_ms >= 15_000
+    assert session.page.elapsed_ms < 15_000
 
 
 def test_delete_refuses_a_title_that_is_only_whitespace_or_zero_width(monkeypatch):

@@ -24,6 +24,9 @@ from video.session import PROJECT_READY, FlowSession
 _SCENE_RE = re.compile(r"/scene/([A-Za-z0-9-]+)")
 BUILDER = "flow-scene-builder"
 TILE_WAIT_MS = 15_000
+TILE_STEP_MS = 1_000
+# The trash of the draft project swept in 11 windows; this is the backstop that keeps a stuck view from hanging a call.
+TILE_SWEEP_STEPS = 60
 TOOLBAR_MIN = 20
 TOOLBAR_WAIT_MS = 15_000
 CONTROL_WAIT_MS = 10_000
@@ -64,19 +67,45 @@ def _tile_text(title: str | None) -> str:
     return " ".join((title or "").translate(_ZERO_WIDTH).split())
 
 
-async def _wait_for_tiles(page: Any, tiles: Any, expected: int, where: str, state: str) -> None:
-    """Tiles render over time, so judge titles only once the view holds one tile per listed scene: a late tile is
-    missed otherwise, and a tile the listing does not know can be the only title match before the right one renders."""
-    waited_ms = 0
-    while (shown := await tiles.count()) < expected:
-        if waited_ms >= TILE_WAIT_MS:
-            break
-        await page.wait_for_timeout(1_000)
-        waited_ms += 1_000
-    if shown != expected:
-        raise LookupError(
-            f"the {where} shows {shown} scene tiles for {expected} {state} scenes; not guessing"
+def _only_scene_titled(scenes: list[dict[str, Any]], title: str, trashed: bool, where: str) -> None:
+    """Which scene a tile belongs to is decided by the LISTING, which knows every scene, not by the handful of tiles
+    the view has rendered: measured 2026-09-17, the grid renders 7 tiles of 8 and the trash 16 of 37."""
+    same = [s for s in scenes if s["trashed"] is trashed and _tile_text(s["title"]) == _tile_text(title)]
+    if len(same) > 1:
+        state = "trashed" if trashed else "active"
+        raise RuntimeError(
+            f"{len(same)} {state} scenes are titled {title!r}; {where} tiles carry no scene id, so this would guess"
         )
+
+
+async def _scroll_to_tile(page: Any, tiles: Any, match: Any, title: str, where: str) -> Any:
+    """The one rendered tile with that exact title, scrolling the virtual view until it renders.
+
+    Measured 2026-09-17 (Plan H T1): the grid and the trash share one div.cdk-virtual-scrollable, tiles render a
+    window at a time and a far one is dropped again, so a view is swept by bringing its last rendered tile into
+    view until nothing new arrives. Two tiles showing the title is still a refusal: the page can hold a tile the
+    listing does not know."""
+    windows: set[tuple[str, ...]] = set()
+    waited_ms = 0
+    for _ in range(TILE_SWEEP_STEPS):
+        found = await match.count()
+        if found > 1:
+            raise RuntimeError(
+                f"{found} {where} tiles show {title!r}; tiles carry no scene id, so this would guess"
+            )
+        if found == 1:
+            return match.first
+        rendered = tuple(await tiles.all_text_contents())
+        if rendered and rendered not in windows:
+            windows.add(rendered)
+            await tiles.last.scroll_into_view_if_needed(timeout=8_000)
+        elif waited_ms >= TILE_WAIT_MS:
+            raise LookupError(f"scene tile titled {title!r} not found on the {where}")
+        else:
+            waited_ms += TILE_STEP_MS
+        await page.wait_for_timeout(TILE_STEP_MS)
+    # A view that keeps answering with new windows must still end somewhere, or a call hangs for good.
+    raise LookupError(f"scene tile titled {title!r} not found in {TILE_SWEEP_STEPS} steps of the {where}")
 
 
 def _moved_scenes(before: list[dict[str, Any]], after: list[dict[str, Any]], scene_id: str) -> str:
@@ -886,18 +915,11 @@ async def delete(session: FlowSession, project_id: str, scene_id: str) -> dict[s
             "it would guess"
         )
     # Measured 2026-09-16 (plan D T1): the title sits in an element of its own, between two icon ligatures.
-    active = sum(1 for s in scenes if not s["trashed"])
-    scene_tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
-    await _wait_for_tiles(page, scene_tiles, active, "grid", "active")
-    tiles = scene_tiles.filter(has=page.get_by_text(title, exact=True))
-    matching = await tiles.count()
-    if matching == 0:
-        raise LookupError(f"scene tile titled {title!r} not found on the grid")
-    if matching > 1:
-        raise RuntimeError(
-            f"{matching} scene tiles show {title!r}; grid tiles carry no ids, so trashing would guess"
-        )
-    tile = tiles.first
+    _only_scene_titled(scenes, title, False, "grid")
+    tiles = page.locator("flow-tile-container")
+    scene_tiles = tiles.filter(has=page.locator("flow-scene-tile"))
+    match = scene_tiles.filter(has=page.get_by_text(title, exact=True))
+    tile = await _scroll_to_tile(page, tiles, match, title, "grid")
     await tile.hover(timeout=8_000)
     await page.wait_for_timeout(600)
     await tile.get_by_role("button", name=re.compile("More options", re.IGNORECASE)).first.click(
@@ -955,17 +977,12 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
             f"scene {scene_id} has no title to match ({title!r}), and the trash shows no ids, so restoring it "
             "would guess"
         )
-    trashed = sum(1 for s in scenes if s["trashed"])
+    _only_scene_titled(scenes, title, True, "trash")
     await session.goto(f"{session.project_url(project_id)}/trash", ready=PROJECT_READY)
-    scene_tiles = page.locator("flow-tile-container", has=page.locator("flow-scene-tile"))
-    await _wait_for_tiles(page, scene_tiles, trashed, "trash", "trashed")
-    tiles = scene_tiles.filter(has=page.get_by_text(title, exact=True))
-    matching = await tiles.count()
-    if matching != 1:
-        raise RuntimeError(
-            f"{matching} trash tiles match {title!r}; the trash shows no ids, so restoring would guess"
-        )
-    tile = tiles.first
+    tiles = page.locator("flow-tile-container")
+    scene_tiles = tiles.filter(has=page.locator("flow-scene-tile"))
+    match = scene_tiles.filter(has=page.get_by_text(title, exact=True))
+    tile = await _scroll_to_tile(page, tiles, match, title, "trash")
     await tile.hover(timeout=8_000)
     await page.wait_for_timeout(600)
     button = tile.get_by_role("button", name=re.compile("^Restore$", re.IGNORECASE)).first
