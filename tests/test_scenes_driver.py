@@ -1245,3 +1245,140 @@ def test_rename_fails_when_the_listing_still_shows_the_old_title(monkeypatch):
 
     with pytest.raises(RuntimeError, match="still reads"):
         asyncio.run(scenes.rename(_SceneSession(page, media), PROJECT, "scene-1", "new name"))
+
+
+# Zzl0ze[6], measured 2026-09-17 (plan character-generation T9, src/video/probes/scene_editor.py): every scene's
+# clips, each [[clip_id, _, _, [title, created, _, _, clip_workflow_id, _, updated], project_id], scene_id,
+# [index or null for 0, [length], [start], [end], [1]]], listed in no particular order. Zzl0ze[4] entry [5] is the
+# scene's aspect ratio, 1 for 9:16 and 2 for 16:9. These three are scene dancer-test-2 exactly as Flow listed them;
+# its downloaded film plays preparing, rehearsing, streaming.
+DANCER = "8c6c91da-0a5d-418d-ab3f-9aa957453aa8"
+PREPARING = "05a0775f-c0fe-4e4f-b7ca-b967f042fce5"
+STREAMING = "521495e1-d3d6-45b4-ac21-610b58f4ae30"
+REHEARSING = "c6ec005d-2b4d-4a68-a292-580c0b9ecf5c"
+
+
+def _clip_entry(clip_id, title, scene_id, index, *, length=(8,), start=(), end=(8,)):
+    meta = [
+        title,
+        [1789625843, 500039000],
+        None,
+        None,
+        "89e4ca45-0a8c-4830-a80f-68c15a3e896d",
+        None,
+        [1789625855, 0],
+    ]
+    return [
+        [clip_id, None, None, meta, PROJECT],
+        scene_id,
+        [index, list(length), list(start), list(end), [1]],
+    ]
+
+
+def _scene_entry(scene_id, title, aspect, *, trashed=False):
+    flags = [True] if trashed else []
+    return [scene_id, title, None, [1789625670, 221531000], [1789626160, 693905000], aspect, None, flags]
+
+
+def _timeline_listing(scene_entries, clip_entries):
+    return {"Zzl0ze": [[None, [], [], [], list(scene_entries), [], list(clip_entries), []]]}
+
+
+DANCER_CLIPS = [
+    _clip_entry(PREPARING, "Dancer preparing for livestream", DANCER, None),
+    _clip_entry(STREAMING, "Dancer streaming in studio", DANCER, 2),
+    _clip_entry(REHEARSING, "Young woman rehearsing hip-hop d" + chr(0x2026), DANCER, 1),
+]
+
+
+def test_scene_clips_come_back_in_the_order_flow_keeps_not_the_order_they_are_listed_in(monkeypatch):
+    _flow_answers(monkeypatch, _timeline_listing([_scene_entry(DANCER, "dancer-test-2", 1)], DANCER_CLIPS))
+
+    result = asyncio.run(scenes.timeline(_Session([]), PROJECT, DANCER))
+
+    assert [(c["position"], c["clip_id"]) for c in result["clips"]] == [
+        (0, PREPARING),
+        (1, REHEARSING),
+        (2, STREAMING),
+    ]
+    assert result["clips"][1]["title"] == "Young woman rehearsing hip-hop d" + chr(0x2026)
+
+
+def test_scene_clips_leave_out_every_other_scenes_clips(monkeypatch):
+    other = [
+        _clip_entry("9e7765e2-7f2b-4b8e-9a51-0c1d2e3f4a5b", "Model sailboat on wooden desk", OTHER, None)
+    ]
+    listing = _timeline_listing(
+        [_scene_entry(DANCER, "dancer-test-2", 1), _scene_entry(OTHER, "pB", 2)], other + DANCER_CLIPS
+    )
+    _flow_answers(monkeypatch, listing)
+
+    result = asyncio.run(scenes.timeline(_Session([]), PROJECT, DANCER))
+
+    assert [c["clip_id"] for c in result["clips"]] == [PREPARING, REHEARSING, STREAMING]
+
+
+@pytest.mark.parametrize(("aspect", "expected"), [(1, "9:16"), (2, "16:9"), (7, None), (None, None)])
+def test_scene_clips_read_the_aspect_ratio_off_the_scene_entry(monkeypatch, aspect, expected):
+    _flow_answers(
+        monkeypatch, _timeline_listing([_scene_entry(DANCER, "dancer-test-2", aspect)], DANCER_CLIPS)
+    )
+
+    result = asyncio.run(scenes.timeline(_Session([]), PROJECT, DANCER))
+
+    assert result["aspect"] == expected
+    assert result["title"] == "dancer-test-2" and result["scene_id"] == DANCER and result["trashed"] is False
+
+
+def test_scene_clips_count_what_each_clip_plays_from_its_start_to_its_end(monkeypatch):
+    clips = [
+        _clip_entry(PREPARING, "a", DANCER, None),
+        _clip_entry(REHEARSING, "b", DANCER, 1, start=(2, 500000000), end=(8,)),
+        _clip_entry(STREAMING, "c", DANCER, 2, length=(10,), end=(6, 250000000)),
+    ]
+    _flow_answers(monkeypatch, _timeline_listing([_scene_entry(DANCER, "d", 1)], clips))
+
+    result = asyncio.run(scenes.timeline(_Session([]), PROJECT, DANCER))
+
+    assert [c["seconds"] for c in result["clips"]] == [8.0, 5.5, 6.25]
+    assert result["seconds"] == 19.75
+
+
+def test_scene_clips_of_a_scene_holding_none_are_empty_and_last_nothing(monkeypatch):
+    _flow_answers(monkeypatch, _timeline_listing([_scene_entry(DANCER, "d", 2)], []))
+
+    result = asyncio.run(scenes.timeline(_Session([]), PROJECT, DANCER))
+
+    assert result["clips"] == [] and result["seconds"] == 0
+
+
+@pytest.mark.parametrize(
+    "indexes",
+    [(None, None, 2), (None, 2, 3), (1, 2, 3)],
+    ids=["two clips at 0", "a gap at 1", "nothing at 0"],
+)
+def test_scene_clips_refuse_positions_that_repeat_or_skip_rather_than_guess_an_order(monkeypatch, indexes):
+    clips = [
+        _clip_entry(clip_id, "t", DANCER, index)
+        for clip_id, index in zip((PREPARING, REHEARSING, STREAMING), indexes, strict=True)
+    ]
+    _flow_answers(monkeypatch, _timeline_listing([_scene_entry(DANCER, "d", 1)], clips))
+
+    with pytest.raises(ValueError, match="not guessing"):
+        asyncio.run(scenes.timeline(_Session([]), PROJECT, DANCER))
+
+
+def test_scene_clips_refuse_a_scene_the_listing_does_not_have(monkeypatch):
+    _flow_answers(monkeypatch, _timeline_listing([_scene_entry(OTHER, "pB", 2)], DANCER_CLIPS))
+
+    with pytest.raises(LookupError, match=f"scene {DANCER} is not in the project listing"):
+        asyncio.run(scenes.timeline(_Session([]), PROJECT, DANCER))
+
+
+def test_scene_clips_say_when_the_scene_sits_in_the_trash(monkeypatch):
+    listing = _timeline_listing([_scene_entry(DANCER, "dancer-test-2", 1, trashed=True)], DANCER_CLIPS)
+    _flow_answers(monkeypatch, listing)
+
+    result = asyncio.run(scenes.timeline(_Session([]), PROJECT, DANCER))
+
+    assert result["trashed"] is True and len(result["clips"]) == 3

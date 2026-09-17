@@ -38,6 +38,8 @@ SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 # Free AND side-effect free: safe to call on the owner's live account on every run.
 READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits", "flow_tools")
 READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_uploads", "scene_list")
+# Read-only too, but it needs a scene id, which only scene_list's own answer can supply.
+READ_ONLY_PER_SCENE = ("scene_clips",)
 
 # Free but they CHANGE things. Never called here; see I4 in the plan.
 MUTATING = (
@@ -75,6 +77,7 @@ SPENDING = ("gen_t2v", "gen_i2v", "gen_r2v", "gen_character", "clip_extend", "cl
 CLASSIFIED = (
     *READ_ONLY_NO_ARGS,
     *READ_ONLY_PER_PROJECT,
+    *READ_ONLY_PER_SCENE,
     *MUTATING,
     *DOWNLOADING,
     *MAYBE_SPENDING,
@@ -204,6 +207,25 @@ def a_scene_list(payload):
     return f"{trashed} trashed scene(s) in a listing that did not ask for them" if trashed else None
 
 
+def timeline_of(scene_id):
+    def check(payload):
+        if not isinstance(payload, dict):
+            return f"expected an object, got {type(payload).__name__}"
+        if payload.get("scene_id") != scene_id:
+            return f"scene_id is {payload.get('scene_id')!r}, asked for {scene_id!r}"
+        clips = payload.get("clips")
+        if not isinstance(clips, list) or not _each_has(clips, "clip_id"):
+            return "clips is not a list of clips that each carry a clip_id"
+        positions = [clip.get("position") for clip in clips]
+        if positions != list(range(len(clips))):
+            return f"clip positions read {positions}, not the film's order from 0"
+        if payload.get("aspect") not in ("9:16", "16:9", None):
+            return f"aspect is {payload.get('aspect')!r}"
+        return None
+
+    return check
+
+
 def an_upload_count(payload):
     """Why `a_dict` was not enough here. Measured 2026-09-14: flow_uploads was answering `count: null`,
     a doubled tile figure and an empty rpcid list on a project holding 4 uploads, and this gate stayed
@@ -294,11 +316,30 @@ async def run(findings):
                     "flow_uploads": an_upload_count,
                     "scene_list": a_scene_list,
                 }
+                scenes = None
                 for name in READ_ONLY_PER_PROJECT:
-                    status, detail, _ = await call(
+                    status, detail, payload = await call(
                         session, name, {"project_id": project_id}, per_project[name]
                     )
                     findings.append({"name": name, "status": status, "detail": detail})
+                    if name == "scene_list":
+                        scenes = payload
+
+                scene_id = None
+                if isinstance(scenes, list) and scenes and isinstance(scenes[0], dict):
+                    scene_id = scenes[0].get("scene_id")
+                if scene_id:
+                    arguments = {"project_id": project_id, "scene_id": scene_id}
+                    status, detail, _ = await call(session, "scene_clips", arguments, timeline_of(scene_id))
+                    findings.append({"name": "scene_clips", "status": status, "detail": detail})
+                else:
+                    findings.append(
+                        {
+                            "name": "scene_clips",
+                            "status": "SKIP",
+                            "detail": "the project holds no scene to read",
+                        }
+                    )
 
                 status, detail, _ = await call(
                     session,

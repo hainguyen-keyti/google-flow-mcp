@@ -47,6 +47,8 @@ EXPECTED_TOOLS = {
     "scene_add_clip",
     "scene_download",
     "scene_rename",
+    # Plan character-generation T10: the listing read that lets an agent name a clip on a timeline, added on purpose.
+    "scene_clips",
     "agent_mode",
     "agent_send",
     "clip_download",
@@ -102,6 +104,7 @@ TOOL_CALLS: dict[str, dict] = {
     "scene_add_clip": {"project_id": "P", "scene_id": "S", "media_id": "M"},
     "scene_download": {"project_id": "P", "scene_id": "S", "out_dir": "out/films"},
     "scene_rename": {"project_id": "P", "scene_id": "S", "title": "a name"},
+    "scene_clips": {"project_id": "P", "scene_id": "S"},
     "agent_mode": {"project_id": "P", "enabled": True},
     "agent_send": {"project_id": "P", "message": "hello", "job_id": "job-agent"},
     "clip_download": {"project_id": "P", "media_id": "M"},
@@ -1768,3 +1771,43 @@ def test_a_scene_download_folder_inside_out_reaches_the_driver(monkeypatch, tmp_
     result = with_client(fn)
     assert not result.is_error, _texts([result])[0]
     assert seen["out_dir"] == tmp_path / "out" / "films"
+
+
+def test_scene_clips_answers_with_the_timeline_the_driver_read_off_the_listing(monkeypatch, tmp_path):
+    read = {}
+    timeline = {
+        "scene_id": "S",
+        "title": "dancer-test-2",
+        "trashed": False,
+        "aspect": "9:16",
+        "seconds": 16.0,
+        "clips": [
+            {"position": 0, "clip_id": "c0", "title": "Dancer preparing for livestream", "seconds": 8.0},
+            {"position": 1, "clip_id": "c1", "title": "Dancer streaming in studio", "seconds": 8.0},
+        ],
+    }
+
+    async def fake_with(self, fn):
+        return await fn("session")
+
+    async def fake_timeline(session, project_id, scene_id):
+        read.update(session=session, project_id=project_id, scene_id=scene_id)
+        return timeline
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.scenes_mod, "timeline", fake_timeline)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        return await s.call_tool("scene_clips", {"project_id": "P", "scene_id": "S"})
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])[0]
+    assert json.loads(_texts([result])[0]) == timeline
+    assert read == {"session": "session", "project_id": "P", "scene_id": "S"}
+
+
+def test_scene_clips_tells_the_agent_the_order_is_the_films_and_how_clips_are_named():
+    text = served_tool_objects()["scene_clips"].description
+    for phrase in ("order the film plays", "position", "from 0", "clip_id", "aspect", "Free."):
+        assert phrase in text, phrase

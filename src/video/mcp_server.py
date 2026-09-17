@@ -244,6 +244,9 @@ class Backend:
     async def scene_rename(self, project_id: str, scene_id: str, title: str) -> dict[str, Any]:
         return await self._with(lambda s: scenes_mod.rename(s, project_id, scene_id, title))
 
+    async def scene_clips(self, project_id: str, scene_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.timeline(s, project_id, scene_id))
+
     async def agent_mode(self, project_id: str, enabled: bool) -> dict[str, Any]:
         return await self._with(lambda s: agent_mod.set_mode(s, project_id, enabled))
 
@@ -689,6 +692,23 @@ async def scene_rename(project_id: str, scene_id: str, title: str) -> str:
     _require(scene_id, "scene_id")
     _require(title, "title")
     return _json(await backend.scene_rename(project_id, scene_id, title))
+
+
+@server.tool(
+    name="scene_clips",
+    description=(
+        "Read one scene's timeline as Flow stores it: its clips in the order the film plays them, each with its "
+        "position (counted from 0), clip_id, title and seconds, plus the scene's aspect ratio (9:16 or 16:9, "
+        "null when the listing names neither) and its total seconds. A clip_id names one clip on this timeline, "
+        "not a project media: adding the same media twice gives two clip_ids. The page's own Total duration label "
+        "moves before Flow has stored a change (measured 2026-09-17), so read this again after changing the "
+        "timeline instead of trusting the label or an earlier answer. Free."
+    ),
+)
+async def scene_clips(project_id: str, scene_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    return _json(await backend.scene_clips(project_id, scene_id))
 
 
 @server.tool(

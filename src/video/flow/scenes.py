@@ -92,6 +92,65 @@ async def list_scenes(
     return scenes if include_trashed else [s for s in scenes if not s["trashed"]]
 
 
+def _seconds(value: Any) -> float:
+    """A duration as the listing holds it: [] for none, [seconds] or [seconds, nanos]."""
+    whole, nanos = parsers._at(value, 0), parsers._at(value, 1)
+    return (whole if type(whole) is int else 0) + (nanos if type(nanos) is int else 0) / 1e9
+
+
+def clips_from_listing(payload: Any, scene_id: str) -> list[dict[str, Any]]:
+    """One scene's clips, in the order its film plays them.
+
+    Measured 2026-09-17 (probes/scene_editor.py): Zzl0ze[6] lists every scene's clips in no particular order, each
+    [[clip_id, _, _, [title, ...], project_id], scene_id, [index or null for 0, [length], [start], [end], [1]]], and
+    the index order matched the downloaded film. A clip plays from its start to its end.
+    """
+    clips = []
+    for entry in parsers._at(payload, 6) or []:
+        if parsers._at(entry, 1) != scene_id:
+            continue
+        timing = parsers._at(entry, 2)
+        index = parsers._at(timing, 0)
+        clips.append(
+            {
+                "position": index if type(index) is int else 0,
+                "clip_id": parsers._at(entry, 0, 0),
+                "title": parsers._at(entry, 0, 3, 0),
+                "seconds": round(_seconds(parsers._at(timing, 3)) - _seconds(parsers._at(timing, 2)), 3),
+            }
+        )
+    clips.sort(key=lambda clip: clip["position"])
+    positions = [clip["position"] for clip in clips]
+    if positions != list(range(len(clips))):
+        raise ValueError(f"scene {scene_id} lists its clips at positions {positions}; not guessing the order")
+    return clips
+
+
+ASPECTS = {1: "9:16", 2: "16:9"}
+
+
+def timeline_from_listing(payload: Any, scene_id: str) -> dict[str, Any]:
+    """A scene as the listing keeps it: its clips in order, its length and its aspect ratio (Zzl0ze[4] entry [5],
+    1 for 9:16 and 2 for 16:9, measured 2026-09-17 by toggling it)."""
+    scene = next((s for s in parsers._at(payload, 4) or [] if parsers._at(s, 0) == scene_id), None)
+    if scene is None:
+        raise LookupError(f"scene {scene_id} is not in the project listing")
+    clips = clips_from_listing(payload, scene_id)
+    aspect, flags = parsers._at(scene, 5), parsers._at(scene, 7)
+    return {
+        "scene_id": scene_id,
+        "title": parsers._at(scene, 1),
+        "trashed": isinstance(flags, list) and bool(flags) and flags[0] is True,
+        "aspect": ASPECTS.get(aspect) if type(aspect) is int else None,
+        "seconds": round(sum(clip["seconds"] for clip in clips), 3),
+        "clips": clips,
+    }
+
+
+async def timeline(session: FlowSession, project_id: str, scene_id: str) -> dict[str, Any]:
+    return timeline_from_listing(await _listing(session, project_id), scene_id)
+
+
 async def create(session: FlowSession, project_id: str, title: str | None = None) -> dict[str, Any]:
     page = session.page
     await session.goto(session.project_url(project_id), ready=PROJECT_READY)

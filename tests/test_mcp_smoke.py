@@ -69,6 +69,17 @@ def _replies(first=PROJECT, empty=False):
         "tools": [{"id": "community-1", "name": "Tool", "author": "a", "path": "p", "tags": ["x"]}],
         "uploads": {"count": 0 if empty else 4},
         "scenes": [] if empty else [scene],
+        "timeline": {
+            "scene_id": "s1",
+            "title": "s",
+            "trashed": False,
+            "aspect": "9:16",
+            "seconds": 16.0,
+            "clips": [
+                {"position": 0, "clip_id": "c1", "title": "t", "seconds": 8.0},
+                {"position": 1, "clip_id": "c2", "title": "t", "seconds": 8.0},
+            ],
+        },
     }
 
 
@@ -103,6 +114,10 @@ class _Account:
     async def scene_list(self, project_id, include_trashed=False):
         return self.replies["scenes"]
 
+    async def scene_clips(self, project_id, scene_id):
+        self.replies.setdefault("timeline_asked_for", []).append(scene_id)
+        return self.replies["timeline"]
+
 
 def _rows(monkeypatch, replies):
     monkeypatch.setattr(mcp_server, "backend", _Account(replies))
@@ -118,8 +133,17 @@ def _failing(rows):
 def test_a_healthy_account_passes_every_row(monkeypatch):
     rows = _rows(monkeypatch, _replies())
 
-    assert len(rows) == 12
+    assert len(rows) == 13
     assert _failing(rows) == {}
+
+
+def test_the_smoke_reads_the_timeline_of_a_scene_the_listing_named(monkeypatch):
+    # scene_clips needs a scene id no fixed argument can supply, so the gate takes it from scene_list's own answer.
+    replies = _replies()
+
+    _rows(monkeypatch, replies)
+
+    assert replies["timeline_asked_for"] == ["s1"]
 
 
 def test_the_smoke_asks_for_the_tools_gallery_without_a_project(monkeypatch):
@@ -134,11 +158,16 @@ def test_the_smoke_asks_for_the_tools_gallery_without_a_project(monkeypatch):
 
 def test_an_empty_project_passes_every_row(monkeypatch):
     # Measured 2026-09-14 on e110839d: media [], versions [], characters [], scenes [] and uploads 0 are
-    # all correct answers for a project with nothing in it, so none of them may fail a row.
-    rows = _rows(monkeypatch, _replies(first=EMPTY, empty=True))
+    # all correct answers for a project with nothing in it, so none of them may fail a row. A project with no scene
+    # leaves scene_clips nothing to read: that row says SKIP, never a PASS it did not earn (CLAUDE.md rule 10).
+    replies = _replies(first=EMPTY, empty=True)
 
-    assert len(rows) == 12
-    assert _failing(rows) == {}
+    rows = _rows(monkeypatch, replies)
+
+    assert len(rows) == 13
+    assert _failing(rows) == {"scene_clips": "the project holds no scene to read"}
+    assert rows["scene_clips"][0] == "SKIP"
+    assert "timeline_asked_for" not in replies
 
 
 def _signed_out(replies):
@@ -181,6 +210,19 @@ def _trashed_scene_in_default_listing(replies):
     replies["scenes"].append({"scene_id": "s2", "title": "gone", "trashed": True, "created": 1, "updated": 1})
 
 
+def _timeline_of_another_scene(replies):
+    replies["timeline"]["scene_id"] = "s2"
+
+
+def _clips_out_of_order(replies):
+    # The order is the whole point of the read: a film plays its clips by position.
+    replies["timeline"]["clips"].reverse()
+
+
+def _unknown_aspect(replies):
+    replies["timeline"]["aspect"] = "4:3"
+
+
 CORRUPTIONS = [
     ("flow_lane", _signed_out),
     ("flow_projects", _repeated_project_id),
@@ -191,6 +233,9 @@ CORRUPTIONS = [
     ("flow_characters", _character_without_entity),
     ("flow_tools", _no_tools),
     ("scene_list", _trashed_scene_in_default_listing),
+    ("scene_clips", _timeline_of_another_scene),
+    ("scene_clips", _clips_out_of_order),
+    ("scene_clips", _unknown_aspect),
 ]
 
 
