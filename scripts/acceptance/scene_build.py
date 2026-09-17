@@ -182,7 +182,7 @@ async def run(project: str, rows: list[dict[str, Any]], state: dict[str, Any]) -
                     if error:
                         row("B1 create and rename a scene", False, f"flow_download failed: {error}")
                         return
-                    sources[video["title"]] = Path(fetched)
+                    sources[video["title"]] = Path(fetched["path"])
 
                 created, error, took = await call(session, "scene_create", {"project_id": project})
                 if error:
