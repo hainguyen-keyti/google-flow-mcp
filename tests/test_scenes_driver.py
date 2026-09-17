@@ -73,6 +73,12 @@ class _Tile:
         self.page = page
         self.title = title
 
+    async def scroll_into_view_if_needed(self, timeout=None):
+        # Measured 2026-09-17 (Plan H T1): the grid and the trash sit in one div.cdk-virtual-scrollable, which renders
+        # a window of tiles; scrolling the last rendered one into view is what brings the next window in.
+        if self.title is not None:
+            self.page.scroll_to(self.title)
+
     async def count(self):
         return 0 if self.title is None else 1
 
@@ -114,8 +120,17 @@ class _Tiles:
         titles = self._titles()
         return _Tile(self.page, titles[0] if titles else None)
 
+    @property
+    def last(self):
+        titles = self._titles()
+        return _Tile(self.page, titles[-1] if titles else None)
+
     async def count(self):
         return len(self._titles())
+
+    async def all_text_contents(self):
+        # What Playwright reads off each rendered tile: the title between the two icon ligatures.
+        return [f"movie_edit {title} movie" for title in self._titles()]
 
 
 class _TrashPage:
@@ -123,18 +138,37 @@ class _TrashPage:
     Restore and Delete permanently, and Restore asks for no confirmation. Tiles may render late: `titles` maps
     each shown title to the millisecond it appears, or lists titles shown at once, repeats allowed."""
 
-    def __init__(self, titles):
+    def __init__(self, titles, window=None):
         self.titles = list(titles.items()) if isinstance(titles, dict) else [(title, 0) for title in titles]
         self.elapsed_ms = 0
         self.restored = []
+        # None means every tile renders at once, as a short view really does; a number is the virtual window measured
+        # on 2026-09-17: 7 of 8 tiles on the grid, 16 of 37 in the trash.
+        self.window = window
+        self.offset = 0
+
+    def _rendered(self):
+        painted = [title for title, at in self.titles if at <= self.elapsed_ms]
+        if self.window is None:
+            return painted
+        return painted[self.offset : self.offset + self.window]
+
+    def scroll_to(self, title):
+        if self.window is None:
+            return
+        painted = [name for name, at in self.titles if at <= self.elapsed_ms]
+        # The tile scrolled into view ends up at the top of the window, and the view stops at the last one.
+        wanted = painted.index(title) if title in painted else self.offset
+        self.offset = max(0, min(wanted, len(painted) - self.window))
 
     def shown(self):
-        return [title for title, at in self.titles if at <= self.elapsed_ms]
+        return self._rendered()
 
     def locator(self, selector, has=None):
         if selector == "flow-scene-tile":
             return selector
-        assert selector == "flow-tile-container" and has == "flow-scene-tile"
+        assert selector == "flow-tile-container"
+        assert has in (None, "flow-scene-tile")
         return _Tiles(self)
 
     def get_by_text(self, text, exact=False):
@@ -173,8 +207,8 @@ class _GridPage(_TrashPage):
     """The project grid as measured on 2026-09-16 (plan D T1): a scene tile shows its title between two ligatures and
     carries no scene id. 'More options' then 'Move to trash' trashes the scene; this fake shows no confirm dialog."""
 
-    def __init__(self, titles):
-        super().__init__(titles)
+    def __init__(self, titles, window=None):
+        super().__init__(titles, window)
         self.menu_for = None
         self.trashed = []
 
@@ -187,8 +221,8 @@ class _GridPage(_TrashPage):
 
 
 class _Session:
-    def __init__(self, titles, page_cls=_TrashPage):
-        self.page = page_cls(titles)
+    def __init__(self, titles, page_cls=_TrashPage, window=None):
+        self.page = page_cls(titles, window)
         self.urls = []
 
     async def goto(self, url, *, ready=None, timeout_ms=60_000):
@@ -390,6 +424,82 @@ def test_delete_trashes_the_tile_whose_title_is_exactly_the_scenes(monkeypatch, 
 
     assert asyncio.run(scenes.delete(session, PROJECT, SCENE))["trashed"] is True
     assert session.page.trashed == ["Scene 1"]
+
+
+def _id(index):
+    # The listing parser keeps only UUID scene ids, so a made-up one would be dropped and never reach the grid.
+    return f"00000000-0000-4000-8000-{index:012d}"
+
+
+def _many(count, prefix="scene", trashed=False):
+    return [_entry(_id(i), f"{prefix} {i:02d}", trashed) for i in range(count)]
+
+
+def test_delete_scrolls_the_virtual_grid_to_reach_a_tile_below_the_fold(monkeypatch):
+    # Plan H T1 measured the grid rendering 7 scene tiles of 8 at the top, the 8th only from scrollTop 1728, so the
+    # old wait for one tile per active scene refused every project with more scenes than one screen holds.
+    entries = _many(8)
+    target = entries[7]
+    scene_id = target[0]
+    _flow_answers(
+        monkeypatch,
+        _listing(*entries),
+        TRASHED,
+        _listing(*entries[:7], _entry(scene_id, "scene 07", True)),
+    )
+    session = _Session([f"scene {i:02d}" for i in range(8)], _GridPage, window=7)
+
+    assert asyncio.run(scenes.delete(session, PROJECT, scene_id))["trashed"] is True
+    assert session.page.trashed == ["scene 07"]
+
+
+def test_restore_scrolls_the_trash_which_renders_sixteen_of_thirty_seven_tiles(monkeypatch):
+    entries = _many(37, prefix="gone", trashed=True)
+    target = entries[30]
+    scene_id = target[0]
+    restored = {"BpMsoe": [[[scene_id, "gone 30", None, [1789416689, 0], [1789436330, 0], 2, None, []]]]}
+    _flow_answers(
+        monkeypatch,
+        _listing(*entries),
+        restored,
+        _listing(*entries[:30], _entry(scene_id, "gone 30", False), *entries[31:]),
+    )
+    session = _Session([f"gone {i:02d}" for i in range(37)], window=16)
+
+    assert asyncio.run(scenes.restore(session, PROJECT, scene_id))["trashed"] is False
+    assert session.page.restored == ["gone 30"]
+
+
+def test_delete_refuses_a_title_two_active_scenes_share_even_when_one_is_off_screen(monkeypatch):
+    # The listing knows every scene, the rendered window knows a few: uniqueness has to be decided from the listing,
+    # or a title shared with a scene further down the grid is trashed by guess.
+    entries = [*_many(7), _entry(OTHER, "scene 00", False)]
+    _flow_answers(monkeypatch, _listing(*entries))
+    session = _Session([f"scene {i:02d}" for i in range(7)] + ["scene 00"], _GridPage, window=7)
+
+    with pytest.raises(RuntimeError, match=re.escape("2 active scenes are titled 'scene 00'")):
+        asyncio.run(scenes.delete(session, PROJECT, _id(0)))
+    assert session.page.trashed == []
+
+
+def test_delete_refuses_when_two_tiles_on_the_page_show_the_title(monkeypatch):
+    # A tile the listing does not know, showing the same title, is still a guess: refuse rather than trash one.
+    _flow_answers(monkeypatch, _listing(_entry(SCENE, "alpha", False), _entry(OTHER, "bravo", False)))
+    session = _Session(["alpha", "bravo", "alpha"], _GridPage, window=3)
+
+    with pytest.raises(RuntimeError, match=re.escape("2 grid tiles show 'alpha'")):
+        asyncio.run(scenes.delete(session, PROJECT, SCENE))
+    assert session.page.trashed == []
+
+
+def test_delete_says_so_when_the_whole_scrolled_grid_never_shows_the_title(monkeypatch):
+    entries = _many(8)
+    _flow_answers(monkeypatch, _listing(*entries))
+    session = _Session([f"scene {i:02d}" for i in range(7)], _GridPage, window=3)
+
+    with pytest.raises(LookupError, match="not found on the grid"):
+        asyncio.run(scenes.delete(session, PROJECT, _id(7)))
+    assert session.page.trashed == []
 
 
 def test_delete_refuses_when_two_active_scenes_show_the_exact_title(monkeypatch):
