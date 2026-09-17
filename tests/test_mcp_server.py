@@ -747,7 +747,68 @@ def test_a_job_id_the_ledger_scrub_would_change_is_refused_before_a_browser_open
     assert reached == []
 
 
-@pytest.mark.parametrize("tool", ["clip_extend", "clip_edit"])
+def test_gen_character_writes_where_out_dir_points(monkeypatch, tmp_path):
+    # Plan H T4. Until now every character clip and its ledger row landed in out/, so an agent making one film had to
+    # hunt its own clip among every clip ever made (owner, 2026-09-17, from the sg-bf test).
+    reached = _spending_backend(monkeypatch, tmp_path)
+    room = tmp_path / "films" / "bakery"
+
+    async def fn(s):
+        return await s.call_tool("gen_character", SPEND_CALLS["gen_character"] | {"out_dir": str(room)})
+
+    payload = _payload(with_client(fn))
+    assert payload["out_dir"] == str(room)
+    assert reached == [("gen_character", "job-character"), "browser"]
+
+
+def test_a_job_id_in_the_ledger_of_gen_characters_own_out_dir_is_refused(monkeypatch, tmp_path):
+    # Moving the output moves the ledger a job_id is looked up in. What catches it today is the sweep of every
+    # ledger under the out folder, which the custom dir has to sit inside; this pins that the two rules together
+    # still leave no way to spend one job_id twice by naming another folder (I-tiền-1).
+    reached = _spending_backend(monkeypatch, tmp_path)
+    room = tmp_path / "films" / "bakery"
+    gen.Ledger(room / "ledger.jsonl").append("job-character", "submitted", kind="character")
+
+    async def fn(s):
+        return await s.call_tool("gen_character", SPEND_CALLS["gen_character"] | {"out_dir": str(room)})
+
+    result = with_client(fn)
+    text = _texts([result])[0]
+    assert result.is_error and "may already have spent credits" in text, text
+    assert reached == []
+
+
+def test_gen_character_refuses_an_out_dir_that_names_a_file_even_on_a_dry_run(monkeypatch, tmp_path):
+    # A dry run spends nothing but still costs a browser and one to two minutes, and an out_dir that cannot hold a
+    # ledger would only surface after the real run had started.
+    reached = _spending_backend(monkeypatch, tmp_path)
+
+    async def fn(s):
+        return [
+            await s.call_tool(
+                "gen_character",
+                SPEND_CALLS["gen_character"] | {"out_dir": str(tmp_path / "films" / "ledger.jsonl")},
+            ),
+            await s.call_tool(
+                "gen_character",
+                {
+                    **SPEND_CALLS["gen_character"],
+                    "job_id": None,
+                    "dry_run": True,
+                    "out_dir": str(tmp_path.parent / "elsewhere"),
+                },
+            ),
+        ]
+
+    results = with_client(fn)
+    texts = _texts(results)
+    assert [result.is_error for result in results] == [True, True], texts
+    assert "must be a folder" in texts[0], texts[0]
+    assert "out_dir must be inside" in texts[1], texts[1]
+    assert reached == []
+
+
+@pytest.mark.parametrize("tool", ["clip_extend", "clip_edit", "gen_character"])
 @pytest.mark.parametrize("outside", ["elsewhere", "out/../elsewhere"])
 def test_an_editor_out_dir_outside_the_out_folder_is_refused_before_a_browser_opens(
     monkeypatch, tmp_path, tool, outside
