@@ -90,7 +90,9 @@ TOOL_CALLS: dict[str, dict] = {
     "flow_lane": {},
     "flow_projects": {},
     "flow_credits": {},
-    "flow_media": {"project_id": "P"},
+    # Plan H T2: the filters ride here so the passthrough test proves each one reaches the backend rather than
+    # being accepted and dropped, which is how all_versions behaved on 2026-09-13.
+    "flow_media": {"project_id": "P", "kind": "video", "since": "2026-09-01", "limit": 5, "brief": True},
     "flow_characters": {"project_id": "P"},
     "flow_tools": {},
     "flow_download": {"project_id": "P", "media_id": "M"},
@@ -1269,6 +1271,86 @@ def test_flow_media_answers_one_object_whether_or_not_all_versions_is_set(monkey
     assert every["media"] == plain["media"]
     assert every["versions"] == json.loads(json.dumps(parsers.records(listing), default=str))
     assert session.urls == [FlowSession.project_url("P")] * 2
+
+
+def _media_frames():
+    listing = _fixture("Zzl0ze")
+    return listing, {"ngNC2": [_fixture("ngNC2")], "yBhWQ": [_fixture("yBhWQ")], "Zzl0ze": [listing]}
+
+
+def _call_media(monkeypatch, **arguments):
+    _, frames = _media_frames()
+    _offline_backend(monkeypatch, lambda url: frames)
+
+    async def fn(s):
+        return await s.call_tool("flow_media", {"project_id": "P", **arguments})
+
+    return with_client(fn)
+
+
+def test_flow_media_keeps_only_the_kind_that_was_asked_for(monkeypatch):
+    # Plan H T2. An agent building a film wants the clips, not the reference images it uploaded on the way, and
+    # reading them all costs it the whole answer: measured 2026-09-17, all_versions=true weighs 122,919 characters.
+    payload = _payload(_call_media(monkeypatch, all_versions=True, kind="video"))
+    assert {row["kind"] for row in payload["media"]} == {"video"}
+    assert {row["kind"] for row in payload["versions"]} == {"video"}
+    assert [row["kind"] for row in payload["media"]].count("video") == 12
+    # The totals are what stops a filtered answer from reading like the whole project.
+    assert payload["media_total"] == 15 and payload["versions_total"] == 15
+    assert payload["truncated"] is True
+
+
+def test_flow_media_limit_keeps_the_newest_rows_and_says_it_cut(monkeypatch):
+    listing, _ = _media_frames()
+    newest = sorted(parsers.media(listing), key=lambda row: row["created"], reverse=True)[:3]
+    payload = _payload(_call_media(monkeypatch, all_versions=True, limit=3))
+    assert [row["id"] for row in payload["media"]] == [row["id"] for row in newest]
+    assert len(payload["versions"]) == 3
+    assert payload["media_total"] == 15 and payload["truncated"] is True
+
+
+def test_flow_media_since_takes_a_date_or_an_epoch_and_drops_older_rows(monkeypatch):
+    listing, _ = _media_frames()
+    rows = parsers.media(listing)
+    cut = 1789219000
+    kept = [row["id"] for row in rows if row["created"] >= cut]
+    assert 0 < len(kept) < len(rows), "fixture must hold rows on both sides of the cut"
+    by_epoch = _payload(_call_media(monkeypatch, since=cut))
+    by_date = _payload(_call_media(monkeypatch, since="2026-09-11"))
+    assert [row["id"] for row in by_epoch["media"]] == kept
+    assert [row["id"] for row in by_date["media"]] == [
+        row["id"] for row in rows if row["created"] >= 1789156800
+    ]
+
+
+def test_flow_media_brief_drops_the_fields_that_weigh_the_answer_down(monkeypatch):
+    # Measured 2026-09-17 (probe scene_editor, action media): of 122,919 characters, url weighs 28,205 and prompt
+    # 24,607 across 135 version rows, so cutting rows alone still left 40,234 characters for the newest 20.
+    full = _payload(_call_media(monkeypatch, all_versions=True))
+    brief = _payload(_call_media(monkeypatch, all_versions=True, brief=True))
+    for row in brief["media"] + brief["versions"]:
+        assert "url" not in row
+        assert len(row.get("prompt") or "") <= 121
+    assert [row["id"] for row in brief["media"]] == [row["id"] for row in full["media"]]
+    assert len(json.dumps(brief)) < len(json.dumps(full)) / 2
+
+
+def test_flow_media_counts_nothing_as_cut_when_no_filter_asks_for_it(monkeypatch):
+    payload = _payload(_call_media(monkeypatch, all_versions=True, kind="video", limit=12))
+    assert payload["truncated"] is True
+    payload = _payload(_call_media(monkeypatch, all_versions=True, limit=99))
+    assert payload["truncated"] is False
+    assert payload["media_total"] == 15 and len(payload["media"]) == 15
+
+
+def test_flow_media_refuses_a_filter_it_cannot_honour(monkeypatch):
+    # Rule 10: a tool that takes an argument it cannot honour and answers anyway is a silent wrong answer. Each of
+    # these must fail loudly instead of quietly listing everything.
+    for arguments in ({"kind": "clip"}, {"limit": 0}, {"limit": -3}, {"since": "yesterday"}):
+        result = _call_media(monkeypatch, **arguments)
+        assert result.is_error, f"{arguments} was accepted"
+        text = "".join(getattr(c, "text", "") for c in result.content)
+        assert any(word in text for word in ("video", "image", "positive", "date")), text
 
 
 def _gallery_account(grid_payload):
