@@ -1467,6 +1467,38 @@ def test_submit_records_the_page_it_found_right_after_the_click(monkeypatch, tmp
     assert (f"the page had moved to {url} after the click" in str(raised.value)) is moved
 
 
+MOVED_PAGE = "https://flow.google.com/project/p-1/edit/m-w-before"
+
+
+@pytest.mark.parametrize(
+    "world",
+    [
+        {"poll_error": LookupError("rpc Zzl0ze not observed; saw []")},
+        {"replies": {"click": [SUBMIT_REPLY, _status_reply(2)]}, "balance_reads": (200, 200, 200)},
+        {"fresh": [_video("w-other", "a prompt nobody typed")]},
+        {},
+    ],
+    ids=[
+        "a failure after the click",
+        "a job Flow still runs",
+        "a new video it cannot claim",
+        "a moved balance",
+    ],
+)
+def test_submit_names_a_page_that_left_the_project_on_every_outcome_it_cannot_settle(
+    monkeypatch, tmp_path, world
+):
+    log = []
+    _install(monkeypatch, tmp_path, log, **world)
+    session = _SubmitSession(log)
+    session.page.url = MOVED_PAGE
+    with pytest.raises(RuntimeError) as raised:
+        _submit(session, tmp_path, log, strict_output=True)
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert (last["status"], last["page_after_click"]) == ("unknown", MOVED_PAGE)
+    assert f"the page had moved to {MOVED_PAGE} after the click" in str(raised.value)
+
+
 def test_submit_says_what_flow_last_reported_when_no_failure_reply_came(monkeypatch, tmp_path):
     log = []
     replies = {"click": [SUBMIT_REPLY, _status_reply(None), _status_reply(2)]}
