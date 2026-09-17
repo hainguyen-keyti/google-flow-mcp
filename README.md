@@ -185,7 +185,9 @@ mặt, tay và món đồ.
   chỉ ảnh). gflow vẫn từ chối nhân vật trên host này, nên repo tự gõ `@` cộng tên vào ô prompt rồi bấm ĐÚNG option theo
   tên và loại (`Character` hay `Image`), không bao giờ nhấn Enter. Giá đo bằng tiền thật qua MCP ngày 2026-09-17:
   omni-flash (mặc định) **12**, veo-lite **10**; veo-fast **20** theo dòng giá của Flow, chưa tiêu. `dry_run=true` trả
-  giá và chip, không bấm, không ghi sổ, không cần `job_id`, để composer trống. Ngay trước kiểm giá, tool đọc lại chip
+  giá và chip, không bấm, không ghi sổ, không cần `job_id`, để composer trống. `out_dir` (tuỳ chọn, phải nằm trong
+  `out/`) đặt clip và sổ của lượt đó vào thư mục riêng, để các take của một phim nằm cùng chỗ; `job_id` vẫn bị từ chối
+  nếu BẤT KỲ `ledger.jsonl` nào dưới `out/` đã có nó. Ngay trước kiểm giá, tool đọc lại chip
   và chữ ô prompt: chip phải đúng id đã yêu cầu, ô phải đúng bằng tên các chip rồi prompt, lệch là từ chối ($0). Body
   của submit được kiểm có khoá `_r2v_` và mọi id tham chiếu (`body_check`). Sau cú bấm tool chỉ nhận clip mới có prompt
   BẰNG đúng chữ đã gửi (Flow lưu tên chip rồi chữ gõ); không nhận được mà có video mới hay số dư đổi thì ghi `unknown`,
@@ -196,7 +198,11 @@ mặt, tay và món đồ.
   `<media_id>_<8 hex>.mp4`, không bao giờ theo `job_id`.
 - **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
 - **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media` (luôn trả một object,
-  `all_versions=true` thêm khoá `versions`), `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
+  `all_versions=true` thêm khoá `versions`; bốn bộ lọc `kind` là `video` hay `image`, `since` nhận epoch hoặc ngày
+  ISO, `limit` giữ N dòng mới nhất, `brief=true` bỏ `url` và cắt `prompt` còn 120 ký tự. Có lọc thì kết quả mang
+  thêm `media_total`, `versions_total`, `truncated`; lọc sai giá trị bị từ chối. Đo 2026-09-17 trên project nháp:
+  không lọc 28.378 ký tự, `all_versions=true` 122.919, trong đó `url` 28.205 và `prompt` 24.607),
+  `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
   tự mở project đầu tiên trên grid), `flow_uploads`, `scene_list`, `scene_clips` (timeline của một scene),
   `flow_download` (ghi file vào thư mục đích),
   `clip_reconcile` (đọc listing và số dư, ghi ledger, không sinh gì; trả kèm đường dẫn sổ đã đọc, sổ có tồn tại
@@ -207,10 +213,13 @@ mặt, tay và món đồ.
   máy tải qua nút Upload của trang New character; Flow từng im lặng từ chối ảnh người mặc đồ ren), `character_delete`,
   `scene_create`, `scene_delete`,
   `scene_restore` (lấy scene ra khỏi thùng rác). Tile scene trên grid lẫn trong thùng rác không mang scene id (đo
-  2026-09-16), nên cả hai tool tìm tile theo tên đúng nguyên, và chỉ xét tên sau khi view hiện đủ một tile cho mỗi
-  scene trong listing (chờ tối đa 15 s; grid đếm scene đang hoạt động, thùng rác đếm scene đã xoá). Từ chối thay vì
-  đoán khi: tên rỗng hay chỉ gồm ký tự vô hình sau chuẩn hoá của Playwright, tên có ở hơn một tile, hay số tile không
-  bao giờ khớp số scene. Bấm xong, cả hai tool đọc lại listing và gọi tên scene khác nếu cờ thùng rác của nó đổi.
+  2026-09-16), nên cả hai tool tìm tile theo tên đúng nguyên. Grid và thùng rác nằm trong một
+  `div.cdk-virtual-scrollable` chỉ vẽ một cửa sổ tile (đo 2026-09-17: 7/8 tile ở grid, 16/37 ở thùng rác), nên tool
+  QUÉT CUỘN: kéo tile cuối cùng đang vẽ vào tầm nhìn tới khi không còn cửa sổ mới, trần 60 nấc. Tính duy nhất của
+  tên lấy từ LISTING (nơi biết mọi scene), không lấy từ số tile đang vẽ. Từ chối thay vì đoán khi: tên rỗng hay chỉ
+  gồm ký tự vô hình sau chuẩn hoá của Playwright, listing có hơn một scene cùng tên ở cùng trạng thái, trang hiện hai
+  tile cùng khớp chính xác, hay quét hết mà không thấy tile nào. Bấm xong, cả hai tool đọc lại listing và gọi tên
+  scene khác nếu cờ thùng rác của nó đổi.
   Cùng nhóm: `agent_mode`, `flow_upload`, và các tool Scenebuilder dưới đây.
 - **Dựng phim trong chính Flow** (miễn phí, đo lại 2026-09-17 bằng `src/video/probes/scene_editor.py`):
   - `scene_clips` đọc timeline từ listing (`Zzl0ze[6]`, nơi Flow giữ clip của mọi scene kèm chỉ số): clip theo đúng
@@ -315,6 +324,9 @@ quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần
 - Giá đo được trên gói PRO: Veo 3.1 Lite 720p 8s = 10 credit, `clip extend` (7 s) = 10, `clip edit` Omni
   1.1 Flash = 20, Omni Flash 10 s = 15, `--count 2` = 20, ảnh Nano Banana 2 = 0, upscale 1080p = 0, r2v Omni
   Flash 8 s = 12 (đo 2026-09-15, 292 s đầu cuối qua MCP). `gen i2v` chưa thành công lần nào nên chưa có giá.
+  Bảng giá chính thức của Flow lệch ở hai chỗ: Omni Flash Edit ghi **40** trong khi đo được 20 nhiều lần, và **4K
+  chỉ có từ gói Ultra** (50 credit), tài khoản này là Pro. Mô tả tool nói cả hai con số, và `clip_edit` KHÔNG đọc
+  dòng giá trước khi bấm (khác `gen_character`), nên chốt chặn duy nhất của nó là số dư đọc trước và sau.
 - Thao tác tốn credit chỉ bấm "Start generation" ĐÚNG MỘT LẦN. Bấm lại khi tưởng cú trước hụt là cách
   nhanh nhất để trả tiền hai lần: đo 2026-09-13, cú thứ hai rơi vào ô prompt thường và cộng thêm một
   Omni edit 20 credit lên trên extend 10 credit (hoá đơn 30). Thành hay bại đọc ở listing và số dư.
