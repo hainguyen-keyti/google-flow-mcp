@@ -1482,6 +1482,27 @@ def test_submit_stops_waiting_once_flow_reports_the_job_failed(monkeypatch, tmp_
     assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["status"] == "failed"
 
 
+def test_submit_keeps_waiting_for_a_clip_when_flow_has_said_nothing_yet(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    before = [_video("w-before", "old")]
+    polls = iter([before, before, [*before, _video("w-late", PROMPT)]])
+
+    async def snapshot(session, project_id, attempts=4):
+        log.append("snapshot")
+        return next(polls), set()
+
+    real_sleep = asyncio.sleep
+
+    async def sleep(seconds):
+        await real_sleep(0)
+
+    monkeypatch.setattr(composer, "snapshot", snapshot)
+    monkeypatch.setattr(composer.asyncio, "sleep", sleep)
+    result = _submit(_SubmitSession(log), tmp_path, log, strict_output=True, wait=600.0)
+    assert result["media_id"] == "m-w-late" and log.count("snapshot") == 3
+
+
 def test_submit_leads_a_refusal_with_its_advice_and_flows_own_words_within_the_mcp_cut(monkeypatch, tmp_path):
     # dancer-1 (2026-09-17): the refusal opened with "nothing was generated" and Flow's own notice was cut at 500.
     log = []
