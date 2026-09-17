@@ -875,40 +875,6 @@ def test_create_refuses_when_the_page_shows_more_than_one_editable_title(monkeyp
     assert page.typed is None
 
 
-def test_download_refuses_when_the_page_shows_two_download_buttons(monkeypatch, tmp_path):
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage([], clips=1, toolbar=[*TOOLBAR, ("Download scene", "download")])
-
-    with pytest.raises(LookupError, match="2 Download scene buttons"):
-        asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=tmp_path))
-    assert page.downloaded is None
-
-
-def test_download_writes_into_the_folder_it_was_given(monkeypatch, tmp_path):
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage([], clips=1)
-    room = tmp_path / "films"
-
-    result = asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=room))
-
-    assert Path(result["path"]).parent == room
-
-
-def test_download_never_overwrites_a_film_that_is_already_there(monkeypatch, tmp_path):
-    # CLAUDE.md rule 5: footage is never overwritten, and a stamped name still collides inside one second.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage([], clips=1)
-    monkeypatch.setattr(scenes.time, "strftime", lambda fmt: "20260916_120000")
-    (tmp_path / "scene-1_20260916_120000.mp4").write_bytes(b"older film")
-
-    with pytest.raises(FileExistsError):
-        asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=tmp_path))
-    assert (tmp_path / "scene-1_20260916_120000.mp4").read_bytes() == b"older film"
-
-
 def test_rename_refuses_when_the_page_shows_more_than_one_editable_title(monkeypatch):
     # Measured 2026-09-16: a scene page holds exactly one flow-editable-text, in the header, and the composer's
     # prompt box is not one. Typing into `.first` of a wider match would be a guess beside a Start generation button.
@@ -919,43 +885,6 @@ def test_rename_refuses_when_the_page_shows_more_than_one_editable_title(monkeyp
     with pytest.raises(LookupError, match="2 editable titles"):
         asyncio.run(scenes.rename(_SceneSession(page, media), PROJECT, "scene-1", "new name"))
     assert page.typed is None
-
-
-def test_two_downloads_of_one_scene_do_not_collide(monkeypatch, tmp_path):
-    # Downloading a scene again after adding another clip is the normal way to work, so the film carries a stamp.
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], clips=2)
-    stamps = iter(["20260916_120000", "20260916_120500"])
-    monkeypatch.setattr(scenes.time, "strftime", lambda fmt: next(stamps))
-    session = _SceneSession(page, media)
-
-    first = asyncio.run(scenes.download(session, PROJECT, "scene-1", out_dir=tmp_path))
-    second = asyncio.run(scenes.download(session, PROJECT, "scene-1", out_dir=tmp_path))
-
-    assert first["path"] != second["path"]
-    assert Path(first["path"]).exists() and Path(second["path"]).exists()
-
-
-def test_download_saves_the_film_under_the_scene_id(monkeypatch, tmp_path):
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"], clips=2)
-
-    result = asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=tmp_path))
-
-    assert Path(result["path"]).exists() and Path(result["path"]).name.startswith("scene-1")
-    assert result["bytes"] == len(b"film") and result["suggested"].endswith(".mp4")
-
-
-def test_download_refuses_a_scene_with_nothing_on_the_timeline(monkeypatch, tmp_path):
-    media = [_media(SCENE, "Model sailboat on wooden desk")]
-    _scene_answers(monkeypatch, media)
-    page = _ScenePage(["Model sailboat on wooden desk"])
-
-    with pytest.raises(LookupError, match="no clip"):
-        asyncio.run(scenes.download(_SceneSession(page, media), PROJECT, "scene-1", out_dir=tmp_path))
-    assert page.downloaded is None
 
 
 def test_rename_types_the_title_and_confirms_it_in_the_listing(monkeypatch):
@@ -1200,6 +1129,60 @@ class _EditorElement:
     async def bounding_box(self):
         return self.page.box(self.key)
 
+    async def is_disabled(self):
+        return self.page.disabled(self.kind, self.key)
+
+
+class _EditorDownload:
+    """A scene film as Playwright hands it over: the file Chrome wrote, and save_as, which streams it back."""
+
+    def __init__(self, page):
+        self.page = page
+        self.suggested_filename = "pe-scene_20260917164409.mp4"
+
+    async def path(self):
+        if self.page.download_fails:
+            raise RuntimeError("download.path: canceled")
+        written = self.page.artifacts / f"artifact-{self.page.elapsed_ms}"
+        written.parent.mkdir(parents=True, exist_ok=True)
+        written.write_bytes(self.page.film)
+        return str(written)
+
+    async def failure(self):
+        return "canceled" if self.page.download_fails else None
+
+    async def save_as(self, path):
+        # Measured 2026-09-17: Playwright's Python save_as streams the film in 1 MiB chunks, and a browser that closed
+        # midway left a film of exactly 18 MiB under its final name in the dancer test.
+        raise AssertionError("save_as streams the film chunk by chunk over the driver pipe")
+
+
+class _EditorExpect:
+    def __init__(self, page, timeout):
+        self.page = page
+        self.timeout = timeout
+        self.started = page.elapsed_ms
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def is_done(self):
+        return self.page.download is not None or self.page.elapsed_ms - self.started >= self.timeout
+
+    @property
+    def value(self):
+        async def get():
+            if self.page.download is None:
+                raise PlaywrightTimeoutError(
+                    f'Timeout {self.timeout}ms exceeded while waiting for event "download"'
+                )
+            return self.page.download
+
+        return get()
+
 
 class _Mouse:
     """Drag and drop as Angular CDK sees it: a press on a clip, moves, a release over the clip whose place it takes."""
@@ -1306,6 +1289,16 @@ class _Editor:
         self.deletes_index = None
         self._mouse = _Mouse(self)
         self.viewport_size = {"width": 1280, "height": 720}
+        self.exporting = False
+        self.snacks = []
+        self.download = None
+        self.exports = True
+        self.hands_over = True
+        self.download_fails = False
+        self.export_ms = 34_000
+        self.handoff_ms = 2_000
+        self.film = b"film" * 64
+        self.artifacts = None
         self.menu_items = None
 
     @staticmethod
@@ -1370,7 +1363,34 @@ class _Editor:
             return _EditorMatches(self, "overlay", self._overlay_keys)
         if selector == scenes.MENU_ITEM:
             return _EditorMatches(self, "overlay", self._context_keys)
+        if selector == scenes.SNACKBAR:
+            return _EditorMatches(self, "snack", lambda: list(range(len(self.snacks))))
         raise AssertionError(f"unexpected selector {selector!r}")
+
+    # Download scene, measured 2026-09-17: the film is built inside the page. The button turns into a disabled spinner
+    # and a snackbar reads 'Exporting your scene…'; once built, a snackbar reads 'Your scene has been downloaded!' and
+    # the file comes from a blob URL about 2 s later. A 40 s film took 33.5 s and 41.5 s.
+    def expect_download(self, timeout=None):
+        return _EditorExpect(self, timeout)
+
+    def disabled(self, kind, key):
+        if kind == "named" and self._named_label(key)[0] == "Download scene":
+            return not self.shown or self.exporting
+        return False
+
+    def _export(self):
+        if not self.exports:
+            return
+        self.exporting = True
+        self.snacks = ["Exporting your scene… Dismiss"]
+
+        def built():
+            self.exporting = False
+            self.snacks = ["check_circlecheck_circle Your scene has been downloaded! Dismiss"]
+            if self.hands_over:
+                self._later(self.handoff_ms, lambda: setattr(self, "download", _EditorDownload(self)))
+
+        self._later(self.export_ms, built)
 
     # The timeline as laid out on screen, measured 2026-09-17: an 8 s clip is 816 px wide from x 21, every zoom-out
     # halves that, the viewport is 1280 px wide, and a locator click scrolls its clip into view.
@@ -1548,9 +1568,14 @@ class _Editor:
 
     def text_of(self, kind, key):
         if kind == "named":
-            return " ".join(part for part in self._named_label(key) if part)
+            label = self._named_label(key)
+            if label[0] == "Download scene" and self.exporting:
+                return "Download scene progress_activity"
+            return " ".join(part for part in label if part)
         if kind == "overlay":
             return key[2][1]
+        if kind == "snack":
+            return self.snacks[key]
         if kind == "row":
             return self.rows()[key][1]
         if kind == "toolbar":
@@ -1581,6 +1606,8 @@ class _Editor:
                 self._toggle()
             elif label[0] == "Zoom out":
                 self.zoom = min(self.zoom + 1, 4)
+            elif label[0] == "Download scene":
+                self._export()
             return
         if kind == "overlay":
             label = key[2][1]
@@ -2400,3 +2427,148 @@ def test_move_clip_fails_when_the_listing_does_not_show_the_new_order(monkeypatc
 
     with pytest.raises(RuntimeError, match="the listing reads"):
         asyncio.run(scenes.move_clip(session, PROJECT, EDITOR_SCENE, page.server[1]["clip_id"], 3))
+
+
+def _downloading(monkeypatch, tmp_path, clips=FIVE):
+    page = _Editor(FIVE, clips=clips)
+    page.artifacts = tmp_path / "playwright-artifacts"
+    return page, _editor(monkeypatch, page)
+
+
+def test_download_waits_out_the_export_and_copies_the_finished_film_into_the_folder_given(
+    monkeypatch, tmp_path
+):
+    page, session = _downloading(monkeypatch, tmp_path)
+    room = tmp_path / "out" / "films"
+
+    result = asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=room))
+
+    film = Path(result["path"])
+    assert film.parent == room and film.name.startswith(EDITOR_SCENE) and film.suffix == ".mp4"
+    assert film.read_bytes() == page.film and result["bytes"] == len(page.film)
+    assert result["seconds"] == 40 and result["clips"] == 5 and result["suggested"].endswith(".mp4")
+    assert page.clicked == ["Download scene"] and page.elapsed_ms >= page.export_ms
+    assert sorted(path.name for path in room.iterdir()) == [film.name]
+
+
+def test_download_refuses_a_scene_with_nothing_on_the_timeline_before_opening_it(monkeypatch, tmp_path):
+    page, session = _downloading(monkeypatch, tmp_path, clips=[])
+
+    with pytest.raises(LookupError, match="no clip"):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path))
+    assert page.loads == 0 and page.clicked == []
+
+
+def test_download_never_overwrites_a_film_that_is_already_there(monkeypatch, tmp_path):
+    # CLAUDE.md rule 5: footage is never overwritten, and a stamped name still collides inside one second.
+    page, session = _downloading(monkeypatch, tmp_path)
+    monkeypatch.setattr(scenes.time, "strftime", lambda fmt: "20260917_120000")
+    (tmp_path / f"{EDITOR_SCENE}_20260917_120000.mp4").write_bytes(b"older film")
+
+    with pytest.raises(FileExistsError):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path))
+    assert (tmp_path / f"{EDITOR_SCENE}_20260917_120000.mp4").read_bytes() == b"older film"
+    assert page.clicked == []
+
+
+def test_two_downloads_of_one_scene_do_not_collide(monkeypatch, tmp_path):
+    # Downloading a scene again after adding another clip is the normal way to work, so the film carries a stamp.
+    page, session = _downloading(monkeypatch, tmp_path)
+    stamps = iter(["20260917_120000", "20260917_120500"])
+    monkeypatch.setattr(scenes.time, "strftime", lambda fmt: next(stamps))
+
+    first = asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path / "films"))
+    page.download = None
+    second = asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path / "films"))
+
+    assert first["path"] != second["path"]
+    assert Path(first["path"]).exists() and Path(second["path"]).exists()
+
+
+def test_download_refuses_when_the_page_shows_two_download_buttons(monkeypatch, tmp_path):
+    page, session = _downloading(monkeypatch, tmp_path)
+    page.toolbar = [*TOOLBAR, ("Download scene", "download")]
+
+    with pytest.raises(LookupError, match="2 Download scene buttons"):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path))
+    assert page.clicked == []
+
+
+def test_download_fails_fast_when_its_click_starts_no_export(monkeypatch, tmp_path):
+    # Measured 2026-09-16: a click can fire no download at all, which the old fixed wait turned into minutes of nothing.
+    page, session = _downloading(monkeypatch, tmp_path)
+    page.exports = False
+
+    with pytest.raises(RuntimeError, match="started no export"):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path))
+    assert page.elapsed_ms < 60_000 and page.clicked == ["Download scene"]
+
+
+def test_download_keeps_waiting_while_a_long_film_is_still_exporting(monkeypatch, tmp_path):
+    # The export runs inside the page and grows with the film: 33.5 s and 41.5 s for 40 s on a loaded machine.
+    six = [*FIVE, (OTHER, "Scene six")]
+    page, session = _downloading(monkeypatch, tmp_path, clips=six)
+    page.export_ms = 200_000
+
+    result = asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path / "films"))
+
+    assert result["seconds"] == 48 and Path(result["path"]).read_bytes() == page.film
+    assert page.elapsed_ms >= 200_000
+
+
+def test_download_gives_up_on_an_export_that_never_finishes(monkeypatch, tmp_path):
+    page, session = _downloading(monkeypatch, tmp_path, clips=[WALKING])
+    page.export_ms = 100_000_000
+
+    with pytest.raises(RuntimeError, match="did not finish"):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path))
+
+
+def test_download_says_so_when_the_page_reports_the_film_downloaded_but_no_file_arrives(
+    monkeypatch, tmp_path
+):
+    page, session = _downloading(monkeypatch, tmp_path)
+    page.hands_over = False
+
+    with pytest.raises(RuntimeError, match="no file reached this browser"):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path))
+    assert page.elapsed_ms < page.export_ms + 60_000
+
+
+def test_download_reports_a_film_the_browser_failed_to_fetch(monkeypatch, tmp_path):
+    page, session = _downloading(monkeypatch, tmp_path)
+    page.download_fails = True
+
+    with pytest.raises(RuntimeError, match="failed in the browser"):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=tmp_path / "films"))
+    assert not (tmp_path / "films").exists() or list((tmp_path / "films").iterdir()) == []
+
+
+def test_download_never_leaves_a_partial_film_under_any_name_when_the_copy_breaks(monkeypatch, tmp_path):
+    # The dancer test's failed run left a film of exactly 18 MiB under its final name, which ffprobe still read as 40 s.
+    _, session = _downloading(monkeypatch, tmp_path)
+    room = tmp_path / "films"
+
+    def broken_copy(source, target):
+        Path(target).write_bytes(Path(source).read_bytes()[:10])
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(scenes.shutil, "copyfile", broken_copy)
+
+    with pytest.raises(OSError, match="disk went away"):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=room))
+    assert list(room.iterdir()) == []
+
+
+def test_download_refuses_a_copy_shorter_than_the_film_the_browser_wrote(monkeypatch, tmp_path):
+    _, session = _downloading(monkeypatch, tmp_path)
+    room = tmp_path / "films"
+
+    def short_copy(source, target):
+        Path(target).write_bytes(Path(source).read_bytes()[:10])
+
+    monkeypatch.setattr(scenes.shutil, "copyfile", short_copy)
+
+    with pytest.raises(OSError, match="copied 10 of"):
+        asyncio.run(scenes.download(session, PROJECT, EDITOR_SCENE, out_dir=room))
+    assert list(room.iterdir()) == []

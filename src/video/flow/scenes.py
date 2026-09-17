@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Self
@@ -27,9 +28,15 @@ TOOLBAR_MIN = 20
 TOOLBAR_WAIT_MS = 15_000
 CONTROL_WAIT_MS = 10_000
 SAVE_WAIT_MS = 20_000
-# Measured 2026-09-16: a scene film lands within seconds of the click. The editor's 600 s, copied at first, turned one
-# click that fired no download at all into a ten minute hang.
-DOWNLOAD_WAIT_MS = 180_000
+# Measured 2026-09-17 (probes/scene_editor.py): 'Download scene' builds the film inside the page. Within 2.5 s the
+# button turns into a spinner and a snackbar reads 'Exporting your scene…'; a 40 s film took 33.5 s and 41.5 s on a
+# heavily loaded machine, then 'Your scene has been downloaded!' and the file 2 s later. So a click that starts no
+# export is failed fast, and a running export is waited for as long as its length warrants.
+SNACKBAR = "mat-snack-bar-container"
+EXPORT_START_MS = 20_000
+EXPORT_MIN_MS = 180_000
+EXPORT_MS_PER_SECOND = 10_000
+HANDOFF_WAIT_MS = 30_000
 OVERLAY = ".cdk-overlay-pane button, [role=dialog] button"
 ROW = ".cdk-overlay-pane button[role=option]"
 CLIPS = ".timeline-contents > .clip"
@@ -733,33 +740,99 @@ async def move_clip(
     }
 
 
-async def download(session: FlowSession, project_id: str, scene_id: str, *, out_dir: Path) -> dict[str, Any]:
-    """Hand back the scene as one film.
+async def _export_state(page: Any) -> str:
+    """What the page says about a scene export: exported, exporting or idle (measured 2026-09-17)."""
+    if await page.locator(SNACKBAR).filter(has_text=re.compile("has been downloaded", re.IGNORECASE)).count():
+        return "exported"
+    button = page.get_by_role("button", name=re.compile("Download scene", re.IGNORECASE))
+    if await button.count() == 1 and await button.first.is_disabled():
+        return "exporting"
+    if (
+        await page.locator(SNACKBAR)
+        .filter(has_text=re.compile("Exporting your scene", re.IGNORECASE))
+        .count()
+    ):
+        return "exporting"
+    return "idle"
 
-    Measured 2026-09-16: unlike the clip editor, a scene has no quality menu. 'Download scene' downloads straight
-    away, and the file is the whole assembled timeline (two 8 s clips came back as one 16.0 s mp4).
+
+async def download(session: FlowSession, project_id: str, scene_id: str, *, out_dir: Path) -> dict[str, Any]:
+    """Hand back the scene as one film, the whole timeline assembled by Flow.
+
+    Measured 2026-09-16: a scene has no quality menu, and two 8 s clips came back as one 16.0 s mp4. Measured
+    2026-09-17: the film is built inside the page and handed over from a blob URL. The finished file is copied off
+    disk under a temporary name and renamed once whole: Playwright's Python save_as streams it in 1 MiB chunks through
+    the browser connection, and the dancer test's failed run left a film of exactly 18 MiB under its final name.
     """
     page = session.page
-    await _open_scene(session, project_id, scene_id)
-    await _wait_until_it_holds_a_clip(page, scene_id, "there is no clip on this scene's timeline to download")
-    # Same as Add clip: the label is the aria-label, the text is just the ligature "download".
-    button = page.get_by_role("button", name=re.compile("Download scene", re.IGNORECASE))
-    async with page.expect_download(timeout=DOWNLOAD_WAIT_MS) as info:
-        await _click_one(page, button, "the Download scene button")
-    handed = await info.value
+    scene = await timeline(session, project_id, scene_id)
+    if not scene["clips"]:
+        raise LookupError(
+            f"there is no clip on scene {scene_id}'s timeline to download; scene_add_clip puts one there"
+        )
     # Stamped, because downloading the same scene again after adding a clip is the normal way to work and a name
     # made of the scene id alone collides with the film taken a minute earlier (CLAUDE.md rule 5: never overwrite).
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    target = Path(out_dir) / f"{scene_id}_{stamp}{Path(handed.suggested_filename).suffix or '.mp4'}"
+    target = Path(out_dir) / f"{scene_id}_{stamp}.mp4"
     if target.exists():
         raise FileExistsError(target)
+    await _open_scene(session, project_id, scene_id)
+    await _wait_until_it_holds_a_clip(
+        page, scene_id, "the editor never offered Download scene for a scene with clips"
+    )
+    # Same as Add clip: the label is the aria-label, the text is just the ligature "download".
+    button = page.get_by_role("button", name=re.compile("Download scene", re.IGNORECASE))
+    limit = max(EXPORT_MIN_MS, int(scene["seconds"] * EXPORT_MS_PER_SECOND))
+    async with page.expect_download(timeout=EXPORT_START_MS + limit + HANDOFF_WAIT_MS) as info:
+        await _click_one(page, button, "the Download scene button")
+        waited, started, exported = 0, False, None
+        while not info.is_done():
+            state = await _export_state(page)
+            started = started or state != "idle"
+            if state == "exported" and exported is None:
+                exported = waited
+            if not started and waited >= EXPORT_START_MS:
+                raise RuntimeError(
+                    f"clicked Download scene once and the page started no export within {EXPORT_START_MS // 1000}s "
+                    f"(scene {scene_id})"
+                )
+            if exported is not None and waited - exported >= HANDOFF_WAIT_MS:
+                raise RuntimeError(
+                    f"the page says scene {scene_id} was downloaded but no file reached this browser within "
+                    f"{HANDOFF_WAIT_MS // 1000}s"
+                )
+            if waited >= EXPORT_START_MS + limit:
+                raise RuntimeError(
+                    f"the export of scene {scene_id} ({scene['seconds']} s) did not finish within "
+                    f"{(EXPORT_START_MS + limit) // 1000}s"
+                )
+            await page.wait_for_timeout(2_000)
+            waited += 2_000
+    handed = await info.value
+    try:
+        local = Path(await handed.path())
+    except Exception as exc:
+        raise RuntimeError(
+            f"the film of scene {scene_id} failed in the browser ({type(exc).__name__}: {str(exc)[:120]})"
+        ) from exc
     Path(out_dir).mkdir(parents=True, exist_ok=True)
-    await handed.save_as(str(target))
+    partial = target.with_name(target.name + ".part")
+    try:
+        await asyncio.to_thread(shutil.copyfile, local, partial)
+        if partial.stat().st_size != local.stat().st_size:
+            raise OSError(f"copied {partial.stat().st_size} of {local.stat().st_size} bytes of {local}")
+        if target.exists():
+            raise FileExistsError(target)
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
     return {
         "scene_id": scene_id,
         "path": str(target),
         "suggested": handed.suggested_filename,
         "bytes": target.stat().st_size,
+        "seconds": scene["seconds"],
+        "clips": len(scene["clips"]),
     }
 
 

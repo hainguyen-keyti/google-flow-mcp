@@ -224,11 +224,17 @@ class Backend:
         self, project_id: str, scene_id: str, out_dir: str | None = None
     ) -> dict[str, Any]:
         target = self._editor_out_dir(out_dir)
-        # Both measured on 2026-09-16: the browser can die just as the film lands, so save_as meets a page that is
-        # already gone; and a click can fire no download at all. Neither changes anything in Flow and neither spends,
-        # so one retry in a fresh session is safe. Any other failure is passed straight through, and the credit tools
-        # never do this: there a second attempt is a second bill.
-        flaky = ("has been closed", 'waiting for event "download"')
+        # Measured on 2026-09-16 and 2026-09-17: the browser can die just as the film lands, a click can start no export
+        # at all, and a built film can fail to reach the browser. None changes anything in Flow and none spends, so one
+        # retry in a fresh session is safe. Any other failure is passed straight through, and the credit tools never do
+        # this: there a second attempt is a second bill.
+        flaky = (
+            "has been closed",
+            'waiting for event "download"',
+            "started no export",
+            "no file reached this browser",
+            "failed in the browser",
+        )
         for attempt in range(2):
             try:
                 film = await self._with(
@@ -680,10 +686,15 @@ async def scene_add_clip(project_id: str, scene_id: str, media_id: str) -> str:
     name="scene_download",
     description=(
         "Download a scene as ONE film, the whole timeline rather than a single clip: two 8 s clips came back as "
-        "one 16.0 s mp4 (measured 2026-09-16). A scene with nothing on its timeline is refused, and out_dir must "
-        "sit inside out/. A scene offers no quality choice, so use clip_download for a single media and its "
-        "270p, 720p, 1080p or 4k renditions. The result carries attempts: 2 means the first try died as the film "
-        "landed and it was fetched again in a fresh session. Free."
+        "one 16.0 s mp4 (measured 2026-09-16). The film is built inside the page before it is handed over, and a "
+        "40 s film took 33 to 42 s to build (measured 2026-09-17), so the call waits while Flow shows the export "
+        "running, as long as the film's length warrants, and fails fast when the click starts no export. A scene "
+        "with nothing on its timeline is refused, and out_dir must sit inside out/. The file is written under a "
+        "temporary name and renamed only once whole, so a partial film never sits under the name returned. The "
+        "result carries the seconds and clips the listing gives the scene, to check the film against, and "
+        "attempts: 2 means the first try failed on the way and the film was fetched again in a fresh session. A "
+        "scene offers no quality choice, so use clip_download for a single media and its 270p, 720p, 1080p or 4k "
+        "renditions. Free."
     ),
 )
 async def scene_download(project_id: str, scene_id: str, out_dir: str | None = None) -> str:

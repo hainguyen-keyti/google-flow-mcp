@@ -1708,8 +1708,11 @@ def test_a_scene_download_out_dir_outside_the_out_folder_is_refused_before_a_bro
 @pytest.mark.parametrize(
     "first_failure",
     [
-        "Download.save_as: Target page, context or browser has been closed",
-        'Timeout 180000ms exceeded while waiting for event "download"',
+        "Download.path: Target page, context or browser has been closed",
+        'Timeout 290000ms exceeded while waiting for event "download"',
+        "clicked Download scene once and the page started no export within 20s (scene S)",
+        "the page says scene S was downloaded but no file reached this browser within 30s",
+        "the film of scene S failed in the browser (Error: canceled)",
     ],
 )
 def test_a_scene_download_retries_once_when_the_film_never_lands(monkeypatch, tmp_path, first_failure):
@@ -1883,6 +1886,13 @@ def test_scene_remove_clip_tells_the_agent_flow_asks_nothing_and_the_media_stays
 def test_scene_move_clip_tells_the_agent_how_positions_count_and_how_the_move_is_done():
     text = served_tool_objects()["scene_move_clip"].description
     for phrase in ("clip_id", "position", "from 0", "drag", "scene_clips", "Free."):
+        assert phrase in text, phrase
+
+
+def test_scene_download_tells_the_agent_the_film_is_built_in_the_page_and_how_long_that_takes():
+    # The dancer test (2026-09-17) waited on a 40 s film that failed twice with nothing in the description to go by.
+    text = served_tool_objects()["scene_download"].description
+    for phrase in ("built inside the page", "40 s film", "seconds", "clips", "partial", "attempts", "Free."):
         assert phrase in text, phrase
 
 
