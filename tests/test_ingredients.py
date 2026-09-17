@@ -1442,8 +1442,8 @@ def test_submit_calls_a_job_flow_reported_failed_a_failure(monkeypatch, tmp_path
     _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
     with pytest.raises(RuntimeError, match="nothing was generated") as raised:
         _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
-    expected = f"Flow failed workflow {JOB_WORKFLOW} (status 4) with PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"
-    assert expected in str(raised.value)
+    reason = "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"
+    assert f"Flow failed workflow {JOB_WORKFLOW} (status 4) with {reason}" in str(raised.value)
     assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["status"] == "failed"
 
 
