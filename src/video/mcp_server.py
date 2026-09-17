@@ -562,9 +562,11 @@ server = TellingServer(
     instructions=(
         "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
         "recorded in the ledger (out/ledger.jsonl by default): gen_t2v, gen_i2v, gen_r2v, gen_character, "
-        "clip_extend, clip_edit, and agent_send (may spend). clip_download at 4k is a Flow upscale whose cost is "
-        "unmeasured: ask the owner first. gen_t2i and gen_i2i are credit-free but draw on a daily image "
-        "quota. Check a tool's description for its cost before calling it. Every call drives a real Chrome "
+        "clip_extend, clip_edit, and agent_send (may spend). clip_download at 4k is a Flow upscale its price "
+        "table offers only from the Ultra plan, at 50 credits, while this account is on Pro: ask the owner "
+        "first. gen_t2i and gen_i2i are credit-free but draw on a daily image quota. Check a tool's description "
+        "for its cost before calling it: each carries what was MEASURED here and, where Flow's published table "
+        "disagrees, that figure too (Omni Flash Edit is listed at 40 and measured 20). Every call drives a real Chrome "
         "session and blocks until Flow answers: a read takes about 15-50 s and a change about 50 s, a generation "
         "2-5 min, clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. The "
         "credit-spending tools require a job_id. Never call one again under a new job_id because it was slow, "
@@ -948,8 +950,9 @@ async def agent_send(project_id: str, message: str, job_id: str, wait: float = 6
         "Download a clip rendition from the editor: gif (270p), 720p, 1080p or 4k (upscaled by Flow). "
         "Defaults to the NEWEST finished version of the media; pass workflow_id (from flow_media with "
         "all_versions=true) to fetch one specific version, such as the clip a particular edit produced. "
-        "1080p measured 0 credits. The 4k upscale's cost is unmeasured and it may spend credits (gflow reports "
-        "4K upscale as tier-gated): ask the owner before choosing 4k."
+        "1080p measured 0 credits. 4k is an upscale Flow's price table offers only from the Ultra plan, at 50 "
+        "credits, and this account is on Pro, so its cost here is unmeasured and it may spend credits or simply "
+        "be refused: ask the owner before choosing 4k."
     ),
 )
 async def clip_download(
@@ -1027,9 +1030,12 @@ async def clip_extend(
 @server.tool(
     name="clip_edit",
     description=(
-        "Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledgered: 20 credits per "
-        "edit (measured). Takes about 2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be "
-        "inside the out folder." + _JOB_ID_RULE
+        "Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledgered: every edit measured "
+        "on this account cost 20 credits, while Flow's own price table lists Omni Flash Edit at 40, so budget for "
+        "40 and expect 20. This tool does not read the live price line before it clicks, so what stands between a "
+        "changed price and a surprise bill is the balance read before and after, reported as `spent`. Takes about "
+        "2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out folder."
+        + _JOB_ID_RULE
     ),
 )
 async def clip_edit(

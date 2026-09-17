@@ -437,6 +437,28 @@ def test_every_tool_description_states_its_cost():
     assert unpriced == []
 
 
+def test_the_descriptions_carry_flows_own_price_table_where_it_differs_from_the_measurements():
+    """Plan H T8. An agent budgets from these descriptions, so where Flow's published table and this account's
+    measurements disagree it has to read BOTH, with which is which.
+
+    Flow's credits page (DECISIONS 2026-09-16): Veo Lite 4, 6, 8 s and Extend 10; Omni Flash 720p 8 s 12 and 10 s
+    15; Omni Flash Edit 40, while every measured edit here cost 20; 1080p upscale 0; 4K is not offered below the
+    Ultra plan, where it is 50; Omni 360p is half price.
+    """
+    tools = served_tool_objects()
+    edit = tools["clip_edit"].description
+    assert "40" in edit and "20" in edit, edit
+    assert "table" in edit and "measured" in edit, edit
+    # The clip editor never reads the live price line before clicking, unlike gen_character: say so, because the
+    # only thing standing between a changed price and a surprise bill is the balance read around the click.
+    assert "does not read" in edit and "balance" in edit, edit
+    download = tools["clip_download"].description
+    assert "Ultra" in download and "50" in download, download
+    assert "1080p measured 0 credits" in download, download
+    character = tools["gen_character"].description
+    assert "12" in character and "10" in character and "20" in character, character
+
+
 def test_every_credit_spending_tool_requires_a_job_id():
     # The ledger refuses a job id it already holds (gen.py), but the server minted a fresh uuid whenever the
     # agent left job_id out, so a retry after a slow call (61 to 119 s per generation) paid a second time.
