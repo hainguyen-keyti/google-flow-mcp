@@ -1391,6 +1391,12 @@ def test_flow_media_limit_keeps_the_newest_rows_and_says_it_cut(monkeypatch):
     assert [row["id"] for row in payload["media"]] == [row["id"] for row in newest]
     assert len(payload["versions"]) == 3
     assert payload["media_total"] == 15 and payload["truncated"] is True
+    # Review 2026-09-18: a limit that does not bite used to answer in Flow's order while the description promised
+    # newest first, and Flow's order is not by age (the fixture runs 1789219778, 1757327676, 1789218813, ...).
+    loose = _payload(_call_media(monkeypatch, limit=99))
+    ages = [row["created"] for row in loose["media"]]
+    assert ages == sorted(ages, reverse=True), ages
+    assert loose["truncated"] is False and loose["media_total"] == 15
 
 
 def test_flow_media_since_takes_a_date_or_an_epoch_and_drops_older_rows(monkeypatch):

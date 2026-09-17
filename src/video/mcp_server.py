@@ -90,7 +90,9 @@ def _filter_rows(
         for row in rows
         if (kind is None or row.get("kind") == kind) and (after is None or (row.get("created") or 0) >= after)
     ]
-    if limit is not None and len(kept) > limit:
+    if limit is not None:
+        # Sorted whenever a limit is asked for, not only when it bites: a limit that happens not to cut used to
+        # answer in Flow's order while the description promised newest first (review 2026-09-18).
         kept = sorted(kept, key=lambda row: row.get("created") or 0, reverse=True)[:limit]
     return kept
 
@@ -636,9 +638,9 @@ async def flow_credits() -> str:
         "machine's day); limit keeps that many rows of EACH list, the newest by created, and puts them newest "
         "first; brief=true drops each row's url and cuts its prompt to 120 characters plus an ellipsis, which is "
         "where most of the weight sits. Ask for any of them and the answer also carries media_total (and "
-        "versions_total with all_versions) plus truncated, which say how many ROWS were dropped; brief cuts "
-        "fields, not rows, so it leaves truncated false. A filter it cannot honour is refused, never silently "
-        "ignored. Free."
+        "versions_total with all_versions), how many rows the project holds BEFORE filtering, plus truncated, "
+        "true when any row was left out; brief cuts fields, not rows, so it leaves truncated false. A filter it "
+        "cannot honour is refused, never silently ignored. Free."
     ),
 )
 async def flow_media(
