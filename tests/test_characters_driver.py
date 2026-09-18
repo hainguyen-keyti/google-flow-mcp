@@ -1,4 +1,5 @@
 import asyncio
+import re
 from contextlib import asynccontextmanager
 
 import pytest
@@ -238,3 +239,137 @@ def test_create_from_an_image_says_so_when_flow_makes_no_character(monkeypatch, 
         asyncio.run(characters.create(_CharacterSession(page), PROJECT, image=image, name="Mai"))
     assert not any(entry.startswith("named") for entry in page.log)
     assert "click Done" not in page.log
+
+
+VOICE_ROWS = [
+    "voice_selection Achernar Female, soft, high pitch",
+    "voice_selection Leda Female, youthful, mid-high pitch",
+    "voice_selection Zephyr Female, bright, mid-high pitch",
+]
+
+
+class _VoicePage:
+    """The character edit page and its voice selector, as measured 2026-09-18: the list renders a window at a
+    time, attaching fires rzMKMb, and the page then reads 'voice_selection <voice lowercased>' beside a
+    play_arrow and a Remove button."""
+
+    def __init__(self, *, window=2, attached=None):
+        self.log = []
+        self.window = window
+        self.offset = 0
+        self.attached = attached
+        self.url = f"https://flow.google.com/project/{PROJECT}/character/{ENTITY}"
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    def _rendered(self):
+        return VOICE_ROWS[self.offset : self.offset + self.window]
+
+    async def evaluate(self, script, arg=None):
+        if "scrollTop" in script:
+            was = self.offset
+            self.offset = min(self.offset + self.window, max(0, len(VOICE_ROWS) - self.window))
+            self.log.append("scroll")
+            return None if was == self.offset else [was, self.offset]
+        if "role=option" in script or "voice" in script:
+            return list(self._rendered())
+        return []
+
+    def get_by_role(self, role, name):
+        assert role == "button"
+        labels = (
+            ["Select a voice"] if self.attached is None else [f"voice_selection {self.attached}", "Remove"]
+        )
+        if self.attached is None:
+            labels.append("Add to character")
+        else:
+            labels.append("Add to character")
+        for label in labels:
+            if name.search(label):
+                return _Button(self, label, 1)
+        return _Button(self, name.pattern, 0)
+
+    def locator(self, selector):
+        return _VoiceRows(self, None)
+
+
+class _VoiceRows:
+    def __init__(self, page, wanted):
+        self.page = page
+        self.wanted = wanted
+
+    def filter(self, has_text=None):
+        return _VoiceRows(self.page, has_text)
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self):
+        return len([r for r in self.page._rendered() if self._fits(r)])
+
+    def _fits(self, row):
+        if self.wanted is None:
+            return True
+        pattern = getattr(self.wanted, "pattern", self.wanted)
+        return bool(re.search(pattern, row, re.IGNORECASE))
+
+    async def click(self, timeout=None):
+        rows = [r for r in self.page._rendered() if self._fits(r)]
+        assert rows, "clicked a voice row that is not rendered"
+        self.page.log.append(f"row {rows[0].split()[1]}")
+
+
+class _VoiceSession:
+    def __init__(self, page):
+        self.page = page
+        self.urls = []
+
+    async def goto(self, url, *, ready=None, timeout_ms=60_000):
+        self.urls.append(url)
+
+    project_url = staticmethod(lambda project_id: f"https://flow.google.com/project/{project_id}")
+
+
+def test_set_voice_scrolls_to_the_named_preset_and_attaches_it():
+    """The selector renders a window at a time, exactly like the project grid: the first attempt at Leda failed
+    with 'no voice row named Leda' because it sat below the fold (measured 2026-09-18)."""
+    page = _VoicePage(window=2)
+    session = _VoiceSession(page)
+
+    result = asyncio.run(characters.set_voice(session, PROJECT, ENTITY, "Zephyr"))
+
+    assert "scroll" in page.log, "a voice below the fold is reached by scrolling, not by guessing"
+    assert page.log[-2:] == ["row Zephyr", "click Add to character"]
+    assert result["voice"] == "Zephyr" and result["rpcids"] == ["rzMKMb"]
+
+
+def test_set_voice_refuses_a_voice_the_selector_never_shows():
+    page = _VoicePage(window=2)
+    session = _VoiceSession(page)
+
+    with pytest.raises(LookupError, match="no voice named"):
+        asyncio.run(characters.set_voice(session, PROJECT, ENTITY, "Khong Co"))
+    assert not any(step.startswith("row ") for step in page.log)
+    assert "click Add to character" not in page.log
+
+
+def test_clear_voice_takes_the_voice_off_the_character():
+    page = _VoicePage(attached="leda")
+    session = _VoiceSession(page)
+
+    result = asyncio.run(characters.clear_voice(session, PROJECT, ENTITY))
+
+    assert page.log == ["click Remove"]
+    assert result["voice"] is None
+
+
+def test_list_voices_reads_every_preset_the_selector_holds():
+    page = _VoicePage(window=2)
+    session = _VoiceSession(page)
+
+    voices = asyncio.run(characters.list_voices(session, PROJECT, ENTITY))
+
+    assert [v["name"] for v in voices] == ["Achernar", "Leda", "Zephyr"]
+    assert voices[1]["description"] == "Female, youthful, mid-high pitch"

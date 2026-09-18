@@ -219,3 +219,102 @@ async def list_characters(session: FlowSession, project_id: str) -> list[dict[st
         session, lambda: session.goto(session.project_url(project_id), ready="flow-project-page"), settle=8.0
     )
     return parsers.characters_from_listing(one(frames, "Zzl0ze"))
+
+
+VOICE_OPENER = re.compile("select a voice|voice_selection", re.IGNORECASE)
+VOICE_COMMIT = re.compile("add to character", re.IGNORECASE)
+VOICE_REMOVE = re.compile("^remove$", re.IGNORECASE)
+VOICE_ROWS_JS = (
+    "() => [...document.querySelectorAll('.cdk-overlay-pane [role=option], .cdk-overlay-pane button')]"
+    "  .map(e => (e.innerText || '').trim().replace(/\\s+/g, ' ')).filter(t => t.startsWith('voice_selection'))"
+)
+VOICE_SCROLL_JS = (
+    "() => { const p = document.querySelector('.cdk-overlay-pane');"
+    "  const box = p && [...p.querySelectorAll('*')].find(e => e.scrollHeight > e.clientHeight + 20);"
+    "  if (!box) return null; const was = box.scrollTop; box.scrollTop = was + box.clientHeight;"
+    "  return was === Math.round(box.scrollTop) ? null : [was, Math.round(box.scrollTop)]; }"
+)
+VOICE_SWEEP_STEPS = 14
+
+
+def _voice_of(row: str) -> dict[str, str]:
+    """A row reads 'voice_selection <Name> <description>', the icon ligature running into the label."""
+    body = row.removeprefix("voice_selection").strip()
+    name, _, description = body.partition(" ")
+    return {"name": name, "description": description.strip()}
+
+
+async def _open_voice_selector(session: FlowSession, project_id: str, entity_id: str) -> Any:
+    page = session.page
+    await session.goto(f"{session.project_url(project_id)}/character/{entity_id}", ready=EDIT_PAGE)
+    await page.wait_for_timeout(2_500)
+    opener = page.get_by_role("button", name=VOICE_OPENER).first
+    if not await opener.count():
+        raise LookupError(
+            f"character {entity_id} shows no voice control; voices live on the character's own page"
+        )
+    await opener.click(timeout=10_000)
+    await page.wait_for_timeout(2_000)
+    return page
+
+
+async def list_voices(session: FlowSession, project_id: str, entity_id: str) -> list[dict[str, str]]:
+    """Every preset the character's voice selector offers, in its own order. Free.
+
+    Measured 2026-09-18: 30 presets, each 'voice_selection <Name> <description>', and the list RENDERS A WINDOW
+    at a time, so it is swept rather than read once.
+    """
+    page = await _open_voice_selector(session, project_id, entity_id)
+    seen: list[str] = []
+    for _ in range(VOICE_SWEEP_STEPS):
+        for row in await page.evaluate(VOICE_ROWS_JS):
+            if row not in seen:
+                seen.append(row)
+        if not await page.evaluate(VOICE_SCROLL_JS):
+            break
+        await page.wait_for_timeout(700)
+    return [_voice_of(row) for row in seen]
+
+
+async def set_voice(session: FlowSession, project_id: str, entity_id: str, voice: str) -> dict[str, Any]:
+    """Give a character one of Flow's preset voices, so a generation of that character can speak. Free.
+
+    Measured 2026-09-18: picking a row and clicking 'Add to character' fires rpc rzMKMb, a field-masked update of
+    the character, and the page then reads 'voice_selection <voice lowercased>' beside a play button and Remove.
+    The list is virtual, so the wanted row is scrolled to rather than assumed rendered.
+    """
+    page = await _open_voice_selector(session, project_id, entity_id)
+    wanted = re.compile(rf"voice_selection\s+{re.escape(voice)}\b", re.IGNORECASE)
+    row = page.locator(".cdk-overlay-pane [role=option], .cdk-overlay-pane button").filter(has_text=wanted)
+    for _ in range(VOICE_SWEEP_STEPS):
+        if await row.count():
+            break
+        if not await page.evaluate(VOICE_SCROLL_JS):
+            break
+        await page.wait_for_timeout(700)
+    if not await row.count():
+        names = [v["name"] for v in await list_voices(session, project_id, entity_id)]
+        raise LookupError(f"no voice named {voice!r} in the selector; it offers {names}")
+    await row.first.click(timeout=8_000)
+    await page.wait_for_timeout(1_200)
+    commit = page.get_by_role("button", name=VOICE_COMMIT).first
+    if not await commit.count():
+        raise LookupError(
+            "the selector no longer offers 'Add to character'; typing a performance turns it into a voice maker"
+        )
+    await commit.click(timeout=10_000)
+    await page.wait_for_timeout(3_000)
+    return {"entity_id": entity_id, "voice": voice, "rpcids": ["rzMKMb"]}
+
+
+async def clear_voice(session: FlowSession, project_id: str, entity_id: str) -> dict[str, Any]:
+    """Take the voice off a character. Free. The page grows a Remove button once a voice is attached."""
+    page = session.page
+    await session.goto(f"{session.project_url(project_id)}/character/{entity_id}", ready=EDIT_PAGE)
+    await page.wait_for_timeout(2_500)
+    remove = page.get_by_role("button", name=VOICE_REMOVE).first
+    if not await remove.count():
+        raise LookupError(f"character {entity_id} has no voice to remove")
+    await remove.click(timeout=10_000)
+    await page.wait_for_timeout(2_500)
+    return {"entity_id": entity_id, "voice": None, "rpcids": ["rzMKMb"]}

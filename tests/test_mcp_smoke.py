@@ -65,6 +65,10 @@ def _replies(first=PROJECT, empty=False):
         },
         "versions": [] if empty else [version],
         "characters": [] if empty else [{"entity_id": "e1", "name": "Mai", "portrait_media_id": "p1"}],
+        # Measured 2026-09-18: the selector holds 30 presets, each a name and a one-line description.
+        "voices": [
+            {"name": f"V{i:02d}", "description": "Female, youthful, mid-high pitch"} for i in range(30)
+        ],
         # The community Tools gallery is the same for every project, empty ones included (62 on both).
         "tools": [{"id": "community-1", "name": "Tool", "author": "a", "path": "p", "tags": ["x"]}],
         "uploads": {"count": 0 if empty else 4},
@@ -119,6 +123,10 @@ class _Account(mcp_server.Backend):
     async def characters(self, project_id):
         return self.replies["characters"]
 
+    async def voices(self, project_id, entity_id):
+        self.replies.setdefault("voices_asked_for", []).append(entity_id)
+        return self.replies["voices"]
+
     async def tools(self, project_id=None):
         self.replies.setdefault("tools_asked_for", []).append(project_id)
         return self.replies["tools"]
@@ -148,7 +156,7 @@ def _failing(rows):
 def test_a_healthy_account_passes_every_row(monkeypatch):
     rows = _rows(monkeypatch, _replies())
 
-    assert len(rows) == 15
+    assert len(rows) == 16
     assert _failing(rows) == {}
 
 
@@ -159,6 +167,16 @@ def test_the_smoke_reads_the_timeline_of_a_scene_the_listing_named(monkeypatch):
     _rows(monkeypatch, replies)
 
     assert replies["timeline_asked_for"] == ["s1"]
+
+
+def test_the_smoke_reads_voices_off_a_character_the_listing_named(monkeypatch):
+    # flow_voices needs an entity id for the same reason scene_clips needs a scene id: Flow only shows the
+    # voices on a character's own page.
+    replies = _replies()
+
+    _rows(monkeypatch, replies)
+
+    assert replies["voices_asked_for"] == ["e1"]
 
 
 def test_the_smoke_asks_for_the_tools_gallery_without_a_project(monkeypatch):
@@ -179,9 +197,12 @@ def test_an_empty_project_passes_every_row(monkeypatch):
 
     rows = _rows(monkeypatch, replies)
 
-    assert len(rows) == 15
-    assert _failing(rows) == {"scene_clips": "the project holds no scene to read"}
-    assert rows["scene_clips"][0] == "SKIP"
+    assert len(rows) == 16
+    assert _failing(rows) == {
+        "scene_clips": "the project holds no scene to read",
+        "flow_voices": "the project holds no character to read voices from",
+    }
+    assert rows["scene_clips"][0] == "SKIP" and rows["flow_voices"][0] == "SKIP"
     assert "timeline_asked_for" not in replies
 
 
@@ -246,7 +267,8 @@ CORRUPTIONS = [
     ("flow_media all", _grid_rows_instead_of_versions),
     # A bare list breaks both reads of the versions, the plain one and the filtered one.
     (("flow_media all", "flow_media filtered"), _versions_as_a_bare_list),
-    ("flow_characters", _character_without_entity),
+    # No entity id also leaves flow_voices nothing to read, so both rows go non-PASS.
+    (("flow_characters", "flow_voices"), _character_without_entity),
     ("flow_tools", _no_tools),
     ("scene_list", _trashed_scene_in_default_listing),
     ("scene_clips", _timeline_of_another_scene),

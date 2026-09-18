@@ -51,6 +51,8 @@ READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits", "flow_tools")
 READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_uploads", "scene_list")
 # Read-only too, but it needs a scene id, which only scene_list's own answer can supply.
 READ_ONLY_PER_SCENE = ("scene_clips",)
+# Reads a character's own page, so it needs an entity id the way scene_clips needs a scene id.
+READ_ONLY_PER_CHARACTER = ("flow_voices",)
 
 # Free but they CHANGE things. Never called here; see I4 in the plan.
 MUTATING = (
@@ -68,6 +70,10 @@ MUTATING = (
     "project_delete",
     "character_create",
     "character_delete",
+    "character_set_voice",
+    "character_clear_voice",
+    "scene_save_clip",
+    "clip_save_frame",
     "flow_upload",
     "clip_reconcile",
     "gen_t2i",
@@ -92,6 +98,7 @@ CLASSIFIED = (
     *READ_ONLY_NO_ARGS,
     *READ_ONLY_PER_PROJECT,
     *READ_ONLY_PER_SCENE,
+    *READ_ONLY_PER_CHARACTER,
     *MUTATING,
     *DOWNLOADING,
     *MAYBE_SPENDING,
@@ -238,6 +245,18 @@ def filtered_media(project_id, limit, ceiling):
     return check
 
 
+def a_voice_list(payload):
+    """Measured 2026-09-18: 30 presets, each a name and a description like 'Female, youthful, mid-high pitch'.
+    The selector renders a window at a time, so a short answer means the sweep stopped early."""
+    if not isinstance(payload, list):
+        return f"expected a list, got {type(payload).__name__}"
+    if len(payload) < 20:
+        return f"only {len(payload)} voices came back; the selector held 30 when it was measured"
+    if not _each_has(payload, "name", "description"):
+        return "a voice has no name or description"
+    return None
+
+
 def a_character_list(payload):
     if not isinstance(payload, list):
         return f"expected a list, got {type(payload).__name__}"
@@ -370,6 +389,7 @@ async def run(findings):
                     "scene_list": a_scene_list,
                 }
                 scenes = None
+                characters = None
                 for name in READ_ONLY_PER_PROJECT:
                     status, detail, payload = await call(
                         session, name, {"project_id": project_id}, per_project[name]
@@ -377,6 +397,8 @@ async def run(findings):
                     findings.append({"name": name, "status": status, "detail": detail})
                     if name == "scene_list":
                         scenes = payload
+                    if name == "flow_characters":
+                        characters = payload
 
                 scene_id = None
                 if isinstance(scenes, list) and scenes and isinstance(scenes[0], dict):
@@ -391,6 +413,23 @@ async def run(findings):
                             "name": "scene_clips",
                             "status": "SKIP",
                             "detail": "the project holds no scene to read",
+                        }
+                    )
+
+                entity = None
+                if isinstance(characters, list) and characters and isinstance(characters[0], dict):
+                    entity = characters[0].get("entity_id")
+                if entity:
+                    status, detail, _ = await call(
+                        session, "flow_voices", {"project_id": project_id, "entity_id": entity}, a_voice_list
+                    )
+                    findings.append({"name": "flow_voices", "status": status, "detail": detail})
+                else:
+                    findings.append(
+                        {
+                            "name": "flow_voices",
+                            "status": "SKIP",
+                            "detail": "the project holds no character to read voices from",
                         }
                     )
 

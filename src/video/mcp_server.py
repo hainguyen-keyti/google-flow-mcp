@@ -277,6 +277,21 @@ class Backend:
     async def characters(self, project_id: str) -> list[dict[str, Any]]:
         return await self._with(lambda s: characters_mod.list_characters(s, project_id))
 
+    async def voices(self, project_id: str, entity_id: str) -> list[dict[str, str]]:
+        return await self._with(lambda s: characters_mod.list_voices(s, project_id, entity_id))
+
+    async def character_set_voice(self, project_id: str, entity_id: str, voice: str) -> dict[str, Any]:
+        return await self._with(lambda s: characters_mod.set_voice(s, project_id, entity_id, voice))
+
+    async def character_clear_voice(self, project_id: str, entity_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: characters_mod.clear_voice(s, project_id, entity_id))
+
+    async def clip_save_frame(self, project_id: str, media_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: clips_mod.save_frame(s, project_id, media_id))
+
+    async def scene_save_clip(self, project_id: str, scene_id: str, clip_id: str) -> dict[str, Any]:
+        return await self._with(lambda s: scenes_mod.save_clip_to_project(s, project_id, scene_id, clip_id))
+
     async def tools(self, project_id: str | None = None) -> list[dict[str, Any]]:
         return await self._with(lambda s: reader.tools(s, project_id))
 
@@ -699,6 +714,78 @@ async def flow_download(project_id: str, media_id: str, out_dir: str | None = No
     _require(project_id, "project_id")
     _require(media_id, "media_id")
     return _json({"path": await backend.download(project_id, media_id, out_dir)})
+
+
+@server.tool(
+    name="flow_voices",
+    description=(
+        "The preset voices a character can speak with, read off the character's own voice selector: 30 of them "
+        "on this account (measured 2026-09-18), each a name and a one-line description like 'Female, youthful, "
+        "mid-high pitch'. Needs a character to read them from, because that page is the only place Flow shows "
+        "them. Free."
+    ),
+)
+async def flow_voices(project_id: str, entity_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(entity_id, "entity_id")
+    return _json(await backend.voices(project_id, entity_id))
+
+
+@server.tool(
+    name="character_set_voice",
+    description=(
+        "Give a character one of Flow's preset voices (names from flow_voices), so a generation starring that "
+        "character can speak. The voice belongs to the CHARACTER, not to a generation: set it once and every "
+        "later run of that character uses it. Measured 2026-09-18: free, about 20 s, and the page then shows the "
+        "voice with a play button. A name the selector does not offer is refused with the list it does. Free."
+    ),
+)
+async def character_set_voice(project_id: str, entity_id: str, voice: str) -> str:
+    _require(project_id, "project_id")
+    _require(entity_id, "entity_id")
+    _require(voice, "voice")
+    return _json(await backend.character_set_voice(project_id, entity_id, voice))
+
+
+@server.tool(
+    name="character_clear_voice",
+    description="Take the voice off a character, leaving it silent again. Free.",
+)
+async def character_clear_voice(project_id: str, entity_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(entity_id, "entity_id")
+    return _json(await backend.character_clear_voice(project_id, entity_id))
+
+
+@server.tool(
+    name="clip_save_frame",
+    description=(
+        "Save the frame the clip editor opens on as an IMAGE of the project, and answer its media_id. That image "
+        "is how a later shot continues this one: feed it to gen_i2v as initial_frame. Measured 2026-09-18: free, "
+        "and the grid shows it titled 'Saved frame from <clip>' about 40 s after the click, which this tool waits "
+        "for, so allow up to 2 min. It saves the frame the editor shows, which is the clip's start. Free."
+    ),
+)
+async def clip_save_frame(project_id: str, media_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(media_id, "media_id")
+    return _json(await backend.clip_save_frame(project_id, media_id))
+
+
+@server.tool(
+    name="scene_save_clip",
+    description=(
+        "Copy one clip of a scene's timeline (clip_id from scene_clips) onto the project grid as its own media, "
+        "so other scenes and tools can use it: a clip that lives only inside a scene is invisible to flow_media. "
+        "The timeline is not changed. Measured 2026-09-18: free, and the new media appears about 40 s later, "
+        "which this tool waits for. Free."
+    ),
+)
+async def scene_save_clip(project_id: str, scene_id: str, clip_id: str) -> str:
+    _require(project_id, "project_id")
+    _require(scene_id, "scene_id")
+    _require(clip_id, "clip_id")
+    return _json(await backend.scene_save_clip(project_id, scene_id, clip_id))
 
 
 @server.tool(name="flow_upload", description="Upload a local image or video into a project. Free.")
