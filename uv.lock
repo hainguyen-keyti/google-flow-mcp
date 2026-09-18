@@ -261,11 +261,12 @@ wheels = [
 
 [[package]]
 name = "gflow-cli"
-version = "0.73.1"
+version = "0.78.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "browser-cookie3" },
     { name = "click" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "mcp" },
@@ -278,9 +279,9 @@ dependencies = [
     { name = "tenacity" },
     { name = "uvicorn", extra = ["standard"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/83/5a/5628eec4d77be49d1bacc5ce0c0dca9ddff969b154e5ded7ca286b7e0acb/gflow_cli-0.73.1.tar.gz", hash = "sha256:3fb8e6bad968472cf5e66257eb2a1f77874e175a39778b55c16fa27bb08e86ff", size = 5509135, upload-time = "2026-09-11T12:03:05.865Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/64/ae/f811a75993e1a197893b459673ffaa9391f540b703d275b3a6c652272d05/gflow_cli-0.78.0.tar.gz", hash = "sha256:64a45449e70d9bca17c2e15d9d19e8f6f6260b44a9490b09b73cc3406421628f", size = 5890939, upload-time = "2026-09-17T20:11:42.741Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/56/6e/45bcad4d12b4bc06cdfc54e79266e5ca0b149e852bf345bbcced866be981/gflow_cli-0.73.1-py3-none-any.whl", hash = "sha256:eb11f69e144488ba18752dd69ad2c37bb015581c2516fbca0b31682ae36d39fc", size = 734340, upload-time = "2026-09-11T12:03:02.903Z" },
+    { url = "https://files.pythonhosted.org/packages/37/8f/27162682463b061bde9a364277f26608c72764c0313ab539f41529ccc158/gflow_cli-0.78.0-py3-none-any.whl", hash = "sha256:81ca8718f5f0eed729c15c29b108afcfd273b1571fc9ca2f98c471ed0130e684", size = 1376550, upload-time = "2026-09-17T20:11:40.808Z" },
 ]
 
 [[package]]
@@ -1194,7 +1195,7 @@ name = "shadowcopy"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "wmi" },
+    { name = "wmi", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/12/44/c00420a3b7bcdf830529b933392b566c876a4944a24f31e126eb6fd28647/shadowcopy-0.0.4.tar.gz", hash = "sha256:ed89817dda065f893607a04c0b7d6b3b34c3507a4711f441111a4bcb1b1826c0", size = 4138, upload-time = "2023-07-08T00:01:35.266Z" }
 wheels = [
@@ -1353,7 +1354,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "gflow-cli", specifier = "==0.73.1" },
+    { name = "gflow-cli", specifier = "==0.78.0" },
     { name = "mcp", specifier = "==2.2.0" },
 ]
 
@@ -1627,7 +1628,7 @@ name = "wmi"
 version = "1.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pywin32" },
+    { name = "pywin32", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d4/66/6364deb0a03415f96c66803d8c4379f808f2401da3bdb183348487b10510/WMI-1.5.1.tar.gz", hash = "sha256:b6a6be5711b1b6c8d55bda7a8befd75c48c12b770b9d227d31c1737dbf0d40a6", size = 26254, upload-time = "2020-04-28T08:22:58.096Z" }
 wheels = [
