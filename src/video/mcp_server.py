@@ -736,10 +736,11 @@ async def flow_download(project_id: str, media_id: str, out_dir: str | None = No
 @server.tool(
     name="flow_voices",
     description=(
-        "The preset voices a character can speak with, read off the character's own voice selector: 30 of them "
-        "on this account (measured 2026-09-18), each a name and a one-line description like 'Female, youthful, "
-        "mid-high pitch'. Needs a character to read them from, because that page is the only place Flow shows "
-        "them. Free."
+        "The voices a character can speak with, read off the character's own voice selector: 30 presets on this "
+        "account (measured 2026-09-18), each a name and a one-line description like 'Female, youthful, mid-high "
+        "pitch', plus every voice character_make_voice has saved here, which are listed first and say so under "
+        "`custom`. Needs a character to read them from, because that page is the only place Flow shows them. "
+        "Free."
     ),
 )
 async def flow_voices(project_id: str, entity_id: str) -> str:
@@ -769,8 +770,9 @@ async def character_set_voice(project_id: str, entity_id: str, voice: str) -> st
     description=(
         "Make a VOICE OF YOUR OWN and give it to a character: a preset from flow_voices plus a written "
         "performance ('giọng nữ Sài Gòn, nhỏ nhẹ, nhí nhảnh, khoảng 20 tuổi'), saved under a name so later "
-        "characters can reuse it. This is the only way the description reaches the generation: "
-        "character_set_voice attaches a bare preset and the words are lost. Measured 2026-09-18: free, about "
+        "characters can reuse it. Use it rather than character_set_voice when the words matter: that tool sends "
+        "the character update with the preset NAME only (measured rpc body, 2026-09-18), so a performance "
+        "written next to a preset is not part of what gets attached. Measured 2026-09-18: free, about "
         "45 s, because Flow synthesises a preview first and the save does nothing until that answer lands. "
         "sample is the line Flow speaks in the preview, 120 characters at most. attach false saves the voice "
         "without changing the character's current one. The saved sample also shows up in flow_media as a row "
@@ -813,7 +815,9 @@ async def character_clear_voice(project_id: str, entity_id: str) -> str:
     name="clip_save_frame",
     description=(
         "Save the frame the clip editor opens on as an IMAGE of the project, and answer its media_id. That image "
-        "is how a later shot continues this one: feed it to gen_i2v as initial_frame. Measured 2026-09-18: free, "
+        "is how a later shot continues this one: download it with flow_download and give that file to gen_i2v as "
+        "initial_frame, which takes a path on this machine. Passing the media_id straight to gen_i2v has never "
+        "been run, so do not assume it works. Measured 2026-09-18: free, "
         "about 55 s, and the grid shows it titled 'Saved frame from <clip>' about 40 s after the click, which this "
         "tool waits for, so allow up to 2 min. It saves the frame the editor shows, which is the clip's start. The "
         "editor draws into a canvas about five seconds after the page is ready and Flow uploads whatever that "

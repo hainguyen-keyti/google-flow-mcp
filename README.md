@@ -255,8 +255,9 @@ mặt, tay và món đồ.
     tool tìm thêm theo chữ trong DOM. Hộp thoại mở ra đã chọn sẵn giọng nó đang sửa; bấm lại đúng hàng đó là BỎ
     chọn và xoá luôn nút xác nhận, nên tool chỉ bấm hàng khi cần.
   - `character_make_voice` tạo **giọng riêng**: một preset cộng một câu mô tả lối diễn (`giọng nữ Sài Gòn, nhỏ nhẹ,
-    nhí nhảnh, khoảng 20 tuổi`), lưu lại dưới một cái tên rồi gắn cho nhân vật. Đây là đường DUY NHẤT để câu mô tả
-    đó vào được lượt sinh: `character_set_voice` chỉ gắn preset trần và câu mô tả mất trắng. Gõ chữ KHÔNG gửi gì
+    nhí nhảnh, khoảng 20 tuổi`), lưu lại dưới một cái tên rồi gắn cho nhân vật. Dùng nó khi câu mô tả quan trọng:
+    `character_set_voice` gửi bản cập nhật nhân vật chỉ mang TÊN preset (đo trên body rpc 2026-09-18), nên chữ
+    viết cạnh preset không nằm trong thứ được gắn. Gõ chữ KHÔNG gửi gì
     cả (footer chỉ đổi icon `play_arrow` thành `autorenew`): phải bấm Preview, Flow tổng hợp thử giọng (rpc
     `no0P6`, `gemini_v4s_tts_flow`, khoảng 24 s), và nút `Save new voice` **trông vẫn bật suốt thời gian đó**
     nhưng bấm sớm thì không gửi gì hết. Tool chờ đúng câu trả lời ấy rồi mới bấm, và một cú bấm không sinh rpc
@@ -266,7 +267,8 @@ mặt, tay và món đồ.
     `kind: "video"` mang tên giọng, `url` và `prompt` đều `null`. Đó là giọng chứ không phải clip.
 - **Biến clip thành tài sản của project** (miễn phí, đo 2026-09-18): `clip_save_frame` lưu khung hình clip editor
   đang mở thành ẢNH của project (rpc `maseQ`, tiêu đề `Saved frame from <clip>`) để làm `initial_frame` cho cảnh
-  sau; `scene_save_clip` chép một clip trong timeline ra grid thành media riêng (chuột phải, `Save to Project`,
+  sau (tải bằng `flow_download` rồi đưa FILE cho `gen_i2v`; đưa thẳng `media_id` cho `gen_i2v` chưa ai chạy thử);
+  `scene_save_clip` chép một clip trong timeline ra grid thành media riêng (chuột phải, `Save to Project`,
   rpc `Sc7aEb`). Cả hai: Flow đánh chỉ mục khoảng **40 s** sau cú bấm, nên tool chờ listing thấy media mới thay vì
   đọc một lần rồi kết luận. `clip_save_frame` còn một bẫy đắt: trang sửa vẽ clip vào **canvas** khoảng 5 s sau khi
   sẵn sàng, và body `maseQ` mang chính ảnh PNG của canvas đó, nên bấm sớm là lưu ra **ảnh đen** (đo: YAVG 0 trong

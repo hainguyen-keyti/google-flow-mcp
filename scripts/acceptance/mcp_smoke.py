@@ -247,14 +247,31 @@ def filtered_media(project_id, limit, ceiling):
 
 
 def a_voice_list(payload):
-    """Measured 2026-09-18: 30 presets, each a name and a description like 'Female, youthful, mid-high pitch'.
-    The selector renders a window at a time, so a short answer means the sweep stopped early."""
+    """Measured 2026-09-18: 30 presets plus any voice saved on this account, each a name and a description like
+    'Female, youthful, mid-high pitch'. The selector renders a window at a time, so a short answer means the
+    sweep stopped early.
+
+    This row is the only check that reads the REAL rows. A row's textContent runs the icon, the name and the
+    description together with no whitespace ('voice_selectionAchernarFemale, soft, high pitch'), and a driver
+    that reads that instead of the row's own elements answers names like that, which is why the name is checked
+    for shape here rather than merely for being non-empty (review of this plan, 2026-09-18).
+    """
     if not isinstance(payload, list):
         return f"expected a list, got {type(payload).__name__}"
     if len(payload) < 20:
         return f"only {len(payload)} voices came back; the selector held 30 when it was measured"
     if not _each_has(payload, "name", "description"):
         return "a voice has no name or description"
+    for voice in payload:
+        name = voice["name"]
+        if name.split() != [name]:
+            return (
+                f"the voice name {name[:60]!r} carries whitespace, so the row was read as one run-on string"
+            )
+        if "voice_selection" in name or "settings_2" in name:
+            return f"the voice name {name[:60]!r} is an icon ligature, not a name"
+        if not isinstance(voice.get("custom"), bool):
+            return f"voice {name!r} does not say whether it is one of your own"
     return None
 
 

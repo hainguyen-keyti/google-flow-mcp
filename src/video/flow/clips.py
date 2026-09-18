@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -571,6 +572,7 @@ async def wait_for_new_media(
     known: dict[str, dict[str, Any]],
     *,
     what: str,
+    wants: Callable[[dict[str, Any]], bool] | None = None,
     wait_s: float | None = None,
     step_s: float | None = None,
 ) -> dict[str, Any]:
@@ -579,6 +581,9 @@ async def wait_for_new_media(
     Measured 2026-09-18: 'Save frame' fired its rpc and the grid showed the image about 40 s later, so a listing
     read seconds after the click sees nothing and a driver that judges there reports a failure that did not
     happen. Flow's own indexing is the slow part, not the click.
+
+    `wants` narrows what counts: the wait is wide enough that a generation landing meanwhile is new too, and
+    handing that back sends the caller off with someone else's media id (review 2026-09-18).
     """
     # Read at call time, not bound as a default: a default freezes at import and no test could shorten the wait.
     wait_s = INDEX_WAIT_S if wait_s is None else wait_s
@@ -586,7 +591,9 @@ async def wait_for_new_media(
     waited = 0.0
     while True:
         found = await media_ids(session, project_id)
-        fresh = [row for media_id, row in found.items() if media_id not in known]
+        fresh = [
+            row for media_id, row in found.items() if media_id not in known and (wants is None or wants(row))
+        ]
         if fresh:
             return max(fresh, key=lambda row: row.get("created") or 0)
         if waited >= wait_s:
@@ -598,6 +605,7 @@ async def wait_for_new_media(
         waited += step_s
 
 
+SAVED_FRAME_TITLE = "Saved frame from"
 PAINT_WAIT_S = 30.0
 PAINT_STEP_S = 1.0
 # The editor draws the clip into a canvas; a blank one reads 64 KB as a png data url and a real frame 2.7 MB,
@@ -628,7 +636,8 @@ async def _wait_for_paint(page: Any, media_id: str) -> float:
         await page.wait_for_timeout(int(step_s * 1_000))
     raise TimeoutError(
         f"the editor of {media_id} was still blank after {wait_s:.0f} s, so Save frame would store a black "
-        "image; open the clip and check it plays"
+        "image; open the clip and check it plays. A clip that genuinely opens on black, a fade in or a night "
+        "shot, reads the same way here and is refused too"
     )
 
 
@@ -652,7 +661,15 @@ async def save_frame(session: FlowSession, project_id: str, media_id: str) -> di
         )
     await button.click(timeout=10_000)
     await page.wait_for_timeout(2_000)
-    saved = await wait_for_new_media(session, project_id, known, what="save_frame")
+    saved = await wait_for_new_media(
+        session,
+        project_id,
+        known,
+        what="save_frame",
+        wants=lambda row: (
+            row.get("kind") == "image" and (row.get("title") or "").startswith(SAVED_FRAME_TITLE)
+        ),
+    )
     return {
         "media_id": saved["id"],
         "kind": saved.get("kind"),

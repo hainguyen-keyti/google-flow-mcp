@@ -452,6 +452,19 @@ class _VoiceRows:
             self.page.deselected = True
 
 
+@pytest.fixture(autouse=True)
+def _voice_capture(monkeypatch):
+    """Every voice click is judged by the rpc it draws (2026-09-18: rzMKMb on both attach and remove). The page
+    fakes have no listener of their own, so capture answers what the live page answered; a test that cares about
+    the hearing itself overrides this."""
+
+    async def capture(session, action, *, settle):
+        await action()
+        return {"rzMKMb": [[]]}
+
+    monkeypatch.setattr(characters, "capture", capture)
+
+
 class _VoiceSession:
     def __init__(self, page):
         self.page = page
@@ -709,3 +722,65 @@ def test_make_voice_clicks_preview_because_typing_sends_nothing(monkeypatch):
 
     assert page.log.index("click Preview") < page.log.index("preview no0P6")
     assert page.log.index("preview no0P6") < page.log.index("click Save new voice")
+
+
+def _heard(monkeypatch, page, frames):
+    async def capture(session, action, *, settle):
+        await action()
+        return dict(frames)
+
+    monkeypatch.setattr(characters, "capture", capture)
+    return page
+
+
+def test_set_voice_reports_the_rpcs_it_actually_heard(monkeypatch):
+    """rzMKMb was measured on 2026-09-18 for both attaching and removing, but a CONSTANT in the answer means a
+    click Flow ignored reads exactly like one it obeyed. The dialog next door does that: Save new voice looks
+    enabled the whole time and sends nothing."""
+    page = _heard(monkeypatch, _VoicePage(window=4), {"rzMKMb": [[]], "WuwhI": [[]]})
+    session = _VoiceSession(page)
+
+    result = asyncio.run(characters.set_voice(session, PROJECT, ENTITY, "Zephyr"))
+
+    assert result["rpcids"] == ["WuwhI", "rzMKMb"], "the answer is what was heard, not a constant"
+
+
+def test_set_voice_refuses_when_the_click_never_updated_the_character(monkeypatch):
+    page = _heard(monkeypatch, _VoicePage(window=4), {"WuwhI": [[]]})
+    session = _VoiceSession(page)
+
+    with pytest.raises(RuntimeError, match="rzMKMb"):
+        asyncio.run(characters.set_voice(session, PROJECT, ENTITY, "Zephyr"))
+
+
+def test_clear_voice_refuses_when_the_click_never_updated_the_character(monkeypatch):
+    page = _heard(monkeypatch, _VoicePage(attached="leda"), {})
+    session = _VoiceSession(page)
+
+    with pytest.raises(RuntimeError, match="rzMKMb"):
+        asyncio.run(characters.clear_voice(session, PROJECT, ENTITY))
+
+
+def test_the_row_script_reads_the_rows_own_elements_and_never_its_run_on_text():
+    """Rule 10: this is the one claim the page fakes cannot check, because they hand back rows already split.
+    The bug it exists to prevent is reading the row itself, whose textContent runs the icon, the name and the
+    description together with no whitespace (`voice_selectionAchernarFemale, soft, high pitch`)."""
+    script = characters.VOICE_ROWS_JS
+
+    for selector in (".asset-title", ".asset-description", ".custom-voice-badge-icon"):
+        assert selector in script, f"a row's {selector} is where that part of the answer comes from"
+    for forbidden in ("e.textContent", "e.innerText", "(e.innerText"):
+        assert forbidden not in script, "reading the row's own text is exactly the bug measured on 2026-09-18"
+
+
+def test_the_row_script_check_rejects_the_script_the_live_bug_produced(monkeypatch):
+    """The check above is only worth having if it goes red on the real mutant, so here is the real mutant."""
+    monkeypatch.setattr(
+        characters,
+        "VOICE_ROWS_JS",
+        "() => [...document.querySelectorAll('.cdk-overlay-pane [role=option]')]"
+        "  .map(e => [(e.textContent || '').trim(), '', false])",
+    )
+
+    with pytest.raises(AssertionError):
+        test_the_row_script_reads_the_rows_own_elements_and_never_its_run_on_text()

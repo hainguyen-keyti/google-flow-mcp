@@ -1037,7 +1037,13 @@ async def save_clip_to_project(
     item = page.locator(MENU_ITEM).filter(has_text=re.compile(r"Save to Project\s*$"))
     await _click_one(page, item, "the Save to Project item of the clip menu")
     await page.wait_for_timeout(2_000)
-    saved = await clips_mod.wait_for_new_media(session, project_id, known, what="scene_save_clip")
+    saved = await clips_mod.wait_for_new_media(
+        session,
+        project_id,
+        known,
+        what="scene_save_clip",
+        wants=lambda row: row.get("kind") == "video",
+    )
     return {
         "scene_id": scene_id,
         "clip_id": clip_id,

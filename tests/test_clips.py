@@ -1725,7 +1725,7 @@ class _SaveFramePage:
     """The clip editor as measured 2026-09-18: one icon-only button whose accessible name is 'Save frame',
     and a listing that only shows the new image about forty seconds later."""
 
-    def __init__(self, appears_after: int = 2, paints_after: int = 1):
+    def __init__(self, appears_after: int = 2, paints_after: int = 1, has_button: bool = True):
         self.clicked = 0
         self.waited_ms = 0
         self.appears_after = appears_after
@@ -1733,6 +1733,7 @@ class _SaveFramePage:
         # Measured 2026-09-18 on the live editor: the player is a CANVAS and it stays blank for about five
         # seconds after the page is ready. A click before it paints saves a completely black image.
         self.paints_after = paints_after
+        self.has_button = has_button
         self.brightness_reads = 0
         self.painted_when_clicked = None
 
@@ -1755,7 +1756,7 @@ class _SaveFramePage:
                 return self
 
             async def count(self):
-                return 1
+                return 1 if page.has_button else 0
 
             async def inner_text(self):
                 return "Save frame"
@@ -1866,3 +1867,48 @@ def test_save_frame_refuses_when_the_editor_never_paints(monkeypatch):
     with pytest.raises(TimeoutError, match="blank"):
         asyncio.run(clips.save_frame(session, "P", "m1"))
     assert page.clicked == 0, "nothing is saved when there is no frame to save"
+
+
+def test_save_frame_ignores_a_new_media_that_is_not_the_saved_frame(monkeypatch):
+    """The wait is 90 s wide, so anything Flow indexes inside it (a generation landing, an upload) is new too.
+    Handing that back as the saved frame sends the caller off with someone else's media id."""
+    page = _SaveFramePage(paints_after=1)
+    session = _SaveFrameSession(page)
+    old = {"media": [{"id": "m1", "kind": "video", "title": "Person speaking to camera"}]}
+    intruder = {
+        "media": [
+            {"id": "m1", "kind": "video", "title": "Person speaking to camera"},
+            {"id": "gen-9", "kind": "video", "title": "A dancer in a studio", "created": 99},
+        ]
+    }
+    then = {
+        "media": intruder["media"]
+        + [
+            {
+                "id": "frame-1",
+                "kind": "image",
+                "title": "Saved frame from Person speaking to camera",
+                "created": 100,
+            }
+        ]
+    }
+    monkeypatch.setattr(clips.reader, "project", _listings([old, intruder, then]))
+    monkeypatch.setattr(clips, "INDEX_STEP_S", 0.01)
+    monkeypatch.setattr(clips, "PAINT_STEP_S", 0.001)
+    monkeypatch.setattr(clips, "PAINT_WAIT_S", 0.02)
+
+    result = asyncio.run(clips.save_frame(session, "P", "m1"))
+
+    assert result["media_id"] == "frame-1", "a video that landed meanwhile is not the frame that was saved"
+
+
+def test_save_frame_says_so_when_the_editor_has_no_save_control(monkeypatch):
+    page = _SaveFramePage(paints_after=1, has_button=False)
+    session = _SaveFrameSession(page)
+    monkeypatch.setattr(clips.reader, "project", _listings([{"media": []}]))
+    monkeypatch.setattr(clips, "PAINT_STEP_S", 0.001)
+    monkeypatch.setattr(clips, "PAINT_WAIT_S", 0.02)
+
+    with pytest.raises(LookupError, match="Save frame"):
+        asyncio.run(clips.save_frame(session, "P", "m1"))
+    assert page.clicked == 0

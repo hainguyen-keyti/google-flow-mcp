@@ -3028,6 +3028,27 @@ def test_save_clip_to_project_puts_a_timeline_clip_on_the_grid(monkeypatch):
     assert _ids(page) == _ids(page), "saving copies a clip, it never changes the timeline"
 
 
+def test_save_clip_to_project_ignores_an_image_that_landed_during_the_wait(monkeypatch):
+    """The indexing wait is 90 s wide; a saved frame or an upload finishing inside it is new media too, and
+    answering with it hands the caller someone else's id (review 2026-09-18)."""
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    wanted = _ids(page)[1]
+    seen = {"m1": {"id": "m1", "kind": "video"}}
+    frame = {"id": "frame-9", "kind": "image", "title": "Saved frame from something", "created": 8}
+    clip = {"id": "saved-1", "kind": "video", "title": "Wooden sailboat model on desk", "created": 9}
+    monkeypatch.setattr(
+        scenes.clips_mod,
+        "media_ids",
+        _media_in_turn([seen, {**seen, "frame-9": frame}, {**seen, "frame-9": frame, "saved-1": clip}]),
+    )
+    monkeypatch.setattr(scenes.clips_mod, "INDEX_STEP_S", 0.01)
+
+    result = asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, wanted))
+
+    assert result["media_id"] == "saved-1", "an image that landed meanwhile is not the clip that was saved"
+
+
 def test_save_clip_to_project_refuses_a_clip_id_that_is_not_on_the_timeline(monkeypatch):
     page = _Editor(FIVE, clips=FIVE)
     session = _editor(monkeypatch, page)

@@ -65,9 +65,12 @@ def _replies(first=PROJECT, empty=False):
         },
         "versions": [] if empty else [version],
         "characters": [] if empty else [{"entity_id": "e1", "name": "Mai", "portrait_media_id": "p1"}],
-        # Measured 2026-09-18: the selector holds 30 presets, each a name and a one-line description.
-        "voices": [
-            {"name": f"V{i:02d}", "description": "Female, youthful, mid-high pitch"} for i in range(30)
+        # Measured 2026-09-18: the selector holds 30 presets, each a name and a one-line description, plus any
+        # voice saved on this account, which is listed first and says so.
+        "voices": [{"name": "SaigonGirl20", "description": "giọng nữ Sài Gòn", "custom": True}]
+        + [
+            {"name": f"V{i:02d}", "description": "Female, youthful, mid-high pitch", "custom": False}
+            for i in range(30)
         ],
         # The community Tools gallery is the same for every project, empty ones included (62 on both).
         "tools": [{"id": "community-1", "name": "Tool", "author": "a", "path": "p", "tags": ["x"]}],
@@ -236,6 +239,23 @@ def _character_without_entity(replies):
     replies["characters"][0]["entity_id"] = ""
 
 
+def _voice_named_by_its_icon(replies):
+    # What a driver reading the row's own textContent answers: the icon, the name and the description run
+    # together with no whitespace. Every name is non-empty, so a truthiness check passes it.
+    replies["voices"] = [
+        {
+            "name": f"voice_selectionV{i:02d}Female, youthful, mid-high pitch",
+            "description": "Female, youthful, mid-high pitch",
+            "custom": False,
+        }
+        for i in range(30)
+    ]
+
+
+def _voice_without_the_custom_flag(replies):
+    replies["voices"] = [{k: v for k, v in voice.items() if k != "custom"} for voice in replies["voices"]]
+
+
 def _no_tools(replies):
     replies["tools"] = []
 
@@ -269,6 +289,8 @@ CORRUPTIONS = [
     (("flow_media all", "flow_media filtered"), _versions_as_a_bare_list),
     # No entity id also leaves flow_voices nothing to read, so both rows go non-PASS.
     (("flow_characters", "flow_voices"), _character_without_entity),
+    ("flow_voices", _voice_named_by_its_icon),
+    ("flow_voices", _voice_without_the_custom_flag),
     ("flow_tools", _no_tools),
     ("scene_list", _trashed_scene_in_default_listing),
     ("scene_clips", _timeline_of_another_scene),

@@ -246,6 +246,9 @@ VOICE_SAMPLE_MAX = 120
 VOICE_READY_WAIT_S = 90.0
 VOICE_READY_STEP_S = 2.0
 VOICE_PREVIEW_RPC = "no0P6"
+# The field-masked character update Flow sends when a voice is attached or removed (measured 2026-09-18 on both
+# paths). Hearing it is the only proof the click landed: a click Flow ignores changes nothing on the page.
+VOICE_UPDATE_RPC = "rzMKMb"
 # Measured 2026-09-18: the control reads "autorenew Preview" but its aria-label, which is what the role query
 # sees, is "Play preview", so an anchored pattern finds nothing.
 VOICE_PREVIEW = re.compile("preview", re.IGNORECASE)
@@ -348,9 +351,13 @@ async def set_voice(session: FlowSession, project_id: str, entity_id: str, voice
         raise LookupError(
             "the selector no longer offers 'Add to character'; typing a performance turns it into a voice maker"
         )
-    await commit.click(timeout=10_000)
-    await page.wait_for_timeout(3_000)
-    return {"entity_id": entity_id, "voice": voice, "rpcids": ["rzMKMb"]}
+    frames = await capture(session, lambda: commit.click(timeout=10_000), settle=6.0)
+    if VOICE_UPDATE_RPC not in frames:
+        raise RuntimeError(
+            f"the 'Add to character' click did not update the character ({VOICE_UPDATE_RPC} never came back, "
+            f"heard {sorted(frames)}); read flow_voices and the character page before trying again"
+        )
+    return {"entity_id": entity_id, "voice": voice, "rpcids": sorted(frames)}
 
 
 async def make_voice(
@@ -453,6 +460,10 @@ async def clear_voice(session: FlowSession, project_id: str, entity_id: str) -> 
     remove = page.get_by_role("button", name=VOICE_REMOVE).first
     if not await remove.count():
         raise LookupError(f"character {entity_id} has no voice to remove")
-    await remove.click(timeout=10_000)
-    await page.wait_for_timeout(2_500)
-    return {"entity_id": entity_id, "voice": None, "rpcids": ["rzMKMb"]}
+    frames = await capture(session, lambda: remove.click(timeout=10_000), settle=6.0)
+    if VOICE_UPDATE_RPC not in frames:
+        raise RuntimeError(
+            f"the Remove click did not update the character ({VOICE_UPDATE_RPC} never came back, heard "
+            f"{sorted(frames)}); read the character page before trying again"
+        )
+    return {"entity_id": entity_id, "voice": None, "rpcids": sorted(frames)}
