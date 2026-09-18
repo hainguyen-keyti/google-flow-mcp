@@ -677,7 +677,9 @@ def t2v(prompt: str, **opts) -> None:
     type=click.Path(exists=True, dir_okay=False),
     help=(
         "Interpolate to this local image: Flow takes it on its own submit, measured 2026-09-18 at 15 credits "
-        "for omni-flash 10 s, the same as a start frame alone."
+        "for omni-flash 10 s, the same as a start frame alone. That is the ONLY cell anyone has paid for: "
+        "Flow picks its interpolation model by cohort, so another --model or --duration costs an unmeasured "
+        "amount (the MCP tool refuses those outright)."
     ),
 )
 @_gen_options

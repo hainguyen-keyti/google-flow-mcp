@@ -384,17 +384,22 @@ def test_gen_i2v_takes_an_end_frame_only_where_that_run_was_priced(monkeypatch, 
     assert called == [], "an unpriced cell must be refused before anything is spent"
 
 
-def test_gen_i2v_hands_the_end_frame_to_the_driver(monkeypatch):
-    """The refusal test used to be the only thing proving end_frame was read at all. Without this, a version
-    that silently dropped the parameter would leave the whole suite green while an agent pays for an
-    interpolation and receives a plain start-frame clip (CLAUDE.md rule 10, the swallowed argument)."""
-    called = []
+def test_gen_i2v_hands_the_end_frame_all_the_way_into_the_argv(monkeypatch, tmp_path):
+    """The refusal test used to be the only thing proving end_frame was read at all, and a version that dropped
+    it anywhere on the way would leave the whole suite green while an agent pays for an interpolation and gets a
+    plain start-frame clip (CLAUDE.md rule 10, the swallowed argument).
 
-    async def fake_generate(**kwargs):
-        called.append(kwargs)
-        return {"job_id": "x", "outputs": []}
+    Re-review 2026-09-18: stubbing `backend.generate` only pinned the tool's own hop, leaving the middle one,
+    `Backend.generate` building the Job, uncovered. The stub goes at the far end instead, so this one run walks
+    tool -> Job -> argv, the same route the paid run took."""
+    argvs = []
 
-    monkeypatch.setattr(mcp_server.backend, "generate", fake_generate)
+    async def fake_run_job(job, out_dir, **kwargs):
+        argvs.append(gen.build_argv(job, out_dir))
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
 
     async def fn(session):
         return await session.call_tool(
@@ -409,12 +414,9 @@ def test_gen_i2v_hands_the_end_frame_to_the_driver(monkeypatch):
         )
 
     assert not with_client(fn).is_error
-    assert [call["end_frame"] for call in called] == ["/tmp/b.png"]
-    # And it must survive the trip into the argv gflow actually runs.
-    job = gen.Job(
-        job_id="j", kind="i2v", prompt="p", project="P", initial_frame=Path("a.png"), end_frame=Path("b.png")
-    )
-    assert "--end-frame" in gen.build_argv(job, Path("out"))
+    assert len(argvs) == 1, argvs
+    assert "--end-frame" in argvs[0], argvs[0]
+    assert argvs[0][argvs[0].index("--end-frame") + 1] == "/tmp/b.png", argvs[0]
 
 
 def test_the_cli_says_an_end_frame_is_a_different_run(monkeypatch):
@@ -943,6 +945,10 @@ def test_every_served_tool_that_takes_an_out_dir_is_covered_by_a_refusal_case():
         for name, tool in served_tool_objects().items()
         if "out_dir" in (tool.input_schema or {}).get("properties", {})
     }
+    # The refusal cases parametrize from these same sets, so a tool cannot be listed here and yet go unrun:
+    # deleting one from the call table used to drop its cases while this test stayed green (re-review 2026-09-18).
+    assert set(FILE_OUT_DIR_CALLS) == FILE_OUT_DIR_TOOLS, sorted(FILE_OUT_DIR_TOOLS ^ set(FILE_OUT_DIR_CALLS))
+    assert EDITOR_OUT_DIR_TOOLS <= set(SPEND_CALLS), sorted(EDITOR_OUT_DIR_TOOLS - set(SPEND_CALLS))
     covered = EDITOR_OUT_DIR_TOOLS | FILE_OUT_DIR_TOOLS
     assert set(served) - covered == set(), (
         f"these tools take an out_dir with no refusal case: {sorted(set(served) - covered)}"
@@ -952,7 +958,7 @@ def test_every_served_tool_that_takes_an_out_dir_is_covered_by_a_refusal_case():
     )
 
 
-@pytest.mark.parametrize("tool", ["clip_extend", "clip_edit", "gen_character"])
+@pytest.mark.parametrize("tool", sorted(EDITOR_OUT_DIR_TOOLS))
 @pytest.mark.parametrize("outside", ["elsewhere", "out/../elsewhere"])
 def test_an_editor_out_dir_outside_the_out_folder_is_refused_before_a_browser_opens(
     monkeypatch, tmp_path, tool, outside
@@ -1014,7 +1020,7 @@ def _file_writing_backend(monkeypatch, tmp_path):
     return reached
 
 
-@pytest.mark.parametrize("tool", sorted(FILE_OUT_DIR_CALLS))
+@pytest.mark.parametrize("tool", sorted(FILE_OUT_DIR_TOOLS))
 @pytest.mark.parametrize(
     ("out_dir", "reason"),
     [
