@@ -150,8 +150,26 @@ SEGMENTS: list[Segment] = [
 ]
 
 
+# Clips a human looked at and turned down. p2 and p3 were paid for and are on disk, but Flow built a different
+# room and a different wardrobe from the ones in her photographs, which is the continuity failure the owner
+# rejected a whole video for on 2026-09-13. A rejected clip is replaced by the photograph it should have been
+# anchored to, so the cut keeps its shape instead of losing a beat.
+REJECTED: dict[str, str] = {
+    "p2": "room_night",
+    "p3": "wardrobe",
+}
+
+
 def segments_for(*, pilot: bool) -> list[Segment]:
-    return [segment for segment in SEGMENTS if segment.act in (1, 2)] if pilot else list(SEGMENTS)
+    chosen = [segment for segment in SEGMENTS if segment.act in (1, 2)] if pilot else list(SEGMENTS)
+    out = []
+    for segment in chosen:
+        name = Path(segment.source).stem
+        if segment.kind != "still" and name in REJECTED:
+            out.append(segment._replace(kind="still", source=still(REJECTED[name]), start_in_source=0.0))
+        else:
+            out.append(segment)
+    return out
 
 
 def sources(*, pilot: bool) -> dict[str, list[str]]:
@@ -165,11 +183,21 @@ def sources(*, pilot: bool) -> dict[str, list[str]]:
 # The room and the person are locked by the character chip and by character_design.md; a prompt only ever
 # changes camera, action and light (the bible's own rule). Veo writes its own audio, so the prompts ask for
 # room tone and nothing else: her voice is laid on in the edit, where a line costs nothing to redo.
+# Measured 2026-09-18 on the first pilot clip: "no music" inside a long sentence is not enough, Flow scored it
+# anyway. The audio ask is now its own block at the end, says what the track MAY contain, and the edit mutes
+# generated audio by default (AMBIENT_OK) so a scored clip can never reach the film.
 LOOK = (
     "Shot on a phone held in the hand, slight natural wobble, warm practical lamps, cozy lived-in Vietnamese "
     "bedroom with a photo wall, open wardrobe and pale patterned bedding. Realistic skin texture, no beauty "
-    "filter, no text, no captions, no subtitles. Quiet room tone, no music, no speech."
+    "filter, no text, no captions, no subtitles. "
+    "AUDIO: diegetic room sound only, recorded by the phone: cloth rustling, hangers sliding, her quiet "
+    "breathing, a distant street outside. NO MUSIC. No score, no soundtrack, no instruments, no humming, no "
+    "singing, no melody of any kind. No speech, no dialogue, no voice over."
 )
+
+# Clips whose own audio the edit is allowed to keep under her voice. Empty until a human has listened to that
+# clip and confirmed there is no music in it: the owner asked for sound and voice, not a score.
+AMBIENT_OK: set[str] = set()
 
 PROMPTS: dict[str, str] = {
     "p1": (
@@ -224,4 +252,21 @@ PROMPTS: dict[str, str] = {
         "The white lace dress hangs on the wardrobe door. She looks at it, reaches out and straightens it, then "
         "turns away out of frame. Medium close, warm light. " + LOOK
     ),
+}
+
+
+# Measured 2026-09-18 on pilot clip p2: the character chip locks the FACE, not the room. Asked for "her small
+# warm bedroom" in words, Flow built a different room with different bedding, curtains and wardrobe, which is
+# the exact failure the owner rejected a video for on 2026-09-13. Every generated shot from here carries a
+# photograph of her actual room as an Ingredients reference, so the room is shown rather than described.
+REFS: dict[str, str] = {
+    "c4": "bed_candid",
+    "c5": "standing_pink",
+    "c6": "closet_moody",
+    "c7": "desk_night",
+    "c8": "vanity",
+    "c9": "wardrobe",
+    "c10": "closet_warm",
+    "c11": "room_soft",
+    "c12": "wardrobe",
 }

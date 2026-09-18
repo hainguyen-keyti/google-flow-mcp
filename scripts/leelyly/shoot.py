@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from shots import CLIPS, PROMPTS
+from shots import CLIPS, PROMPTS, REFS, still
 
 from video import mcp_server
 
@@ -27,6 +27,30 @@ ENTITY = "b6b47da6-d949-43d0-957f-b787ee3fcf44"
 MODEL = "omni-flash"
 PRICE = 12
 CAP = 36  # the owner approved the pilot only; anything past this needs a new answer, not a new argument
+
+
+REF_CACHE = Path("out/leelyly/refs.json")
+
+
+async def reference_for(backend, key: str) -> list[str]:
+    """The media id of the photograph of her room this shot is anchored to, uploaded once and remembered."""
+    if key not in REFS:
+        return []
+    cache = json.loads(REF_CACHE.read_text(encoding="utf-8")) if REF_CACHE.exists() else {}
+    name = REFS[key]
+    if name not in cache:
+        path = still(name)
+        await backend.upload(PROJECT, path)
+        listing = await backend.media(PROJECT, kind="image", limit=12)
+        wanted = Path(path).name
+        rows = [row for row in listing.get("media", []) if (row.get("title") or "") == wanted]
+        if not rows:
+            raise LookupError(f"uploaded {wanted} but the listing does not show it yet")
+        cache[name] = rows[0]["id"]
+        REF_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        REF_CACHE.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+        print(f"reference {name} -> {cache[name]}", flush=True)
+    return [cache[name]]
 
 
 async def shoot(keys: list[str], cap: int) -> int:
@@ -43,10 +67,12 @@ async def shoot(keys: list[str], cap: int) -> int:
     print(f"balance {before}, shooting {todo}", flush=True)
     for key in todo:
         started = time.monotonic()
+        refs = await reference_for(backend, key)
         result = await backend.gen_character(
             PROJECT,
             PROMPTS[key],
             [ENTITY],
+            media_ids=refs,
             model=MODEL,
             aspect="9:16",
             job_id=f"leelyly-{key}",

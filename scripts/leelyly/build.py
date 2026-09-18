@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from shots import ONSCREEN, segments_for
+from shots import AMBIENT_OK, ONSCREEN, segments_for
 from timeline import Segment, fit, plan, problems, voice_problems
 
 W, H, FPS = 1080, 1920, 30
@@ -126,7 +126,8 @@ def render_clip(segment: Segment, out: Path) -> Path:
             "-crf",
             "18",
             "-af",
-            f"volume={0 if segment.kind == ONSCREEN else AMBIENT_DB}dB",
+            # Flow scores its clips even when told not to, so a clip nobody has listened to arrives silent.
+            f"volume={AMBIENT_DB if Path(segment.source).stem in AMBIENT_OK else -90}dB",
             "-c:a",
             "aac",
             "-ar",
