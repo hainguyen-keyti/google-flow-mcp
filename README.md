@@ -154,7 +154,7 @@ mặt, tay và món đồ.
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`). Server
 đang chạy không tự nạp code mới, và phiên đang mở còn giữ mô tả tool cũ: sửa code xong phải mở phiên mới.
 
-37 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
+43 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
 "unmeasured"):
 
 - **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
@@ -244,6 +244,30 @@ mặt, tay và món đồ.
     dancer từng để lại phim đúng 18 MiB). Kết quả có `seconds` và `clips` của listing để đối chiếu, `attempts: 2` là
     lần đầu hỏng giữa đường và đã lấy lại trong phiên mới.
   - `scene_rename` đổi tên. Trang scene không có menu chất lượng, muốn chọn mức thì dùng `clip_download`.
+- **Giọng nói của nhân vật** (miễn phí, đo 2026-09-18 bằng `src/video/probes/voice_and_frames.py`): giọng thuộc về
+  NHÂN VẬT, và chỉ có trên trang `/project/<id>/character/<entity>` của nó.
+  - `flow_voices` đọc cả danh sách: 30 preset của Flow (`Achernar` tới `Zubenelgenubi`, mỗi giọng một dòng mô tả
+    kiểu `Female, youthful, mid-high pitch`) cộng những giọng riêng đã lưu trên tài khoản, mỗi dòng có `custom`.
+    Danh sách vẽ theo cửa sổ như grid nên tool quét cuộn, và đọc tên từ chính `span.asset-title` của hàng chứ
+    không cắt chữ: `textContent` của hàng dính liền không dấu cách (`voice_selectionAchernarFemale, soft...`).
+  - `character_set_voice` gắn một giọng có sẵn (rpc `rzMKMb`), `character_clear_voice` gỡ ra. Nhân vật ĐÃ có giọng
+    thì nút mở hộp thoại không còn tên "Select a voice": chữ `voice_selection` nằm trong icon `aria-hidden`, nên
+    tool tìm thêm theo chữ trong DOM. Hộp thoại mở ra đã chọn sẵn giọng nó đang sửa; bấm lại đúng hàng đó là BỎ
+    chọn và xoá luôn nút xác nhận, nên tool chỉ bấm hàng khi cần.
+  - `character_make_voice` tạo **giọng riêng**: một preset cộng một câu mô tả lối diễn (`giọng nữ Sài Gòn, nhỏ nhẹ,
+    nhí nhảnh, khoảng 20 tuổi`), lưu lại dưới một cái tên rồi gắn cho nhân vật. Đây là đường DUY NHẤT để câu mô tả
+    đó vào được lượt sinh: `character_set_voice` chỉ gắn preset trần và câu mô tả mất trắng. Gõ chữ KHÔNG gửi gì
+    cả (footer chỉ đổi icon `play_arrow` thành `autorenew`): phải bấm Preview, Flow tổng hợp thử giọng (rpc
+    `no0P6`, `gemini_v4s_tts_flow`, khoảng 24 s), và nút `Save new voice` **trông vẫn bật suốt thời gian đó**
+    nhưng bấm sớm thì không gửi gì hết. Tool chờ đúng câu trả lời ấy rồi mới bấm, và một cú bấm không sinh rpc
+    nào bị báo lỗi chứ không được gọi là đã lưu. Lưu xong fires `lt8g5` cộng `mYWVGd`, giọng hiện trên đầu danh
+    sách. Đo thật: 44 s, $0. `sample` là câu Flow đọc thử, tối đa 120 ký tự; `attach=false` lưu mà không đổi giọng
+    đang gắn.
+- **Biến clip thành tài sản của project** (miễn phí, đo 2026-09-18): `clip_save_frame` lưu khung hình clip editor
+  đang mở thành ẢNH của project (rpc `maseQ`, tiêu đề `Saved frame from <clip>`) để làm `initial_frame` cho cảnh
+  sau; `scene_save_clip` chép một clip trong timeline ra grid thành media riêng (chuột phải, `Save to Project`,
+  rpc `Sc7aEb`). Cả hai: Flow đánh chỉ mục khoảng **40 s** sau cú bấm, nên tool chờ listing thấy media mới thay vì
+  đọc một lần rồi kết luận.
 - **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
   hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
 
@@ -278,7 +302,7 @@ uv run python scripts/acceptance/scene_build.py --project <id nháp>     # $0, 1
 uv run pytest -q
 ```
 
-Test tay toàn bộ 37 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
+Test tay toàn bộ 43 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
 `docs/mcp-manual-test.md`.
 
 `ledger_integrity.py` canh đúng một luật: **không credit nào rời tài khoản qua clip editor mà không có

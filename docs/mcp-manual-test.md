@@ -1,8 +1,8 @@
-# Test tay MCP `video`: 37 tool, có giá và có rào chắn
+# Test tay MCP `video`: 43 tool, có giá và có rào chắn
 
 Hướng dẫn để chủ repo tự test, hoặc giao cho một agent khác gọi qua MCP. Mọi hình dạng kết quả dưới đây là
 **đo thật ngày 2026-09-14 và 2026-09-15** (riêng `gen_character` và `character_create` nhận ảnh: 2026-09-16 và
-2026-09-17; các tool scene ghép phim: 2026-09-17), không phải suy từ code.
+2026-09-17; các tool scene ghép phim: 2026-09-17; giọng nói và hai tool lưu clip: 2026-09-18), không phải suy từ code.
 
 ## 0. Trước khi bắt đầu
 
@@ -39,7 +39,7 @@ Tầng 0 đỏ thì dừng, đừng test tay tiếp: lỗi nằm ở tầng dư�
 **`project_delete` xoá vĩnh viễn cả clip, ingredient và prompt.** Đọc lại id hai lần trước khi gọi. Không bao
 giờ dán id của project thật vào tool này.
 
-## 3. Bảng 37 tool
+## 3. Bảng 43 tool
 
 Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi project; nhóm C chỉ làm trong project nháp.
 
@@ -55,6 +55,7 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `flow_tools` | `project_id` tuỳ chọn | list tool của gallery cộng đồng, giống nhau ở mọi project; số lượng đổi theo thời gian (62 ngày 14/9, 60 rồi 62 ngày 15/9). Bỏ trống `project_id` thì server tự mở project đầu tiên trên grid, vì Flow chỉ nạp gallery bên trong một project |
 | `flow_uploads` | `project_id` | `{"count": n}` và không có gì khác |
 | `scene_list` | `project_id`, `include_trashed=False` | list `{scene_id, title, trashed, created, updated}`. Mặc định ẩn scene đã xoá; `include_trashed=true` mới thấy |
+| `flow_voices` | `project_id`, `entity_id` | list `{name, description, custom}`: 30 preset của Flow cộng mọi giọng riêng đã lưu (`custom: true`, xếp trên đầu). Cần một nhân vật vì trang character là nơi DUY NHẤT Flow hiện danh sách; danh sách vẽ theo cửa sổ nên tool quét cuộn |
 | `scene_clips` | `project_id`, `scene_id` | đọc timeline từ listing: `{scene_id, title, trashed, aspect, seconds, clips}`, `clips` theo đúng thứ tự phim chạy, mỗi clip `{position, clip_id, title, seconds}`, `position` đếm từ 0. `clip_id` là id của clip trên timeline, không phải media id: thêm một media hai lần ra hai `clip_id`. Nhãn `Total duration` của trang đổi trước khi Flow lưu (đo 2026-09-17), nên đọc lại tool này sau mỗi thay đổi |
 
 ### B. Ghi file trên máy, $0
@@ -81,6 +82,11 @@ Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi p
 | `scene_move_clip` | `project_id`, `scene_id`, `clip_id`, `position` | chuyển một clip (gọi bằng `clip_id` của `scene_clips`) tới vị trí đếm từ 0, các clip ở giữa dịch một chỗ. Flow chỉ đổi thứ tự bằng kéo thả nên tool zoom out tới khi hai chỗ cùng hiện rồi kéo; kiểm thứ tự trang gửi và listing đọc lại. Clip đã đúng chỗ thì `moved: false`. Trả `clips` theo thứ tự mới |
 | `scene_remove_clip` | `project_id`, `scene_id`, `clip_id` | gỡ một clip khỏi timeline qua menu chuột phải; Flow **không hỏi xác nhận** (đo 2026-09-17), nên tool chỉ bấm khi trang hiện đúng số clip listing có và chuột phải đã chọn đúng clip. Media vẫn còn trong project, `scene_add_clip` đặt lại được vào cuối. Trả `removed_position` và `clips` còn lại |
 | `scene_download` | `project_id`, `scene_id`, `out_dir=None` | tải cả scene thành MỘT phim, không phải một clip: đo 2026-09-16, hai clip 8 s ra một mp4 **16,0 giây**. Phim được dựng ngay trong trang (đo 2026-09-17: phim 40 s mất 33 tới 42 s), tool chờ theo độ dài phim và báo ngay khi cú bấm không khởi động xuất. File chép sang tên tạm rồi mới đổi tên, không bao giờ có phim dở dưới tên trả về. Scene rỗng bị từ chối, `out_dir` phải nằm trong `out/`. Trả thêm `seconds`, `clips` của listing để đối chiếu, và `attempts`: bằng 2 là lần đầu hỏng giữa đường và tool lấy lại trong phiên mới. Trang scene KHÔNG có menu chọn chất lượng, muốn 270p/720p/1080p/4k thì dùng `clip_download` |
+| `character_set_voice` | `project_id`, `entity_id`, `voice` | gắn một giọng từ `flow_voices` (preset hay giọng riêng) cho nhân vật, rpc `rzMKMb`, khoảng 20 s. Giọng thuộc về NHÂN VẬT: gắn một lần, mọi lượt sinh sau đều dùng. Tên không có trong danh sách bị từ chối kèm danh sách thật |
+| `character_make_voice` | `project_id`, `entity_id`, `preset`, `performance`, `name`, `sample`, `attach=True` | tạo GIỌNG RIÊNG: preset cộng câu tả lối diễn, bấm Preview, chờ Flow tổng hợp (rpc `no0P6`, khoảng 24 s) rồi mới lưu (`lt8g5`, `mYWVGd`); đo thật 2026-09-18: 44 s, $0. Đây là đường duy nhất đưa câu tả vào lượt sinh. `sample` tối đa 120 ký tự; `attach=false` lưu mà không đổi giọng đang gắn. Bấm lưu trước khi Flow trả lời thì KHÔNG gửi gì cả, nên tool báo lỗi thay vì nói đã lưu |
+| `character_clear_voice` | `project_id`, `entity_id` | gỡ giọng, nhân vật im trở lại |
+| `clip_save_frame` | `project_id`, `media_id` | lưu khung đầu của clip thành ẢNH của project (rpc `maseQ`, tiêu đề `Saved frame from <clip>`), để làm `initial_frame` cho cảnh sau. Flow đánh chỉ mục khoảng 40 s sau cú bấm nên tool chờ listing, cho phép tới 2 phút |
+| `scene_save_clip` | `project_id`, `scene_id`, `clip_id` | chép một clip của timeline ra grid thành media riêng (chuột phải, `Save to Project`, rpc `Sc7aEb`); timeline không đổi. Cũng chờ khoảng 40 s để listing thấy |
 | `character_create` | `project_id`, `prompt` HOẶC `image`, `name`, `personality`, `wait=90` | **không tốn credit**, nhận đúng một trong hai: `prompt` thì chân dung vẽ bằng Nano Banana 2; `image` là đường dẫn ảnh trên máy (png, jpg, jpeg, webp), tải qua nút Upload của trang New character (đo 2026-09-16: ảnh cắt cận mặt được nhận; Flow từng im lặng từ chối ảnh người mặc đồ ren, tool báo "created no character"). Trả `portrait.workflow_id`, **không phải media id**: lấy media id bằng `flow_characters` |
 | `character_delete` | `project_id`, `entity_id` | xoá vĩnh viễn nhân vật |
 | `flow_upload` | `project_id`, `path` | đường dẫn file trên máy; trả `{file, bytes, rpcids, tiles, media_id, workflow_id, size_bytes, ...}`. `media_id` là id dùng được với `flow_download`. `bytes` là file trên máy, `size_bytes` là bản Flow lưu (Flow nén ảnh lại: PNG 139 KB thành JPEG 5,6 KB). `tiles` đếm tile của view đang mở, không phải số upload |
