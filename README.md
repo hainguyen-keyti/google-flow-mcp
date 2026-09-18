@@ -314,8 +314,11 @@ quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần
   cho vừa: ảnh 16:9 ra clip 720x1280 với con thuyền bị đẩy nửa ra khỏi mép trái. Truyền đúng tỉ lệ mình muốn.
 - `gen i2v --end-frame` (khung cuối, nội suy giữa hai ảnh local): gflow 0.78.0 mới port lên host mới, đi submit
   riêng (rpc `nprQif`, model nội suy). **Đo 2026-09-18 qua MCP: 15 credit, 119 s** cho omni-flash 10 s, bằng đúng
-  giá chạy một khung đầu (105 s). Clip ra đúng hai đầu: khung đầu lệch 3,4/255 so với ảnh đầu, khung cuối lệch
-  8,0 so với ảnh cuối, trong khi chéo nhau lệch khoảng 50 (`out/plan_i/end_frame_sheet.png`).
+  giá chạy một khung đầu (105 s, khác ảnh khác prompt nên đừng đọc hiệu hai con số). Clip ra đúng hai đầu: khung cuối lệch
+  1,9/255 so với ảnh cuối, và trong 240 khung thì khung GẦN ảnh cuối nhất chính là khung cuối cùng, hội tụ đều
+  10,0 - 9,1 - 8,0 - 6,2 - 3,9 - 1,9 ở sáu khung chót; khung gần ảnh đầu nhất là khung 1 (2,1); chéo nhau khoảng
+  50 (`out/plan_i/end_frame_sheet.png`, đã nhìn). **Chỉ omni-flash 10 s được đo**, model hay độ dài khác bị tool
+  từ chối vì Flow chọn model nội suy theo cohort, giá chưa ai trả.
 - URL trong listing là poster; tải tài sản gốc bằng hậu tố lh3 (`=s0` ảnh, `=m22` rồi `=m18` video).
 - Agent mode bật là Flow lưu theo project và ẩn chip settings của composer; tắt lại bằng
   `flow agent mode <project> off`.

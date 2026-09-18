@@ -347,6 +347,76 @@ def test_gen_i2v_prices_the_end_frame_run_separately_from_the_start_frame_one():
     assert re.search(r"end_frame = 15 credits in 119 s", description), description
 
 
+@pytest.mark.parametrize(
+    "settings",
+    [{"model": "veo-lite"}, {"model": "veo-fast"}, {"model": "omni-flash", "duration": 8}, {"duration": 4}],
+)
+def test_gen_i2v_takes_an_end_frame_only_where_that_run_was_priced(monkeypatch, settings):
+    """Review 2026-09-18 (Plan I). One run priced ONE cell: omni-flash at 10 s. gflow puts no model gate on
+    --end-frame and picks a different interpolation model per cohort (veo_3_1_interpolation_lite against
+    omni_flash_i2v_8s_first_last), so any other model or length submits something nobody has paid for once,
+    while the sibling tools quote veo-lite at 10 and invite the agent to assume the same here."""
+    called = []
+
+    async def fake_generate(**kwargs):
+        called.append(kwargs)
+        return {"job_id": "x", "outputs": []}
+
+    monkeypatch.setattr(mcp_server.backend, "generate", fake_generate)
+
+    async def fn(session):
+        return await session.call_tool(
+            "gen_i2v",
+            {
+                "initial_frame": "/tmp/a.png",
+                "end_frame": "/tmp/b.png",
+                "prompt": "a boat",
+                "project": "P",
+                "job_id": "job-cell",
+                **settings,
+            },
+        )
+
+    result = with_client(fn)
+    text = "".join(getattr(c, "text", "") for c in result.content)
+    assert result.is_error, text
+    assert "end_frame" in text and "omni-flash" in text, text
+    assert called == [], "an unpriced cell must be refused before anything is spent"
+
+
+def test_gen_i2v_hands_the_end_frame_to_the_driver(monkeypatch):
+    """The refusal test used to be the only thing proving end_frame was read at all. Without this, a version
+    that silently dropped the parameter would leave the whole suite green while an agent pays for an
+    interpolation and receives a plain start-frame clip (CLAUDE.md rule 10, the swallowed argument)."""
+    called = []
+
+    async def fake_generate(**kwargs):
+        called.append(kwargs)
+        return {"job_id": "x", "outputs": []}
+
+    monkeypatch.setattr(mcp_server.backend, "generate", fake_generate)
+
+    async def fn(session):
+        return await session.call_tool(
+            "gen_i2v",
+            {
+                "initial_frame": "/tmp/a.png",
+                "end_frame": "/tmp/b.png",
+                "prompt": "a boat",
+                "project": "P",
+                "job_id": "job-ends",
+            },
+        )
+
+    assert not with_client(fn).is_error
+    assert [call["end_frame"] for call in called] == ["/tmp/b.png"]
+    # And it must survive the trip into the argv gflow actually runs.
+    job = gen.Job(
+        job_id="j", kind="i2v", prompt="p", project="P", initial_frame=Path("a.png"), end_frame=Path("b.png")
+    )
+    assert "--end-frame" in gen.build_argv(job, Path("out"))
+
+
 def test_the_cli_says_an_end_frame_is_a_different_run(monkeypatch):
     """The CLI is the owner's own surface and it advertised 'optional last frame' with no help text at all, so
     `--help` sold a run nobody had priced (review 2026-09-18)."""
@@ -668,6 +738,12 @@ def test_an_explicit_duration_is_sent_as_given(monkeypatch, tmp_path):
     assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "8")
 
 
+# Every served tool that takes an out_dir must appear in one of these two sets, and the test below reads the
+# served schemas so neither can drift the way a hand-typed list did: clip_download sat outside the audit for a
+# week while a commit called flow_download "the last tool" without a guard (review 2026-09-18).
+EDITOR_OUT_DIR_TOOLS = {"clip_extend", "clip_edit", "gen_character"}
+FILE_OUT_DIR_TOOLS = {"flow_download", "clip_download", "clip_reconcile", "scene_download"}
+
 SPEND_CALLS = {
     "gen_t2v": {"prompt": "a boat", "project": "P", "job_id": "job-t2v"},
     "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P", "job_id": "job-i2v"},
@@ -858,6 +934,24 @@ def test_gen_character_refuses_an_out_dir_that_names_a_file_even_on_a_dry_run(mo
     assert reached == []
 
 
+def test_every_served_tool_that_takes_an_out_dir_is_covered_by_a_refusal_case():
+    """Review 2026-09-18: the list below was typed by hand, so clip_download sat outside the audit and kept
+    writing wherever it was pointed while a commit message called flow_download "the last tool" without one.
+    Read the served schemas instead (CLAIM rule 10: a check must read what it says it covers)."""
+    served = {
+        name: tool
+        for name, tool in served_tool_objects().items()
+        if "out_dir" in (tool.input_schema or {}).get("properties", {})
+    }
+    covered = EDITOR_OUT_DIR_TOOLS | FILE_OUT_DIR_TOOLS
+    assert set(served) - covered == set(), (
+        f"these tools take an out_dir with no refusal case: {sorted(set(served) - covered)}"
+    )
+    assert covered - set(served) == set(), (
+        f"these names are covered but no longer serve an out_dir: {sorted(covered - set(served))}"
+    )
+
+
 @pytest.mark.parametrize("tool", ["clip_extend", "clip_edit", "gen_character"])
 @pytest.mark.parametrize("outside", ["elsewhere", "out/../elsewhere"])
 def test_an_editor_out_dir_outside_the_out_folder_is_refused_before_a_browser_opens(
@@ -875,6 +969,52 @@ def test_an_editor_out_dir_outside_the_out_folder_is_refused_before_a_browser_op
     assert reached == []
 
 
+FILE_OUT_DIR_CALLS = {
+    "flow_download": {"project_id": "P", "media_id": "M"},
+    "clip_download": {"project_id": "P", "media_id": "M"},
+    "clip_reconcile": {"project_id": "P"},
+    "scene_download": {"project_id": "P", "scene_id": "S"},
+}
+
+
+def _file_writing_backend(monkeypatch, tmp_path):
+    """Every tool that writes a file or a ledger, with its driver stubbed: records what got past the guard."""
+    reached = []
+
+    async def fake_with(self, fn):
+        reached.append("browser")
+        return await fn(object())
+
+    async def fake_download(session, project_id, media_id, target):
+        reached.append(("flow_download", str(target)))
+        return target / "clip.mp4"
+
+    async def fake_rendition(session, project_id, media_id, quality, target, workflow_id=None):
+        reached.append(("clip_download", str(target)))
+        return target / "clip_1080p.mp4"
+
+    async def fake_scene_download(session, project_id, scene_id, out_dir):
+        reached.append(("scene_download", str(out_dir)))
+        return {"path": str(out_dir / "film.mp4")}
+
+    def fake_needs_flow(project_id, out_dir):
+        reached.append(("clip_reconcile", str(out_dir)))
+        return False
+
+    async def fake_reconcile(session, project_id, out_dir):
+        return []
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.download_mod, "download", fake_download)
+    monkeypatch.setattr(mcp_server.clips_mod, "download_rendition", fake_rendition)
+    monkeypatch.setattr(mcp_server.clips_mod, "reconcile_needs_flow", fake_needs_flow)
+    monkeypatch.setattr(mcp_server.clips_mod, "reconcile_editor", fake_reconcile)
+    monkeypatch.setattr(mcp_server.scenes_mod, "download", fake_scene_download)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+    return reached
+
+
+@pytest.mark.parametrize("tool", sorted(FILE_OUT_DIR_CALLS))
 @pytest.mark.parametrize(
     ("out_dir", "reason"),
     [
@@ -883,28 +1023,16 @@ def test_an_editor_out_dir_outside_the_out_folder_is_refused_before_a_browser_op
         ("out/films/ledger.jsonl", "must be a folder"),
     ],
 )
-def test_flow_download_refuses_an_out_dir_outside_the_out_folder(monkeypatch, tmp_path, out_dir, reason):
-    """Plan I T1. Every other tool that writes a file (scene_download, clip_download, gen_character) runs its
-    out_dir through _editor_out_dir; flow_download took any path at all, so an agent could drop a clip anywhere
-    the user can write and, on a name collision, overwrite what was there (CLAUDE.md rule 5)."""
-    reached = []
-
-    async def fake_with(self, fn):
-        reached.append("browser")
-        return await fn(object())
-
-    async def fake_download(session, project_id, media_id, target):
-        reached.append(("download", str(target)))
-        return target / "clip.mp4"
-
-    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
-    monkeypatch.setattr(mcp_server.download_mod, "download", fake_download)
-    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+def test_a_tool_that_writes_refuses_an_out_dir_outside_the_out_folder(
+    monkeypatch, tmp_path, tool, out_dir, reason
+):
+    """Plan I T1 and review 2026-09-18. A file dropped outside out/ escapes rule 5, and a LEDGER outside it is
+    worse: `_spend_once` only sweeps ledgers under the out folder, so a job_id recorded elsewhere would never
+    stop the second spend. clip_download and clip_reconcile were both missing this."""
+    reached = _file_writing_backend(monkeypatch, tmp_path)
 
     async def fn(s):
-        return await s.call_tool(
-            "flow_download", {"project_id": "P", "media_id": "M", "out_dir": str(tmp_path / out_dir)}
-        )
+        return await s.call_tool(tool, FILE_OUT_DIR_CALLS[tool] | {"out_dir": str(tmp_path / out_dir)})
 
     text = _texts([with_client(fn)])[0]
     assert reason in text, text
@@ -1408,8 +1536,11 @@ class _OfflineSession:
     project_url = staticmethod(FlowSession.project_url)
 
 
-def _offline_backend(monkeypatch, frames_for):
-    """Swap only the browser out: capture runs the navigation, then answers with recorded rpc payloads."""
+def _offline_backend(monkeypatch, frames_for, out_dir=None):
+    """Swap only the browser out: capture runs the navigation, then answers with recorded rpc payloads.
+
+    `out_dir` is for the tools that now insist their out_dir sits inside the server's out folder: a test working
+    in tmp_path has to hand that tmp_path over as the out folder (review 2026-09-18)."""
     session = _OfflineSession()
 
     async def fake_capture(s, action, *, settle):
@@ -1421,7 +1552,7 @@ def _offline_backend(monkeypatch, frames_for):
 
     monkeypatch.setattr(reader, "capture", fake_capture)
     monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
-    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=out_dir or Path("out")))
     return session
 
 
@@ -1610,7 +1741,7 @@ def test_clip_reconcile_names_the_ledger_it_read_so_an_empty_answer_is_not_ambig
         seen.append(out_dir)
         return []
 
-    _offline_backend(monkeypatch, lambda url: {})
+    _offline_backend(monkeypatch, lambda url: {}, out_dir=tmp_path)
     monkeypatch.setattr(mcp_server.clips_mod, "reconcile_editor", fake_reconcile)
 
     async def fn(s):
@@ -1671,7 +1802,9 @@ def test_clip_reconcile_opens_no_browser_when_no_job_can_be_judged_here(monkeypa
         raise AssertionError("clip_reconcile opened a browser with nothing to judge")
 
     monkeypatch.setattr(mcp_server.Backend, "_with", no_browser)
-    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    # The ledger a reconcile reads has to live under the server's out folder now (review 2026-09-18), so the
+    # backend is given this tmp path as its own out folder rather than the repo's.
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
 
     async def fn(s):
         return await s.call_tool("clip_reconcile", {"project_id": "P", "out_dir": str(tmp_path)})
@@ -1707,7 +1840,7 @@ def test_clip_reconcile_opens_the_browser_when_a_job_of_this_project_can_be_judg
         return [{"job_id": "j", "verdict": "unknown", "session": session}]
 
     monkeypatch.setattr(mcp_server.Backend, "_with", browser)
-    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
     monkeypatch.setattr(mcp_server.clips_mod, "reconcile_editor", fake_reconcile)
 
     async def fn(s):

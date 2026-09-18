@@ -35,6 +35,9 @@ from video.session import FlowSession
 # Left empty, gflow lets Flow reuse the composer's last model (cli_video.py:185-196), so the price was unknowable.
 VIDEO_DEFAULT_MODEL = "omni-flash"
 OMNI_FLASH_SECONDS = 10
+# The one cell an end frame has been paid for: 15 credits, 119 s, measured 2026-09-18 (job plan-i-endframe-1).
+END_FRAME_MODEL = "omni-flash"
+END_FRAME_SECONDS = 10
 
 
 MEDIA_KINDS = ("image", "video")
@@ -278,8 +281,8 @@ class Backend:
         return await self._with(lambda s: reader.tools(s, project_id))
 
     async def download(self, project_id: str, media_id: str, out_dir: str | None = None) -> str:
-        # The last tool that wrote a file wherever it was pointed: a name collision outside out/ overwrites
-        # footage nothing can bring back (CLAUDE.md rule 5, review 2026-09-18).
+        # `download._write_new` refuses to clobber an existing file, so the hazard here is not overwriting: it is
+        # that the writer happily MAKES directories, dropping media anywhere on the disk (CLAUDE.md rule 5).
         target = self._editor_out_dir(out_dir)
         return str(await self._with(lambda s: download_mod.download(s, project_id, media_id, target)))
 
@@ -404,7 +407,7 @@ class Backend:
         out_dir: str | None = None,
         workflow_id: str | None = None,
     ) -> str:
-        target = Path(out_dir) if out_dir else self.out_dir
+        target = self._editor_out_dir(out_dir)
         return str(
             await self._with(
                 lambda s: clips_mod.download_rendition(
@@ -414,7 +417,9 @@ class Backend:
         )
 
     async def clip_reconcile(self, project_id: str, out_dir: str | None = None) -> dict[str, Any]:
-        target = Path(out_dir) if out_dir else self.out_dir
+        # A ledger outside the out folder is worse than a stray file: `_spend_once` sweeps only what lives under
+        # out/, so a job_id written elsewhere would never stop the second spend (review 2026-09-18).
+        target = self._editor_out_dir(out_dir)
         ledger = target / "ledger.jsonl"
         # jobs [] reads as "clean" only next to the ledger it came from: a missing file also yields [].
         found = {"ledger": str(ledger.resolve()), "ledger_exists": ledger.exists()}
@@ -1108,11 +1113,15 @@ async def gen_t2v(
     name="gen_i2v",
     description=(
         "Image (first frame, optionally a last frame too) to video via gflow. It spends credits and is ledgered, "
-        "both forms measured 2026-09-18 at omni-flash 10 s x1, the default when model is omitted: a start frame "
-        "alone = 15 credits in 105 s, and start + end_frame = 15 credits in 119 s. Pass end_frame to interpolate "
-        "between two local images: Flow takes that on its own interpolation submit, and the measured clip did "
-        "begin and end on the frames given (its first frame differed from the input by 3.4 of 255, its last by "
-        "8.0, while either input against the other's end read about 50). Both runs that finished did so on gflow "
+        "both forms measured once each on 2026-09-18 at omni-flash 10 s x1, the default when model is omitted: a "
+        "start frame alone = 15 credits in 105 s, and start + end_frame = 15 credits in 119 s. Those two runs used "
+        "different images and prompts, so read each time on its own, not the gap between them. Pass end_frame to interpolate "
+        "between two local images, at omni-flash 10 s only, which is the cell that was priced: any other model or "
+        "length is refused, because Flow picks its interpolation model by cohort and that run has never been "
+        "paid for here. The measured clip did begin and end on the frames given: over its 240 frames the one "
+        "closest to the end image IS the last (1.9 of 255, converging 10.0, 9.1, 8.0, 6.2, 3.9, 1.9 over the "
+        "final six), the one closest to the start image is frame 1 (2.1), and either image against the other "
+        "end of the clip reads about 50. Both runs that finished did so on gflow "
         "0.78.0; every attempt before it died in Flow's frame picker and spent nothing. PASS aspect, and match it "
         "to your images: leaving it out means 9:16, gflow's own default, and Flow CROPS a frame of another shape "
         "to fit, which pushed the subject of a 16:9 photo half out of the left edge. Allow 2-5 min."
@@ -1130,6 +1139,16 @@ async def gen_i2v(
     duration: int | None = None,
 ) -> str:
     _require(initial_frame, "initial_frame")
+    # One run priced one cell. gflow gates --end-frame on nothing and picks its interpolation model by cohort, so
+    # any other model or length is a submit nobody here has paid for once (review 2026-09-18).
+    priced = (model or VIDEO_DEFAULT_MODEL) == END_FRAME_MODEL and duration in (None, END_FRAME_SECONDS)
+    if end_frame and not priced:
+        raise ValueError(
+            f"end_frame is measured only for {END_FRAME_MODEL} at {END_FRAME_SECONDS} s "
+            f"(15 credits, 2026-09-18); asked for {model or VIDEO_DEFAULT_MODEL} at {duration or 'the default'} s. "
+            "Flow picks a different interpolation model per cohort, so that run's price is unknown: leave model "
+            "and duration out, or ask the owner to price the one you want."
+        )
     return await _gen(
         "i2v",
         prompt=prompt,
