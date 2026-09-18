@@ -58,15 +58,20 @@ def _element(tag: str, reason: str, **extra: Any) -> Check:
 
 
 def editor_target(records: list[dict[str, Any]]) -> str | None:
-    """Newest finished video to open the clip editor on.
+    """Newest finished video ON THE GRID to open the clip editor on.
 
     A picture or a job still rendering opens an editor that cannot run extend or an Omni edit, so it
-    would report drift that is really just the wrong media.
+    would report drift that is really just the wrong media. So does a record the grid does not list:
+    measured 2026-09-18, /edit/<84d40891>, the inner record of a clip the grid shows under another id,
+    renders no flow-scene-builder at all, and the canary called that drift twice in a row.
     """
     ready = [
         record
         for record in records
-        if record.get("kind") == "video" and record.get("status") == 3 and record.get("id")
+        if record.get("kind") == "video"
+        and record.get("status") == 3
+        and record.get("id")
+        and record.get("listed") is not False
     ]
     if not ready:
         return None

@@ -78,6 +78,19 @@ def test_the_editor_target_is_the_newest_finished_video():
     assert canary.editor_target([]) is None
 
 
+def test_the_editor_target_ignores_a_record_the_grid_does_not_list():
+    """Measured 2026-09-18: the canary opened /edit/<84d40891>, a finished video record carrying
+    `listed: False`, and reported flow-scene-builder as drifted, twice. That media is not on the grid (it is the
+    inner record of the clip the grid shows as 5a21e5a8), and Flow renders no clip editor for it. Its own
+    docstring already warned that the wrong media reads as drift, but the filter never looked at `listed`."""
+    records = [
+        {"id": "listed-older", "kind": "video", "status": 3, "created": 10, "listed": True},
+        {"id": "inner-newest", "kind": "video", "status": 3, "created": 40, "listed": False},
+    ]
+    assert canary.editor_target(records) == "listed-older"
+    assert canary.editor_target([records[1]]) is None
+
+
 def test_a_project_with_no_video_skips_the_editor_check_instead_of_failing_it():
     observed = {**HEALTHY, "custom_elements": ["flow-project-page", "flow-prompt-box"], "editor": None}
     editor = [f for f in canary.compare(observed) if f["name"] == "flow-scene-builder element"]
