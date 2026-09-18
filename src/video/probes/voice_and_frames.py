@@ -44,8 +44,26 @@ MEASURED 2026-09-18 on project 118aece2, five runs, $0:
   add_photo_alternate. Reading button TEXT alone missed it entirely in the first pass.
 - `Save to Project` is a right-click item on a scene timeline clip: Copy, Paste, Save to Project, Download,
   Delete (unchanged since 2026-09-17).
-- Still unmeasured, and deliberately so: what either save leaves behind in the listing, and what a generation
-  with a voice costs. Both need a click that this probe refuses to make.
+MEASURED 2026-09-18, second pass, the clicks themselves, still $0 (balance 119 before and after):
+
+- **Attaching a preset to a character** fires rpc `rzMKMb` with
+  `[[<project id>, <entity id>, None, [1, None, [None, [[None, '<voice, lowercased>']]]]], [['entity_info...`,
+  a field-masked character update. The character page then reads `voice_selection leda` and grows a
+  `play_arrow` and a `Remove` button, which is the clear-voice path.
+- **Typing a performance turns the picker into a voice MAKER**: a `Voice name` field appears, prefilled
+  `<Preset> custom`, and the footer swaps `Add to character` for `Reset` + `Save new voice`. Selecting the voice
+  with text in those boxes fires rpc `no0P6`,
+  `[[[<sample>, [[<preset>, <name>]], 'gemini_v4s_tts_flow', <performance>, 2]], [..., <project id>]]`, which is
+  the synthesis behind Preview. **Open question**: the `Save new voice` click itself produced NO batchexecute
+  traffic in the captured window, the reopened picker still lists exactly the 30 presets, and the character page
+  still read `Select a voice`, so where a saved voice lives is not established. The dialog's own project
+  dropdown points at another project, which is the first thing to try next.
+- **`Save frame`** fires rpc `maseQ` and leaves an IMAGE on the grid titled `Saved frame from <clip title>`
+  (measured: `d1d71a58...` at 15:36:21). It does not appear in a listing read seconds later: Flow indexed it
+  about 40 s after the click, so a driver must poll rather than read once.
+- **`Save to Project`** fires rpc `Sc7aEb` with `[<clip id>, None, None, <project id>]` and puts the scene's clip
+  on the grid as a new media (measured: `d0e23b3b...`, video, listed).
+- Still unmeasured: what a generation with a voice costs, which needs a paid run the owner has approved.
 """
 
 from __future__ import annotations
@@ -401,6 +419,59 @@ async def act_setvoice(session: FlowSession, project: str, spec: str, stamp: str
     }
 
 
+async def act_addvoice(session: FlowSession, project: str, spec: str, stamp: str) -> dict[str, Any]:
+    """Attach a PRESET to a character, typing nothing: the footer stays 'Add to character' only while the
+    performance box is empty, so this is the plain attach path a generation needs. spec is `<entity>:<Voice>`."""
+    entity, _, voice = spec.partition(":")
+    page = session.page
+    await session.goto(f"{session.project_url(project)}/character/{entity}", ready=characters_mod.EDIT_PAGE)
+    await page.wait_for_timeout(2_500)
+    before_buttons = await page.evaluate(_TEXT_JS, "button")
+    opener = page.get_by_role("button", name=re.compile("select a voice|voice", re.IGNORECASE)).first
+    _safe((await opener.inner_text()).strip(), "opening the voice selector")
+    await opener.click(timeout=10_000)
+    await page.wait_for_timeout(2_000)
+    row = page.locator(f"{OVERLAY} [role=option], {OVERLAY} button").filter(has_text=voice).first
+    steps = 0
+    while not await row.count() and steps < 12:
+        moved = await page.evaluate(
+            "(sel) => { const p = document.querySelector(sel);"
+            "  const box = p && [...p.querySelectorAll('*')].find(e => e.scrollHeight > e.clientHeight + 20);"
+            "  if (!box) return null; const was = box.scrollTop; box.scrollTop = was + box.clientHeight;"
+            "  return [was, Math.round(box.scrollTop)]; }",
+            OVERLAY,
+        )
+        await page.wait_for_timeout(700)
+        steps += 1
+        if not moved or moved[0] == moved[1]:
+            break
+    if not await row.count():
+        return {"error": f"no voice row named {voice!r} after {steps} scrolls"}
+    traffic = Traffic(session, None).start()
+    await row.click(timeout=8_000)
+    await page.wait_for_timeout(1_500)
+    commit = page.get_by_role("button", name=re.compile("add to character", re.IGNORECASE)).first
+    if not await commit.count():
+        return {"error": "the footer no longer offers 'Add to character'"}
+    _safe((await commit.inner_text()).strip(), "attaching the voice")
+    await commit.click(timeout=10_000)
+    await page.wait_for_timeout(4_000)
+    seen = await traffic.stop()
+    await session.goto(f"{session.project_url(project)}/character/{entity}", ready=characters_mod.EDIT_PAGE)
+    await page.wait_for_timeout(3_000)
+    after_buttons = await page.evaluate(_TEXT_JS, "button")
+    return {
+        "entity_id": entity,
+        "voice": voice,
+        "scrolls": steps,
+        "rpcids": sorted({r["rpcids"] for r in seen["requests"] if r["rpcids"]}),
+        "requests": seen["requests"][:6],
+        "replies": seen["replies"][:6],
+        "button_changed": sorted(set(after_buttons) - set(before_buttons)),
+        "shot": await _shot(page, stamp, "voice_attached"),
+    }
+
+
 async def act_saveframe(session: FlowSession, project: str, media: str, stamp: str) -> dict[str, Any]:
     """Click the clip editor's icon-only 'Save frame' and see what the project gains."""
     page = session.page
@@ -483,12 +554,20 @@ async def main() -> None:
     async with FlowSession(args.profile) as session:
         media = args.media
         scene_id = args.scene
-        if ("editor" in args.actions and not media) or ("clipmenu" in args.actions and not scene_id):
+        names = {a.partition("=")[0] for a in args.actions}
+        wants_media = bool(names & {"editor", "saveframe"}) and not media
+        wants_scene = bool(names & {"clipmenu", "saveclip"}) and not scene_id
+        if wants_media or wants_scene:
             listing = await reader.project(session, args.project, versions=True)
             media = media or _newest_listed_video(listing.get("versions") or [])
             if not scene_id:
+                # A scene with no clip has nothing to right-click, and the acceptance runs leave empty ones behind.
                 found = await scenes.list_scenes(session, args.project)
-                scene_id = found[0]["scene_id"] if found else None
+                listing = await scenes._listing(session, args.project)
+                with_clips = [
+                    s2["scene_id"] for s2 in found if scenes.clips_from_listing(listing, s2["scene_id"])
+                ]
+                scene_id = with_clips[0] if with_clips else (found[0]["scene_id"] if found else None)
             report["picked"] = {"media": media, "scene": scene_id}
         for action in args.actions:
             name, _, value = action.partition("=")
@@ -504,6 +583,8 @@ async def main() -> None:
                     record["result"] = await act_mention(session, args.project, stamp)
                 elif name == "setvoice":
                     record["result"] = await act_setvoice(session, args.project, value, stamp)
+                elif name == "addvoice":
+                    record["result"] = await act_addvoice(session, args.project, value, stamp)
                 elif name == "saveframe":
                     record["result"] = await act_saveframe(session, args.project, value or media, stamp)
                 elif name == "saveclip":
