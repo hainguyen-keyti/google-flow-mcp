@@ -22,6 +22,10 @@ from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
 EDITOR = "flow-scene-builder"
+# Measured 2026-09-18: a saved frame reached the grid about 40 s after the click, so the wait is generous
+# and the step is long enough that a listing read (10 s of browser work) is not run back to back.
+INDEX_WAIT_S = 90.0
+INDEX_STEP_S = 5.0
 RENDITIONS = {"gif": "270p", "720p": "720p", "1080p": "1080p", "4k": "4K"}
 DONE_STATUS = 3
 
@@ -553,3 +557,70 @@ async def edit(
     return await _generate_from_editor(
         session, project_id, media_id, prompt, kind="edit", out_dir=out_dir, job_id=job_id, wait=wait
     )
+
+
+async def media_ids(session: FlowSession, project_id: str) -> dict[str, dict[str, Any]]:
+    """Every media the grid lists, by id, so a driver can tell what an action added."""
+    listing = await reader.project(session, project_id)
+    return {row["id"]: row for row in listing["media"]}
+
+
+async def wait_for_new_media(
+    session: FlowSession,
+    project_id: str,
+    known: dict[str, dict[str, Any]],
+    *,
+    what: str,
+    wait_s: float | None = None,
+    step_s: float | None = None,
+) -> dict[str, Any]:
+    """The media an action just created, waited for rather than read once.
+
+    Measured 2026-09-18: 'Save frame' fired its rpc and the grid showed the image about 40 s later, so a listing
+    read seconds after the click sees nothing and a driver that judges there reports a failure that did not
+    happen. Flow's own indexing is the slow part, not the click.
+    """
+    # Read at call time, not bound as a default: a default freezes at import and no test could shorten the wait.
+    wait_s = INDEX_WAIT_S if wait_s is None else wait_s
+    step_s = INDEX_STEP_S if step_s is None else step_s
+    waited = 0.0
+    while True:
+        found = await media_ids(session, project_id)
+        fresh = [row for media_id, row in found.items() if media_id not in known]
+        if fresh:
+            return max(fresh, key=lambda row: row.get("created") or 0)
+        if waited >= wait_s:
+            raise RuntimeError(
+                f"{what}: no new media reached the project listing within {wait_s:.0f}s. The click may still "
+                "have worked, so read flow_media before trying again rather than repeating the action."
+            )
+        await asyncio.sleep(step_s)
+        waited += step_s
+
+
+async def save_frame(session: FlowSession, project_id: str, media_id: str) -> dict[str, Any]:
+    """Save the frame the clip editor is showing as an image of the project, and answer its media id.
+
+    Measured 2026-09-18: the control is ICON-ONLY, with the accessible name 'Save frame' (icon
+    add_photo_alternate), it fires rpc maseQ, and the grid then holds an image titled
+    'Saved frame from <clip title>'. Free.
+    """
+    page = session.page
+    known = await media_ids(session, project_id)
+    await session.goto(f"{session.project_url(project_id)}/edit/{media_id}", ready=EDITOR)
+    await page.wait_for_timeout(3_000)
+    button = page.get_by_role("button", name=re.compile("^save frame$", re.IGNORECASE)).first
+    if not await button.count():
+        raise LookupError(
+            f"the editor of {media_id} offers no 'Save frame' control; open flow_media and check the clip exists"
+        )
+    await button.click(timeout=10_000)
+    await page.wait_for_timeout(2_000)
+    saved = await wait_for_new_media(session, project_id, known, what="save_frame")
+    return {
+        "media_id": saved["id"],
+        "kind": saved.get("kind"),
+        "title": saved.get("title"),
+        "source_media_id": media_id,
+        "rpcids": ["maseQ"],
+    }

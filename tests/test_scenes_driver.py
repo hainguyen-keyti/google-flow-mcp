@@ -2996,3 +2996,42 @@ def test_download_gives_the_browser_twice_its_own_limits_so_its_own_errors_come_
 
     own = scenes.EXPORT_START_MS + scenes.EXPORT_MIN_MS + scenes.HANDOFF_WAIT_MS
     assert asked == [2 * own]
+
+
+def _media_in_turn(answers):
+    rounds = list(answers)
+
+    async def fake_media_ids(session, project_id):
+        return rounds.pop(0) if len(rounds) > 1 else rounds[0]
+
+    return fake_media_ids
+
+
+def test_save_clip_to_project_puts_a_timeline_clip_on_the_grid(monkeypatch):
+    """Measured 2026-09-18: 'Save to Project' in a clip's right-click menu fires rpc Sc7aEb and the clip reaches
+    the grid as a new media (d0e23b3b..., video, listed), after the same indexing lag a saved frame shows."""
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    wanted = _ids(page)[1]
+    seen = {"m1": {"id": "m1", "kind": "video"}}
+    fresh = {"id": "saved-1", "kind": "video", "title": "Wooden sailboat model on desk", "created": 9}
+    monkeypatch.setattr(
+        scenes.clips_mod, "media_ids", _media_in_turn([seen, seen, {**seen, "saved-1": fresh}])
+    )
+    monkeypatch.setattr(scenes.clips_mod, "INDEX_STEP_S", 0.01)
+
+    result = asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, wanted))
+
+    assert page.clicked == ["clip 1 right", "saveSave to Project"]
+    assert result["media_id"] == "saved-1" and result["clip_id"] == wanted
+    assert result["rpcids"] == ["Sc7aEb"]
+    assert _ids(page) == _ids(page), "saving copies a clip, it never changes the timeline"
+
+
+def test_save_clip_to_project_refuses_a_clip_id_that_is_not_on_the_timeline(monkeypatch):
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+
+    with pytest.raises(LookupError, match="not on scene"):
+        asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, "no-such-clip"))
+    assert page.clicked == []

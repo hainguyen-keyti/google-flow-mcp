@@ -1719,3 +1719,98 @@ def test_clip_reconcile_cli_opens_no_browser_when_no_job_can_be_judged_here(monk
     assert result.exit_code == 0, result.output
     assert '"verdict": "skipped"' in result.output
     assert '"project": "q"' in result.output
+
+
+class _SaveFramePage:
+    """The clip editor as measured 2026-09-18: one icon-only button whose accessible name is 'Save frame',
+    and a listing that only shows the new image about forty seconds later."""
+
+    def __init__(self, appears_after: int = 2):
+        self.clicked = 0
+        self.waited_ms = 0
+        self.appears_after = appears_after
+        self.keyboard = _Keyboard()
+
+    async def wait_for_timeout(self, ms):
+        self.waited_ms += ms
+
+    def get_by_role(self, role, name=None):
+        page = self
+
+        class _Button:
+            @property
+            def first(self):
+                return self
+
+            async def count(self):
+                return 1
+
+            async def inner_text(self):
+                return "Save frame"
+
+            async def click(self, timeout=None):
+                page.clicked += 1
+
+        assert role == "button"
+        return _Button()
+
+    def locator(self, selector):
+        return _Clickable()
+
+
+class _SaveFrameSession:
+    def __init__(self, page):
+        self.page = page
+        self.urls = []
+
+    async def goto(self, url, *, ready=None, timeout_ms=60_000):
+        self.urls.append(url)
+
+    project_url = staticmethod(lambda project_id: f"https://flow.google.com/project/{project_id}")
+
+
+def _listings(pages):
+    """reader.project answers each of these in turn, so a test can make the frame show up late."""
+    answers = list(pages)
+
+    async def fake_project(session, project_id, settle=10.0, *, versions=False):
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
+    return fake_project
+
+
+def test_save_frame_waits_for_the_image_flow_indexes_late(monkeypatch):
+    """Measured 2026-09-18: the click fires rpc maseQ and the grid shows 'Saved frame from <clip>' about 40 s
+    later, so a driver that reads the listing once right after the click reports a failure that did not happen."""
+    page = _SaveFramePage()
+    session = _SaveFrameSession(page)
+    old = {"media": [{"id": "m1", "kind": "video", "title": "Red paper boat glides"}]}
+    new = {
+        "media": [
+            {"id": "m1", "kind": "video", "title": "Red paper boat glides"},
+            {"id": "frame-1", "kind": "image", "title": "Saved frame from Red paper boat glides"},
+        ]
+    }
+    monkeypatch.setattr(clips.reader, "project", _listings([old, old, new]))
+    monkeypatch.setattr(clips, "INDEX_STEP_S", 0.01)
+
+    result = asyncio.run(clips.save_frame(session, "P", "m1"))
+
+    assert result["media_id"] == "frame-1"
+    assert result["kind"] == "image"
+    assert page.clicked == 1, "the frame button is clicked exactly once"
+    assert page.waited_ms > 0, "it waits for Flow to index rather than reading once"
+
+
+def test_save_frame_says_so_when_no_image_ever_appears(monkeypatch):
+    page = _SaveFramePage()
+    session = _SaveFrameSession(page)
+    same = {"media": [{"id": "m1", "kind": "video", "title": "Red paper boat glides"}]}
+    monkeypatch.setattr(clips.reader, "project", _listings([same]))
+    # The real wait is 90 s; a test proving the giving-up branch must not pay for it.
+    monkeypatch.setattr(clips, "INDEX_WAIT_S", 0.05)
+    monkeypatch.setattr(clips, "INDEX_STEP_S", 0.01)
+
+    with pytest.raises(RuntimeError, match="no new media"):
+        asyncio.run(clips.save_frame(session, "P", "m1"))
+    assert page.clicked == 1, "a save that produced nothing is never clicked twice"

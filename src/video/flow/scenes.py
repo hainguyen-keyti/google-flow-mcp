@@ -17,6 +17,7 @@ from urllib.parse import parse_qs
 from gflow_cli.api.transports.batchexecute import parse_frames
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from video.flow import clips as clips_mod
 from video.flow import parsers
 from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
@@ -1003,4 +1004,46 @@ async def restore(session: FlowSession, project_id: str, scene_id: str) -> dict[
         "trashed": False,
         "rpcids": sorted(frames),
         "active": sum(1 for s in after if not s["trashed"]),
+    }
+
+
+async def save_clip_to_project(
+    session: FlowSession, project_id: str, scene_id: str, clip_id: str
+) -> dict[str, Any]:
+    """Copy one clip off a scene's timeline onto the project grid, so a later scene can use it as media.
+
+    Measured 2026-09-18: the clip's right-click menu holds Save to Project, the click fires rpc Sc7aEb with
+    [clip_id, None, None, project_id], and the grid gains a media of its own. The timeline is not touched. Free.
+    The listing lags behind the click, which is why the new media is waited for rather than read once.
+    """
+    page = session.page
+    before = await timeline(session, project_id, scene_id)
+    ids = [clip["clip_id"] for clip in before["clips"]]
+    if clip_id not in ids:
+        raise LookupError(
+            f"clip {clip_id} is not on scene {scene_id}'s timeline; scene_clips lists its clip_ids"
+        )
+    index = ids.index(clip_id)
+    known = await clips_mod.media_ids(session, project_id)
+    await _open_scene(session, project_id, scene_id)
+    clips = await _page_agrees(page, len(ids), scene_id)
+    clip = clips.nth(index)
+    await clip.click(button="right", timeout=8_000)
+    await page.wait_for_timeout(1_000)
+    marks = (await clip.get_attribute("class") or "").split()
+    if "selected" not in marks or await page.locator(f"{CLIPS}.selected").count() != 1:
+        raise LookupError(f"right-clicking clip {index} of scene {scene_id} did not select it; not saving")
+    # The item's text runs its icon ligature into the label, as Delete's does ("saveSave to Project").
+    item = page.locator(MENU_ITEM).filter(has_text=re.compile(r"Save to Project\s*$"))
+    await _click_one(page, item, "the Save to Project item of the clip menu")
+    await page.wait_for_timeout(2_000)
+    saved = await clips_mod.wait_for_new_media(session, project_id, known, what="scene_save_clip")
+    return {
+        "scene_id": scene_id,
+        "clip_id": clip_id,
+        "position": index,
+        "media_id": saved["id"],
+        "kind": saved.get("kind"),
+        "title": saved.get("title"),
+        "rpcids": ["Sc7aEb"],
     }
