@@ -61,6 +61,7 @@ from video.flow import characters as characters_mod
 from video.flow import clips as clips_mod
 from video.flow import reader, scenes
 from video.probes._common import OUT_DIR
+from video.probes.scene_editor import Traffic
 from video.session import PROJECT_READY, FlowSession
 
 BOX = "flow-prompt-box [contenteditable='true']"
@@ -310,6 +311,153 @@ async def act_editor(session: FlowSession, project: str, media: str, stamp: str)
     }
 
 
+async def _media_ids(session: FlowSession, project: str) -> set[str]:
+    listing = await reader.project(session, project, versions=True)
+    return {row["id"] for row in listing["media"]} | {row["id"] for row in listing.get("versions") or []}
+
+
+async def act_setvoice(session: FlowSession, project: str, spec: str, stamp: str) -> dict[str, Any]:
+    """Give a character a voice the way the page does it: pick a preset, write the performance, listen-free, and
+    commit with 'Add to character'. Records the rpc traffic so the driver is written against what Flow stores.
+
+    spec is `<entity_id>:<VoiceName>[:<performance text>]`. Nothing here carries a paid word.
+    """
+    entity, _, rest = spec.partition(":")
+    voice, _, rest2 = rest.partition(":")
+    performance, _, wanted_name = rest2.partition("|")
+    performance = performance or "giọng nữ trẻ miền Nam, nhỏ nhẹ, nhí nhảnh, khoảng 20 tuổi"
+    page = session.page
+    await session.goto(f"{session.project_url(project)}/character/{entity}", ready=characters_mod.EDIT_PAGE)
+    await page.wait_for_timeout(2_500)
+    opener = page.get_by_role("button", name=re.compile("select a voice|voice", re.IGNORECASE)).first
+    _safe((await opener.inner_text()).strip(), "opening the voice selector")
+    await opener.click(timeout=10_000)
+    await page.wait_for_timeout(2_000)
+    # The voice list renders a window at a time, exactly like the project grid: Leda sat below the fold and the
+    # first attempt reported "no voice row named 'Leda'". Scroll until the wanted row renders.
+    row = page.locator(f"{OVERLAY} [role=option], {OVERLAY} button").filter(has_text=voice).first
+    steps = 0
+    while not await row.count() and steps < 12:
+        moved = await page.evaluate(
+            "(sel) => { const p = document.querySelector(sel);"
+            "  const box = p && [...p.querySelectorAll('*')].find(e => e.scrollHeight > e.clientHeight + 20);"
+            "  if (!box) return null; const was = box.scrollTop; box.scrollTop = was + box.clientHeight;"
+            "  return [was, Math.round(box.scrollTop)]; }",
+            OVERLAY,
+        )
+        await page.wait_for_timeout(700)
+        steps += 1
+        if not moved or moved[0] == moved[1]:
+            break
+    if not await row.count():
+        return {"error": f"no voice row named {voice!r} after scrolling the selector {steps} times"}
+    traffic = Traffic(session, None).start()
+    await row.click(timeout=8_000)
+    await page.wait_for_timeout(1_200)
+    boxes = page.locator(f"{OVERLAY} textarea")
+    filled = {}
+    for index in range(await boxes.count()):
+        box = boxes.nth(index)
+        placeholder = (await box.get_attribute("placeholder")) or ""
+        text = performance if "performance" in placeholder.lower() else "Xin chào, mình là người dẫn nhé!"
+        await box.fill(text)
+        filled[placeholder[:40]] = text
+    await page.wait_for_timeout(600)
+    before = await _shot(page, stamp, "voice_filled")
+    # Typing a performance turns the dialog into a voice MAKER: a "Voice name" field appears (prefilled
+    # "<Preset> custom") and the footer swaps "Add to character" for "Reset" + "Save new voice". So the commit
+    # button depends on what was typed, and the name field is part of the answer.
+    named = page.locator(f"{OVERLAY} input").filter(has_not=page.locator("[aria-label='Search assets']"))
+    voice_name = None
+    for index in range(await named.count()):
+        value = await named.nth(index).input_value()
+        if value and "custom" in value.lower():
+            if wanted_name:
+                await named.nth(index).fill(wanted_name)
+                value = wanted_name
+            voice_name = value
+    commit = page.get_by_role(
+        "button", name=re.compile("save new voice|add to character", re.IGNORECASE)
+    ).first
+    label = (await commit.inner_text()).strip()
+    _safe(label, "committing the voice")
+    await commit.click(timeout=10_000)
+    await page.wait_for_timeout(4_000)
+    seen = await traffic.stop()
+    await session.goto(f"{session.project_url(project)}/character/{entity}", ready=characters_mod.EDIT_PAGE)
+    await page.wait_for_timeout(3_000)
+    return {
+        "entity_id": entity,
+        "voice": voice,
+        "filled": filled,
+        "voice_name": voice_name,
+        "committed_with": label,
+        "rpcids": sorted({r["rpcids"] for r in seen["requests"] if r["rpcids"]}),
+        "requests": seen["requests"][:6],
+        "replies": seen["replies"][:6],
+        "buttons_after": await page.evaluate(_TEXT_JS, "button"),
+        "shot_before_commit": before,
+        "shot_after": await _shot(page, stamp, "voice_after"),
+    }
+
+
+async def act_saveframe(session: FlowSession, project: str, media: str, stamp: str) -> dict[str, Any]:
+    """Click the clip editor's icon-only 'Save frame' and see what the project gains."""
+    page = session.page
+    before = await _media_ids(session, project)
+    await session.goto(f"{session.project_url(project)}/edit/{media}", ready=clips_mod.EDITOR)
+    await page.wait_for_timeout(3_500)
+    button = page.get_by_role("button", name=re.compile("^save frame$", re.IGNORECASE)).first
+    if not await button.count():
+        return {"error": "no 'Save frame' control on this editor page"}
+    _safe("save frame", "saving a frame")
+    traffic = Traffic(session, None).start()
+    await button.click(timeout=10_000)
+    await page.wait_for_timeout(6_000)
+    seen = await traffic.stop()
+    shot = await _shot(page, stamp, "save_frame")
+    after = await _media_ids(session, project)
+    return {
+        "media": media,
+        "rpcids": sorted({r["rpcids"] for r in seen["requests"] if r["rpcids"]}),
+        "requests": seen["requests"][:6],
+        "new_ids": sorted(after - before),
+        "snackbar": await page.evaluate(_TEXT_JS, "mat-snack-bar-container"),
+        "shot": shot,
+    }
+
+
+async def act_saveclip(session: FlowSession, project: str, scene_id: str, stamp: str) -> dict[str, Any]:
+    """Right-click a timeline clip and take 'Save to Project', then read what the listing gained."""
+    page = session.page
+    before = await _media_ids(session, project)
+    await scenes._open_scene(session, project, scene_id)
+    await page.wait_for_timeout(2_000)
+    clips = page.locator(scenes.CLIPS)
+    if not await clips.count():
+        return {"error": "scene holds no clip"}
+    await clips.first.click(button="right", timeout=10_000)
+    await page.wait_for_timeout(1_500)
+    item = page.locator(MENU_ITEM).filter(has_text=re.compile("save to project", re.IGNORECASE)).first
+    if not await item.count():
+        return {"error": "no 'Save to Project' item in the clip menu"}
+    _safe("save to project", "saving a clip into the project")
+    traffic = Traffic(session, None).start()
+    await item.click(timeout=10_000)
+    await page.wait_for_timeout(6_000)
+    seen = await traffic.stop()
+    shot = await _shot(page, stamp, "save_clip")
+    after = await _media_ids(session, project)
+    return {
+        "scene": scene_id,
+        "rpcids": sorted({r["rpcids"] for r in seen["requests"] if r["rpcids"]}),
+        "requests": seen["requests"][:6],
+        "new_ids": sorted(after - before),
+        "snackbar": await page.evaluate(_TEXT_JS, "mat-snack-bar-container"),
+        "shot": shot,
+    }
+
+
 def _newest_listed_video(records: list[dict[str, Any]]) -> str | None:
     ready = [r for r in records if r.get("kind") == "video" and r.get("status") == 3 and r.get("listed")]
     return max(ready, key=lambda r: r.get("created") or 0)["id"] if ready else None
@@ -343,6 +491,7 @@ async def main() -> None:
                 scene_id = found[0]["scene_id"] if found else None
             report["picked"] = {"media": media, "scene": scene_id}
         for action in args.actions:
+            name, _, value = action.partition("=")
             record: dict[str, Any] = {"action": action, "started": time.strftime("%H:%M:%S")}
             report["actions"].append(record)
             t0 = time.monotonic()
@@ -353,6 +502,12 @@ async def main() -> None:
                     record["result"] = await act_character(session, args.project, args.character, stamp)
                 elif action == "mention":
                     record["result"] = await act_mention(session, args.project, stamp)
+                elif name == "setvoice":
+                    record["result"] = await act_setvoice(session, args.project, value, stamp)
+                elif name == "saveframe":
+                    record["result"] = await act_saveframe(session, args.project, value or media, stamp)
+                elif name == "saveclip":
+                    record["result"] = await act_saveclip(session, args.project, value or scene_id, stamp)
                 elif action == "voicepicker":
                     record["result"] = await act_voicepicker(session, args.project, args.character, stamp)
                 elif action == "clipmenu":
