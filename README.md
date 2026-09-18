@@ -89,7 +89,7 @@ Sinh nội dung, tốn credit (video) hoặc quota (ảnh), luôn cần `--proje
 ```
 uv run video gen t2v "<prompt>" --project <id> --model veo-lite --aspect 16:9 --out out
 uv run video gen r2v "<prompt>" --ref anh.jpg --project <id> --model veo-lite
-uv run video gen i2v anh.png "<prompt>" --project <id>          # Frames picker phía Flow đang hỏng, xem giới hạn
+uv run video gen i2v anh.png "<prompt>" --project <id> --aspect 9:16   # chạy được từ gflow 0.78.0, omni-flash 10 s = 15
 uv run video gen t2i "<prompt>" --project <id> --model nano2 --aspect 16:9
 uv run video gen i2i "<prompt>" --ref anh.jpg --project <id>
 ```
@@ -159,7 +159,7 @@ mặt, tay và món đồ.
 - **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
   `clip_edit`, `agent_send` (có thể tốn). **Cả 6 đã chạy thật qua MCP ngày 2026-09-16**, mỗi tool đúng một lần, số dư
   kẹp hai đầu: t2v omni-flash 15, t2v veo-lite 10, `clip_edit` 20, `clip_extend` 10, `gen_r2v` 12; `agent_send` một
-  tin nhắn thường **0**; `gen_i2v` vẫn hỏng phía gflow ở bước chọn khung đầu, **0** và có dòng sổ `failed`.
+  tin nhắn thường **0**; `gen_i2v` khi đó vẫn hỏng ở bước chọn khung đầu (**0** credit, dòng sổ `failed`); nó chạy được lần đầu ngày 2026-09-18 sau khi nâng gflow lên 0.78.0, **15** credit.
   **`clip_extend` chỉ chạy trên clip Veo**: trên clip omni-flash, Flow hiện mục `Extend (Veo 3.1 - Lite)` xám và tool
   nói thẳng điều đó thay vì chờ hết giờ. Cả 6 tool **bắt buộc `job_id`**: job mới thì id mới, gọi lại cùng job
   thì giữ id. Trước khi mở trình duyệt, MCP từ chối `job_id` đã có BẤT KỲ dòng nào (kể cả `opening`) trong mọi file
@@ -305,8 +305,10 @@ quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần
 
 - `gflow auth login`, `credits`, `character list` của gflow chết trên tài khoản di cư (lane labs). Repo này
   không dùng chúng.
-- `gen i2v` (Frames picker) hỏng 4/4 lần tối 2026-09-12 phía Flow ("frame picker stayed open 15s"),
-  không mất credit khi hỏng. Dùng `gen r2v --ref` cho ảnh tham chiếu.
+- `gen i2v` từng hỏng 5/5 lần ("frame picker stayed open 15s", 0 credit mỗi lần) tới khi nâng gflow lên 0.78.0:
+  bản 0.74.0 sửa picker không commit ở cú bấm đầu và lần chạy lại bám nhầm khung cũ (#792), 0.78.0 sửa tiếp
+  picker không bind được khung vừa upload. Đo 2026-09-18: **15 credit**, 105 s, clip 10,005 s, khung đầu đúng
+  ảnh đưa vào. **Không truyền `--aspect` thì tỉ lệ là tỉ lệ còn sót của lần chạy trước**: ảnh 16:9 ra clip 9:16.
 - URL trong listing là poster; tải tài sản gốc bằng hậu tố lh3 (`=s0` ảnh, `=m22` rồi `=m18` video).
 - Agent mode bật là Flow lưu theo project và ẩn chip settings của composer; tắt lại bằng
   `flow agent mode <project> off`.
@@ -325,7 +327,7 @@ quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần
   `scene_restore` chỉ tìm được theo tên (đo 2026-09-15).
 - Giá đo được trên gói PRO: Veo 3.1 Lite 720p 8s = 10 credit, `clip extend` (7 s) = 10, `clip edit` Omni
   1.1 Flash = 20, Omni Flash 10 s = 15, `--count 2` = 20, ảnh Nano Banana 2 = 0, upscale 1080p = 0, r2v Omni
-  Flash 8 s = 12 (đo 2026-09-15, 292 s đầu cuối qua MCP). `gen i2v` chưa thành công lần nào nên chưa có giá.
+  Flash 8 s = 12 (đo 2026-09-15, 292 s đầu cuối qua MCP), `gen i2v` omni-flash 10 s = 15 (đo 2026-09-18 qua MCP, 105 s).
   Bảng giá chính thức của Flow lệch ở hai chỗ: Omni Flash Edit ghi **40** trong khi đo được 20 nhiều lần, và **4K
   chỉ có từ gói Ultra** (50 credit), tài khoản này là Pro. Mô tả tool nói cả hai con số, và `clip_edit` KHÔNG đọc
   dòng giá trước khi bấm (khác `gen_character`), nên chốt chặn duy nhất của nó là số dư đọc trước và sau.

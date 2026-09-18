@@ -1099,10 +1099,12 @@ async def gen_t2v(
 @server.tool(
     name="gen_i2v",
     description=(
-        "Image (first frame, optional last frame) to video via gflow. It spends credits and is ledgered; the "
-        "price is unmeasured, because every attempt so far failed at Flow's frame picker and spent nothing, so "
-        "prefer gen_r2v with the frame as a reference. Uses omni-flash for 10 s when model is omitted. Allow 2-5 "
-        "min." + _JOB_ID_RULE
+        "Image (first frame, optional last frame) to video via gflow. It spends credits and is ledgered: "
+        "omni-flash 10 s x1 = 15 credits (the default when model is omitted), measured 2026-09-18 on the first "
+        "run that ever finished, in 105 s. Every attempt before that died in Flow's frame picker and spent "
+        "nothing, which gflow 0.78.0 fixed. PASS aspect: the composer keeps whatever ratio the last run left, so "
+        "a 16:9 photo came back as a 9:16 clip when aspect was omitted; name the one you want. Allow 2-5 min."
+        + _JOB_ID_RULE
     ),
 )
 async def gen_i2v(
