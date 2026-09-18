@@ -3020,12 +3020,51 @@ def test_save_clip_to_project_puts_a_timeline_clip_on_the_grid(monkeypatch):
     )
     monkeypatch.setattr(scenes.clips_mod, "INDEX_STEP_S", 0.01)
 
+    async def fake_capture(session_, action, *, settle):
+        await action()
+        return {"Sc7aEb": [[]]}
+
+    monkeypatch.setattr(scenes, "capture", fake_capture)
+
     result = asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, wanted))
 
     assert page.clicked == ["clip 1 right", "saveSave to Project"]
     assert result["media_id"] == "saved-1" and result["clip_id"] == wanted
     assert result["rpcids"] == ["Sc7aEb"]
     assert _ids(page) == _ids(page), "saving copies a clip, it never changes the timeline"
+
+
+def test_save_clip_to_project_reports_the_rpcs_it_heard_and_still_trusts_the_listing(monkeypatch):
+    """The answer names what was overheard rather than a constant. It is NOT a gate: a live run on 2026-09-18
+    put the copy on the grid without Sc7aEb showing up in the window after the click, so requiring it refused a
+    save that had worked. The listing is the evidence."""
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    wanted = _ids(page)[1]
+    seen = {"m1": {"id": "m1", "kind": "video"}}
+    fresh = {"id": "saved-1", "kind": "video", "title": "Wooden sailboat model on desk", "created": 9}
+    monkeypatch.setattr(scenes.clips_mod, "media_ids", _media_in_turn([seen, {**seen, "saved-1": fresh}]))
+    monkeypatch.setattr(scenes.clips_mod, "INDEX_STEP_S", 0.01)
+    heard = {"Sc7aEb": [[]], "WuwhI": [[]]}
+
+    async def fake_capture(session_, action, *, settle):
+        await action()
+        return heard
+
+    monkeypatch.setattr(scenes, "capture", fake_capture)
+
+    result = asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, wanted))
+
+    assert result["rpcids"] == ["Sc7aEb", "WuwhI"]
+
+    heard.clear()
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    monkeypatch.setattr(scenes.clips_mod, "media_ids", _media_in_turn([seen, {**seen, "saved-1": fresh}]))
+
+    quiet = asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, _ids(page)[1]))
+
+    assert quiet["media_id"] == "saved-1" and quiet["rpcids"] == []
 
 
 def test_save_clip_to_project_ignores_an_image_that_landed_during_the_wait(monkeypatch):
@@ -3043,6 +3082,12 @@ def test_save_clip_to_project_ignores_an_image_that_landed_during_the_wait(monke
         _media_in_turn([seen, {**seen, "frame-9": frame}, {**seen, "frame-9": frame, "saved-1": clip}]),
     )
     monkeypatch.setattr(scenes.clips_mod, "INDEX_STEP_S", 0.01)
+
+    async def fake_capture(session_, action, *, settle):
+        await action()
+        return {"Sc7aEb": [[]]}
+
+    monkeypatch.setattr(scenes, "capture", fake_capture)
 
     result = asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, wanted))
 

@@ -44,6 +44,8 @@ HANDOFF_WAIT_MS = 30_000
 OVERLAY = ".cdk-overlay-pane button, [role=dialog] button"
 ROW = ".cdk-overlay-pane button[role=option]"
 CLIPS = ".timeline-contents > .clip"
+# The copy request Flow sends when a timeline clip is saved to the project (measured 2026-09-18).
+SAVE_CLIP_RPC = "Sc7aEb"
 MENU_ITEM = "[role=menuitem]"
 # Measured 2026-09-17: five 8 s clips at 816 px each ran far past a 1280 px wide page; two zoom-outs fit all five.
 ZOOM_OUT_MAX = 4
@@ -1035,8 +1037,11 @@ async def save_clip_to_project(
         raise LookupError(f"right-clicking clip {index} of scene {scene_id} did not select it; not saving")
     # The item's text runs its icon ligature into the label, as Delete's does ("saveSave to Project").
     item = page.locator(MENU_ITEM).filter(has_text=re.compile(r"Save to Project\s*$"))
-    await _click_one(page, item, "the Save to Project item of the clip menu")
-    await page.wait_for_timeout(2_000)
+    # Measured 2026-09-18: the copy reaches the grid even when Sc7aEb is not heard in the window after the
+    # click, so the listing below is the evidence and these rpcids are only what happened to be overheard.
+    frames = await capture(
+        session, lambda: _click_one(page, item, "the Save to Project item of the clip menu"), settle=6.0
+    )
     saved = await clips_mod.wait_for_new_media(
         session,
         project_id,
@@ -1051,5 +1056,5 @@ async def save_clip_to_project(
         "media_id": saved["id"],
         "kind": saved.get("kind"),
         "title": saved.get("title"),
-        "rpcids": ["Sc7aEb"],
+        "rpcids": sorted(frames),
     }

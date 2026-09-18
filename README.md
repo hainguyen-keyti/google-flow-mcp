@@ -273,7 +273,9 @@ mặt, tay và món đồ.
   đọc một lần rồi kết luận. `clip_save_frame` còn một bẫy đắt: trang sửa vẽ clip vào **canvas** khoảng 5 s sau khi
   sẵn sàng, và body `maseQ` mang chính ảnh PNG của canvas đó, nên bấm sớm là lưu ra **ảnh đen** (đo: YAVG 0 trong
   khi khung đầu clip là 111, tool vẫn báo thành công và `flow_download` vẫn tải được). Tool giờ chờ canvas sáng
-  rồi mới bấm, trang không bao giờ sáng thì từ chối; lần đo lại: 53 s, ảnh 372 KB, YAVG 113,6.
+  rồi mới bấm, trang không bao giờ sáng thì từ chối; lần đo lại: 53 s, ảnh 372 KB, YAVG 113,6. **Và nó không phải
+  lúc nào cũng chạy**: 5 cú bấm thật ngày 2026-09-18 chỉ ra 3 ảnh, 2 lần Flow hiện snackbar "Saving frame..." rồi
+  không đẻ ra media nào trong 160 s. Tool nói rõ rơi vào ca nào thay vì bịa media id.
 - **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
   hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
 

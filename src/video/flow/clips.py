@@ -606,6 +606,27 @@ async def wait_for_new_media(
 
 
 SAVED_FRAME_TITLE = "Saved frame from"
+NOTICE_WAIT_S = 10.0
+NOTICE_STEP_S = 0.5
+# Measured 2026-09-18: a click Flow accepts raises this notice at once. Its absence is the only thing that tells
+# a slow save apart from a click that started nothing, and one live run in three started nothing.
+_SNACKBAR_JS = (
+    "() => [...document.querySelectorAll('[class*=snack], [role=alert], [class*=toast]')]"
+    "  .map(e => (e.innerText || '').trim()).filter(Boolean).slice(0, 5)"
+)
+
+
+async def _save_started(page: Any) -> bool:
+    wait_s = NOTICE_WAIT_S
+    step_s = NOTICE_STEP_S
+    for _ in range(max(1, round(wait_s / step_s)) if step_s else 1):
+        for notice in await page.evaluate(_SNACKBAR_JS):
+            if "saving frame" in notice.lower():
+                return True
+        await page.wait_for_timeout(int(step_s * 1_000))
+    return False
+
+
 PAINT_WAIT_S = 30.0
 PAINT_STEP_S = 1.0
 # The editor draws the clip into a canvas; a blank one reads 64 KB as a png data url and a real frame 2.7 MB,
@@ -660,20 +681,30 @@ async def save_frame(session: FlowSession, project_id: str, media_id: str) -> di
             f"the editor of {media_id} offers no 'Save frame' control; open flow_media and check the clip exists"
         )
     await button.click(timeout=10_000)
-    await page.wait_for_timeout(2_000)
-    saved = await wait_for_new_media(
-        session,
-        project_id,
-        known,
-        what="save_frame",
-        wants=lambda row: (
-            row.get("kind") == "image" and (row.get("title") or "").startswith(SAVED_FRAME_TITLE)
-        ),
-    )
+    started = await _save_started(page)
+    try:
+        saved = await wait_for_new_media(
+            session,
+            project_id,
+            known,
+            what="save_frame",
+            wants=lambda row: (
+                row.get("kind") == "image" and (row.get("title") or "").startswith(SAVED_FRAME_TITLE)
+            ),
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"{exc} Flow accepted the click and raised its 'Saving frame' notice, so the image is probably "
+            "still coming: read flow_media rather than clicking again."
+            if started
+            else f"{exc} Flow never started the save: no 'Saving frame' notice appeared after the click."
+        ) from None
+    # No rpcids here on purpose: the upload that carries the picture (maseQ) lands long after the click, so the
+    # listing row below is the evidence, and naming an rpc nobody waited for would be a claim, not a reading.
     return {
         "media_id": saved["id"],
         "kind": saved.get("kind"),
         "title": saved.get("title"),
         "source_media_id": media_id,
-        "rpcids": ["maseQ"],
+        "save_started": started,
     }

@@ -1725,7 +1725,13 @@ class _SaveFramePage:
     """The clip editor as measured 2026-09-18: one icon-only button whose accessible name is 'Save frame',
     and a listing that only shows the new image about forty seconds later."""
 
-    def __init__(self, appears_after: int = 2, paints_after: int = 1, has_button: bool = True):
+    def __init__(
+        self,
+        appears_after: int = 2,
+        paints_after: int = 1,
+        has_button: bool = True,
+        notice: str | None = "Saving frame...",
+    ):
         self.clicked = 0
         self.waited_ms = 0
         self.appears_after = appears_after
@@ -1734,6 +1740,7 @@ class _SaveFramePage:
         # seconds after the page is ready. A click before it paints saves a completely black image.
         self.paints_after = paints_after
         self.has_button = has_button
+        self.notice = notice
         self.brightness_reads = 0
         self.painted_when_clicked = None
 
@@ -1741,6 +1748,8 @@ class _SaveFramePage:
         self.waited_ms += ms
 
     async def evaluate(self, script, arg=None):
+        if "snack" in script:
+            return [self.notice] if self.notice else []
         assert "canvas" in script
         self.brightness_reads += 1
         if self.paints_after is None:
@@ -1912,3 +1921,28 @@ def test_save_frame_says_so_when_the_editor_has_no_save_control(monkeypatch):
     with pytest.raises(LookupError, match="Save frame"):
         asyncio.run(clips.save_frame(session, "P", "m1"))
     assert page.clicked == 0
+
+
+def test_save_frame_says_whether_flow_ever_started_the_save(monkeypatch):
+    """Measured 2026-09-18: a click Flow accepts raises a 'Saving frame...' notice at once, and one run in three
+    produced no image at all. The 90 s refusal is the same either way, so it has to carry which of the two
+    happened: a slow save to wait out, or a click that started nothing."""
+    page = _SaveFramePage(paints_after=1, notice=None)
+    session = _SaveFrameSession(page)
+    monkeypatch.setattr(clips.reader, "project", _listings([{"media": []}]))
+    monkeypatch.setattr(clips, "INDEX_WAIT_S", 0.02)
+    monkeypatch.setattr(clips, "INDEX_STEP_S", 0.01)
+    monkeypatch.setattr(clips, "PAINT_STEP_S", 0.001)
+    monkeypatch.setattr(clips, "PAINT_WAIT_S", 0.02)
+    monkeypatch.setattr(clips, "NOTICE_STEP_S", 0.001)
+    monkeypatch.setattr(clips, "NOTICE_WAIT_S", 0.005)
+
+    with pytest.raises(RuntimeError, match="never started"):
+        asyncio.run(clips.save_frame(session, "P", "m1"))
+
+    page = _SaveFramePage(paints_after=1, notice="Saving frame...")
+    session = _SaveFrameSession(page)
+    monkeypatch.setattr(clips.reader, "project", _listings([{"media": []}]))
+
+    with pytest.raises(RuntimeError, match="accepted the click"):
+        asyncio.run(clips.save_frame(session, "P", "m1"))

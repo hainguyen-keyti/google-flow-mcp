@@ -818,8 +818,10 @@ async def character_clear_voice(project_id: str, entity_id: str) -> str:
         "is how a later shot continues this one: download it with flow_download and give that file to gen_i2v as "
         "initial_frame, which takes a path on this machine. Passing the media_id straight to gen_i2v has never "
         "been run, so do not assume it works. Measured 2026-09-18: free, "
-        "about 55 s, and the grid shows it titled 'Saved frame from <clip>' about 40 s after the click, which this "
-        "tool waits for, so allow up to 2 min. It saves the frame the editor shows, which is the clip's start. The "
+        "about 55 s when it works: the grid shows the image titled 'Saved frame from <clip>' about 40 s after the "
+        "click, which this tool waits 90 s for. It does NOT always work: of five live clicks on 2026-09-18, two "
+        "left no image at all even though Flow raised its 'Saving frame' notice, and the tool says which of the "
+        "two happened instead of inventing a media id. It saves the frame the editor shows, which is the clip's start. The "
         "editor draws into a canvas about five seconds after the page is ready and Flow uploads whatever that "
         "canvas holds, so the tool waits until it has painted and REFUSES a blank editor rather than store a black "
         "picture (a run that clicked too early saved 1080x1920 of pure black). Free."
@@ -836,7 +838,9 @@ async def clip_save_frame(project_id: str, media_id: str) -> str:
     description=(
         "Copy one clip of a scene's timeline (clip_id from scene_clips) onto the project grid as its own media, "
         "so other scenes and tools can use it: a clip that lives only inside a scene is invisible to flow_media. "
-        "The timeline is not changed. Measured 2026-09-18: free, and the new media appears about 40 s later, "
+        "The timeline is not changed. The answer's rpcids are only what was overheard after the click, not proof: "
+        "a live run copied the clip without Sc7aEb showing up in that window, so the listing row is the evidence. "
+        "Measured 2026-09-18: free, and the new media appears about 40 s later, "
         "which this tool waits for. Free."
     ),
 )
