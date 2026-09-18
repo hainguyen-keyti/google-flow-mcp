@@ -152,3 +152,18 @@ def test_a_beat_of_silence_after_a_line_pushes_the_next_one_later():
 
     assert timeline.voice_problems(fitted, durations) == []
     assert starts[2] == pytest.approx(4.0 + timeline.GAP_MIN_S + 2.0, abs=0.05)
+
+
+def test_fitting_pays_for_the_crossfade_that_pulls_the_next_line_earlier():
+    """A crossfade starts the next shot half a second early, so the line under it starts early too. Fitting
+    without counting that overlap put the voice 0.3 s on top of itself at all three act changes."""
+    segments = [
+        timeline.Segment("s00", "still", "a.png", 0.0, 2.0, line="L01"),
+        timeline.Segment("s01", "still", "b.png", 0.0, 2.0),
+        timeline.Segment("s02", "still", "c.png", 0.0, 2.0, fade_in=0.5, line="L02"),
+    ]
+    durations = {"L01": 5.0, "L02": 3.0}
+
+    fitted = timeline.fit(segments, durations)
+
+    assert timeline.voice_problems(fitted, durations) == []

@@ -83,13 +83,14 @@ SEGMENTS: list[Segment] = [
         3,
         "L09",
         "quiet after laughing",
-        pause_after=1.6,
+        pause_after=0.4,
     ),
     Segment("s16", "clip", clip("c5"), 0.4, 3.0, 0.0, 3, "L10", "mirror, she fixes the floral top"),
     Segment("s17", "still", still("standing_pink"), 0.0, 2.2, 0.0, 3, None, "mirror selfie"),
     Segment(
-        "s18", "clip", clip("c5"), 4.2, 2.6, 0.0, 3, "L11", "she turns and smiles for real", pause_after=1.2
+        "s18", "clip", clip("c5"), 4.2, 2.6, 0.0, 3, "L11", "she turns and smiles for real", pause_after=0.4
     ),
+    Segment("s18b", "still", still("vanity"), 0.0, 2.2, 0.0, 3, None, "she looks down, still smiling"),
     Segment("s19", "still", still("closet_pastel"), 0.0, 1.8, 0.0, 3, "L12", "outfit one"),
     Segment("s20", "still", still("closet_sitting"), 0.0, 1.6, 0.0, 3, None, "outfit two"),
     Segment("s21", "still", still("sitting_green"), 0.0, 1.6, 0.0, 3, "L13", "outfit three"),
@@ -98,7 +99,7 @@ SEGMENTS: list[Segment] = [
     Segment("s23", "clip", clip("c6"), 0.5, 3.0, 0.5, 4, "L14", "the black dress on the rail"),
     Segment("s24", "still", still("closet_moody"), 0.0, 2.4, 0.0, 4, None, "the closet, darker now"),
     Segment(
-        "s25", "clip", clip("c7"), 0.4, 2.8, 0.0, 4, "L15", "phone face down on the desk", pause_after=2.6
+        "s25", "clip", clip("c7"), 0.4, 2.8, 0.0, 4, "L15", "phone face down on the desk", pause_after=1.4
     ),
     Segment("s26", "still", still("room_moody"), 0.0, 2.6, 0.0, 4, None, "the room with one lamp"),
     Segment("s27", "clip", clip("c8"), 0.5, 3.0, 0.0, 4, "L16", "she photographs herself, sends nothing"),
@@ -113,13 +114,12 @@ SEGMENTS: list[Segment] = [
         4,
         "L17",
         "sitting on the floor facing the wardrobe",
-        pause_after=1.4,
     ),
     Segment("s30", "still", still("ruffle_cream"), 0.0, 2.2, 0.0, 4, None, "the wardrobe from the floor"),
     # act 5: what she keeps
     Segment("s31", "clip", clip("c10"), 0.5, 2.8, 0.5, 5, "L18", "her hand touching each hanger"),
     Segment("s32", "still", still("closet_warm"), 0.0, 2.0, 0.0, 5, None, "the clothes, warm again"),
-    Segment("s33", "still", still("closet_pastel"), 0.0, 1.6, 0.0, 5, "L19", "memory one", pause_after=1.0),
+    Segment("s33", "still", still("closet_pastel"), 0.0, 1.6, 0.0, 5, "L19", "memory one"),
     Segment("s34", "still", still("standing_pink"), 0.0, 1.6, 0.0, 5, None, "memory two"),
     Segment("s35", "still", still("room_full"), 0.0, 1.8, 0.0, 5, None, "memory three"),
     Segment(
@@ -132,7 +132,6 @@ SEGMENTS: list[Segment] = [
         5,
         "L20",
         "she opens the window in a new outfit",
-        pause_after=1.4,
     ),
     Segment("s37", "still", still("room_soft"), 0.0, 2.2, 0.0, 5, None, "light across the bed"),
     Segment(
@@ -145,7 +144,7 @@ SEGMENTS: list[Segment] = [
         5,
         "L21",
         "the white dress again, she looks at it",
-        pause_after=2.4,
+        pause_after=1.4,
     ),
     Segment("s39", "still", still("portrait"), 0.0, 2.4, 0.0, 5, None, "her, close, end frame"),
 ]

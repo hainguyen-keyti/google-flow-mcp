@@ -148,7 +148,9 @@ def fit(segments: list[Segment], durations: dict[str, float]) -> list[Segment]:
     for position, index in enumerate(spoken):
         end = spoken[position + 1] if position + 1 < len(spoken) else len(fitted)
         group = list(range(index, end))
-        needed = durations.get(fitted[index].line, 0.0) + GAP_MIN_S + fitted[index].pause_after
+        # A crossfade starts the next shot early, so the line under it starts early too: buy that time back.
+        overlap = fitted[end].fade_in if end < len(fitted) else 0.0
+        needed = durations.get(fitted[index].line, 0.0) + GAP_MIN_S + fitted[index].pause_after + overlap
         if len(group) * SEGMENT_MAX_S < needed:
             raise ValueError(
                 f"{fitted[index].line} needs {needed:.1f} s but only {len(group)} shot(s) follow it, at most "
