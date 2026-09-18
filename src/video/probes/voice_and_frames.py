@@ -26,10 +26,18 @@ MEASURED 2026-09-18 on project 118aece2, five runs, $0:
   reading `voice_selection Select a voice`, and the page's own CSS names the whole feature (voice-card-name,
   voice-card-description, voice-play-btn, voice-remove-btn). The NEW character page has none of it, so a voice
   is chosen after the character exists.
-- The selector holds **30 preset voices** and nothing else: Achernar ... Zubenelgenubi, every one of gflow's 29
+- The selector holds **30 preset voices**: Achernar ... Zubenelgenubi, every one of gflow's 29
   (api/character.py:78) plus one more, each with a one-line description, a `play_arrow Preview` and one
-  `Add to character`. Scrolled to the end over 12 steps: **there is no way to make a voice of your own** here,
-  no upload, no recording, no "custom".
+  `Add to character`.
+- **A voice IS customised, by writing, and the first pass of this probe missed it** because it scraped only
+  `[role=option]` and `button` while the controls that matter are TEXTAREAS. Read again, and visible in
+  `voice_picker.png`: the dialog carries `Sample dialogue` (textarea, maxlength **120**, placeholder "Hi there!
+  We're introducing a new feature where I can read this aloud...") and **`Customize performance`** (textarea, NO
+  maxlength, placeholder "Describe the voice performance style..."). So "a young cheerful Saigon woman, soft and
+  playful" is expressed as a preset PLUS that description, not as a voice built from scratch.
+- What is NOT offered: making a voice from your own recording. The `Search assets` input beside the list, with
+  its project dropdown, only FILTERS the same 30 presets (typing "a" returned voices whose text holds an "a"),
+  so the asset-picker chrome there leads nowhere else.
 - The prompt box's `@` menu lists media and characters only (19 rows on this project), no voices, which matches
   gflow's note that the voice rides with the character chip rather than being mentioned on its own.
 - `Save frame` EXISTS, in the clip editor, as an ICON-ONLY button: aria-label "Save frame", icon
@@ -206,17 +214,53 @@ async def act_voicepicker(
         await page.wait_for_timeout(700)
         if not moved or moved[0] == moved[1]:
             break
+    # The first pass read only options and buttons, so it missed the two TEXTAREAS this dialog is really about:
+    # "Sample dialogue" and "Customize performance" (seen in the screenshot, not in the scrape). Read every field.
+    fields = await page.evaluate(
+        "(sel) => [...document.querySelector(sel).querySelectorAll('input, textarea, select, [contenteditable]')]"
+        "  .map(e => ({tag: e.tagName.toLowerCase(), type: e.getAttribute('type') || '',"
+        "             label: (e.getAttribute('aria-label') || e.getAttribute('name') || '').trim(),"
+        "             placeholder: (e.getAttribute('placeholder') || '').trim(),"
+        "             maxlength: e.getAttribute('maxlength') || '',"
+        "             value: (e.value || e.innerText || '').trim().slice(0, 80)}))",
+        OVERLAY,
+    )
+    headings = await page.evaluate(
+        "(sel) => [...document.querySelector(sel).querySelectorAll('*')]"
+        "  .filter(e => e.childElementCount === 0 && !['STYLE','SCRIPT'].includes(e.tagName))"
+        "  .map(e => (e.innerText || '').trim()).filter(t => t && t.length < 80).slice(0, 60)",
+        OVERLAY,
+    )
     cards = await page.evaluate(
         "() => [...document.querySelectorAll('[class*=voice-card-name], [class*=voice-card-description]')]"
         "  .map(e => (e.innerText || '').trim()).filter(Boolean).slice(0, 80)"
     )
     shot = await _shot(page, stamp, "voice_picker")
+    # "Search assets" with a project dropdown next to a voice list is the one control that could mean a voice of
+    # your own, made from something you uploaded. Type one letter and read what it offers.
+    searched: dict[str, Any] = {}
+    box = page.locator(f"{OVERLAY} input[aria-label='Search assets']").first
+    if await box.count():
+        await box.click(timeout=8_000)
+        await box.type("a", delay=60)
+        await page.wait_for_timeout(2_500)
+        searched["rows"] = await page.evaluate(
+            "(sel) => [...document.querySelector(sel).querySelectorAll('[role=option], [class*=asset], li')]"
+            "  .map(e => (e.innerText || '').trim().replace(/\\s+/g, ' ')).filter(Boolean).slice(0, 25)",
+            OVERLAY,
+        )
+        searched["shot"] = await _shot(page, stamp, "voice_search")
+        for _ in range(3):
+            await page.keyboard.press("Backspace")
     await page.keyboard.press("Escape")
     return {
         "entity_id": target,
         "opened_with": label,
         "dialog_rows": dialog_text,
         "voice_cards": cards,
+        "fields": fields,
+        "dialog_leaf_text": headings,
+        "asset_search": searched,
         "audio_after_open": await page.evaluate(_AUDIO_JS),
         "shot": shot,
     }
