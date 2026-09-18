@@ -357,3 +357,40 @@ def test_run_job_stops_hard_when_google_flags_unusual_activity(tmp_path):
     assert len(runner.calls) == 1
     row = ledger.rows("job-w")[-1]
     assert row["status"] == "failed" and row["exit_code"] == 10
+
+
+def test_run_job_says_an_account_without_flow_access_is_not_a_retry(tmp_path):
+    """Plan F T2. gflow 0.78.0 added FlowAccessUnavailableError, exit 39: Flow itself renders a "you don't
+    have access" screen for the account. Through 0.73.1 that state surfaced as exit 23 UiSelectorDriftError,
+    "gflow's selectors have drifted" (their own A/B, 2026-09-15), which reads like a bug to wait out and invites
+    exactly the retry that pays twice. It is not retryable and no re-login fixes it, so say so."""
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    problem = {
+        "error_class": "FlowAccessUnavailableError",
+        "problem": {"title": "Flow access unavailable", "detail": "Flow shows no access for this account"},
+        "event": "error_raised",
+    }
+
+    class NoAccessRunner(FakeRunner):
+        async def __call__(self, argv):
+            self.calls.append(list(argv))
+            return 39, "", json.dumps(problem) + "\n"
+
+    runner = NoAccessRunner(ledger, "", "job-a")
+
+    async def read_credits():
+        return 5
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(
+            gen.run_job(
+                job(job_id="job-a"), tmp_path, ledger=ledger, runner=runner, read_credits=read_credits
+            )
+        )
+    message = str(excinfo.value)
+    assert "do not retry" in message
+    assert "access" in message
+    assert "auth login" in message, "a re-login does not restore access; say so before the agent tries it"
+    assert len(runner.calls) == 1
+    row = ledger.rows("job-a")[-1]
+    assert row["status"] == "failed" and row["exit_code"] == 39

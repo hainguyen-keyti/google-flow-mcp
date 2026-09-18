@@ -235,6 +235,15 @@ async def run_job(
                 "unusual activity. Stop: do not retry, and do not re-run gflow auth login on this account, "
                 "whatever gflow suggests. Tell the owner; the browser profile must cool down before reuse."
             )
+        # gflow 0.78.0 added FlowAccessUnavailableError, exit 39: Flow itself shows "you don't have access".
+        # Through 0.73.1 that arrived as exit 23 UiSelectorDriftError, which reads like a passing UI bug and
+        # invites the retry that pays twice (their own A/B, 2026-09-15).
+        if code == 39 or problem.get("error_class") == "FlowAccessUnavailableError":
+            raise RuntimeError(
+                f"gflow {job.kind} exit {code} (FlowAccessUnavailableError): Flow says this account has no "
+                "access to what the run needs. Nothing expired, so do not retry and do not re-run gflow auth "
+                f"login: tell the owner, who has to check the account's Flow access. ({summary})"
+            )
         raise RuntimeError(f"gflow {job.kind} exit {code} ({problem.get('error_class', '?')}): {summary}")
     outputs = parse_result(job.kind, stdout)
     after = await read_credits()
