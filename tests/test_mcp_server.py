@@ -880,6 +880,66 @@ def test_an_editor_out_dir_outside_the_out_folder_is_refused_before_a_browser_op
     assert reached == []
 
 
+@pytest.mark.parametrize(
+    ("out_dir", "reason"),
+    [
+        ("elsewhere", "out_dir must be inside"),
+        ("out/../elsewhere", "out_dir must be inside"),
+        ("out/films/ledger.jsonl", "must be a folder"),
+    ],
+)
+def test_flow_download_refuses_an_out_dir_outside_the_out_folder(monkeypatch, tmp_path, out_dir, reason):
+    """Plan I T1. Every other tool that writes a file (scene_download, clip_download, gen_character) runs its
+    out_dir through _editor_out_dir; flow_download took any path at all, so an agent could drop a clip anywhere
+    the user can write and, on a name collision, overwrite what was there (CLAUDE.md rule 5)."""
+    reached = []
+
+    async def fake_with(self, fn):
+        reached.append("browser")
+        return await fn(object())
+
+    async def fake_download(session, project_id, media_id, target):
+        reached.append(("download", str(target)))
+        return target / "clip.mp4"
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.download_mod, "download", fake_download)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+
+    async def fn(s):
+        return await s.call_tool(
+            "flow_download", {"project_id": "P", "media_id": "M", "out_dir": str(tmp_path / out_dir)}
+        )
+
+    text = _texts([with_client(fn)])[0]
+    assert reason in text, text
+    assert reached == []
+
+
+def test_flow_download_still_writes_where_a_folder_inside_out_points(monkeypatch, tmp_path):
+    # The guard must not cost the tool its own feature: a folder inside out/ still reaches the driver.
+    reached = []
+
+    async def fake_with(self, fn):
+        return await fn(object())
+
+    async def fake_download(session, project_id, media_id, target):
+        reached.append(str(target))
+        return target / "clip.mp4"
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.download_mod, "download", fake_download)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "out"))
+    room = tmp_path / "out" / "films"
+
+    async def fn(s):
+        return await s.call_tool("flow_download", {"project_id": "P", "media_id": "M", "out_dir": str(room)})
+
+    payload = _payload(with_client(fn))
+    assert reached == [str(room)]
+    assert payload["path"].endswith("clip.mp4")
+
+
 def test_a_second_call_with_the_same_job_id_is_refused_while_the_first_still_runs(monkeypatch, tmp_path):
     # Re-review 2026-09-15: the ledger check and the spend are two steps with awaits between, so two calls with one
     # job_id both passed the check before either had written a row.

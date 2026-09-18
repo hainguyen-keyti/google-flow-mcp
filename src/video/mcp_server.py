@@ -278,7 +278,9 @@ class Backend:
         return await self._with(lambda s: reader.tools(s, project_id))
 
     async def download(self, project_id: str, media_id: str, out_dir: str | None = None) -> str:
-        target = Path(out_dir) if out_dir else self.out_dir
+        # The last tool that wrote a file wherever it was pointed: a name collision outside out/ overwrites
+        # footage nothing can bring back (CLAUDE.md rule 5, review 2026-09-18).
+        target = self._editor_out_dir(out_dir)
         return str(await self._with(lambda s: download_mod.download(s, project_id, media_id, target)))
 
     async def upload(self, project_id: str, path: str) -> dict[str, Any]:
@@ -682,7 +684,11 @@ async def flow_tools(project_id: str | None = None) -> str:
 
 
 @server.tool(
-    name="flow_download", description="Download one media item to out_dir as <media_id>.<ext>. Free."
+    name="flow_download",
+    description=(
+        "Download one media item to out_dir as <media_id>.<ext>. out_dir must be inside the out folder, and a "
+        "folder it names is created for you. Free."
+    ),
 )
 async def flow_download(project_id: str, media_id: str, out_dir: str | None = None) -> str:
     _require(project_id, "project_id")
