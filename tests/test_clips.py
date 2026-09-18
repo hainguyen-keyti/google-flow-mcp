@@ -1725,14 +1725,26 @@ class _SaveFramePage:
     """The clip editor as measured 2026-09-18: one icon-only button whose accessible name is 'Save frame',
     and a listing that only shows the new image about forty seconds later."""
 
-    def __init__(self, appears_after: int = 2):
+    def __init__(self, appears_after: int = 2, paints_after: int = 1):
         self.clicked = 0
         self.waited_ms = 0
         self.appears_after = appears_after
         self.keyboard = _Keyboard()
+        # Measured 2026-09-18 on the live editor: the player is a CANVAS and it stays blank for about five
+        # seconds after the page is ready. A click before it paints saves a completely black image.
+        self.paints_after = paints_after
+        self.brightness_reads = 0
+        self.painted_when_clicked = None
 
     async def wait_for_timeout(self, ms):
         self.waited_ms += ms
+
+    async def evaluate(self, script, arg=None):
+        assert "canvas" in script
+        self.brightness_reads += 1
+        if self.paints_after is None:
+            return 0.0
+        return 0.0 if self.brightness_reads <= self.paints_after else 118.4
 
     def get_by_role(self, role, name=None):
         page = self
@@ -1750,6 +1762,7 @@ class _SaveFramePage:
 
             async def click(self, timeout=None):
                 page.clicked += 1
+                page.painted_when_clicked = page.brightness_reads > (page.paints_after or 10**9)
 
         assert role == "button"
         return _Button()
@@ -1814,3 +1827,42 @@ def test_save_frame_says_so_when_no_image_ever_appears(monkeypatch):
     with pytest.raises(RuntimeError, match="no new media"):
         asyncio.run(clips.save_frame(session, "P", "m1"))
     assert page.clicked == 1, "a save that produced nothing is never clicked twice"
+
+
+def test_save_frame_waits_for_the_editor_to_paint_before_it_clicks(monkeypatch):
+    """Measured 2026-09-18: the editor draws into a canvas about five seconds after the page is ready, and the
+    Save frame button uploads whatever that canvas holds (the maseQ body carries the PNG itself). Clicking on
+    the blind three second wait saved a 1080x1920 image whose mean luminance was 0, pure black, while the clip's
+    own first frame measured 111."""
+    page = _SaveFramePage(paints_after=3)
+    session = _SaveFrameSession(page)
+    old = {"media": [{"id": "m1", "kind": "video", "title": "Person speaking to camera"}]}
+    new = {
+        "media": [
+            {"id": "m1", "kind": "video", "title": "Person speaking to camera"},
+            {"id": "frame-1", "kind": "image", "title": "Saved frame from Person speaking to camera"},
+        ]
+    }
+    monkeypatch.setattr(clips.reader, "project", _listings([old, new]))
+    monkeypatch.setattr(clips, "INDEX_STEP_S", 0.01)
+    monkeypatch.setattr(clips, "PAINT_STEP_S", 0.001)
+    monkeypatch.setattr(clips, "PAINT_WAIT_S", 0.02)
+
+    result = asyncio.run(clips.save_frame(session, "P", "m1"))
+
+    assert page.painted_when_clicked is True, "it must not click while the canvas is still blank"
+    assert result["media_id"] == "frame-1"
+
+
+def test_save_frame_refuses_when_the_editor_never_paints(monkeypatch):
+    """A black frame that Flow happily stores is worse than an error: the agent feeds it to the next shot as an
+    initial frame and only finds out by looking at the picture."""
+    page = _SaveFramePage(paints_after=None)
+    session = _SaveFrameSession(page)
+    monkeypatch.setattr(clips.reader, "project", _listings([{"media": []}]))
+    monkeypatch.setattr(clips, "PAINT_STEP_S", 0.001)
+    monkeypatch.setattr(clips, "PAINT_WAIT_S", 0.005)
+
+    with pytest.raises(TimeoutError, match="blank"):
+        asyncio.run(clips.save_frame(session, "P", "m1"))
+    assert page.clicked == 0, "nothing is saved when there is no frame to save"

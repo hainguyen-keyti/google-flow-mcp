@@ -812,8 +812,11 @@ async def character_clear_voice(project_id: str, entity_id: str) -> str:
     description=(
         "Save the frame the clip editor opens on as an IMAGE of the project, and answer its media_id. That image "
         "is how a later shot continues this one: feed it to gen_i2v as initial_frame. Measured 2026-09-18: free, "
-        "and the grid shows it titled 'Saved frame from <clip>' about 40 s after the click, which this tool waits "
-        "for, so allow up to 2 min. It saves the frame the editor shows, which is the clip's start. Free."
+        "about 55 s, and the grid shows it titled 'Saved frame from <clip>' about 40 s after the click, which this "
+        "tool waits for, so allow up to 2 min. It saves the frame the editor shows, which is the clip's start. The "
+        "editor draws into a canvas about five seconds after the page is ready and Flow uploads whatever that "
+        "canvas holds, so the tool waits until it has painted and REFUSES a blank editor rather than store a black "
+        "picture (a run that clicked too early saved 1080x1920 of pure black). Free."
     ),
 )
 async def clip_save_frame(project_id: str, media_id: str) -> str:

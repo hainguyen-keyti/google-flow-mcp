@@ -267,7 +267,10 @@ mặt, tay và món đồ.
   đang mở thành ẢNH của project (rpc `maseQ`, tiêu đề `Saved frame from <clip>`) để làm `initial_frame` cho cảnh
   sau; `scene_save_clip` chép một clip trong timeline ra grid thành media riêng (chuột phải, `Save to Project`,
   rpc `Sc7aEb`). Cả hai: Flow đánh chỉ mục khoảng **40 s** sau cú bấm, nên tool chờ listing thấy media mới thay vì
-  đọc một lần rồi kết luận.
+  đọc một lần rồi kết luận. `clip_save_frame` còn một bẫy đắt: trang sửa vẽ clip vào **canvas** khoảng 5 s sau khi
+  sẵn sàng, và body `maseQ` mang chính ảnh PNG của canvas đó, nên bấm sớm là lưu ra **ảnh đen** (đo: YAVG 0 trong
+  khi khung đầu clip là 111, tool vẫn báo thành công và `flow_download` vẫn tải được). Tool giờ chờ canvas sáng
+  rồi mới bấm, trang không bao giờ sáng thì từ chối; lần đo lại: 53 s, ảnh 372 KB, YAVG 113,6.
 - **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
   hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
 

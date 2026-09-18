@@ -598,17 +598,53 @@ async def wait_for_new_media(
         waited += step_s
 
 
+PAINT_WAIT_S = 30.0
+PAINT_STEP_S = 1.0
+# The editor draws the clip into a canvas; a blank one reads 64 KB as a png data url and a real frame 2.7 MB,
+# but brightness is the measure that does not depend on the resolution (measured 2026-09-18).
+_CANVAS_BRIGHTNESS_JS = """() => {
+  const c = document.querySelector('canvas');
+  if (!c || !c.width || !c.height) return null;
+  const small = document.createElement('canvas');
+  small.width = 32;
+  small.height = 32;
+  const ctx = small.getContext('2d');
+  ctx.drawImage(c, 0, 0, 32, 32);
+  const data = ctx.getImageData(0, 0, 32, 32).data;
+  let sum = 0;
+  for (let i = 0; i < data.length; i += 4) sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+  return sum / (data.length / 4);
+}"""
+
+
+async def _wait_for_paint(page: Any, media_id: str) -> float:
+    """Wait until the editor has drawn the clip, and refuse rather than save a black rectangle."""
+    wait_s = PAINT_WAIT_S
+    step_s = PAINT_STEP_S
+    for _ in range(max(1, round(wait_s / step_s)) if step_s else 3):
+        brightness = await page.evaluate(_CANVAS_BRIGHTNESS_JS)
+        if brightness is not None and brightness > 1.0:
+            return float(brightness)
+        await page.wait_for_timeout(int(step_s * 1_000))
+    raise TimeoutError(
+        f"the editor of {media_id} was still blank after {wait_s:.0f} s, so Save frame would store a black "
+        "image; open the clip and check it plays"
+    )
+
+
 async def save_frame(session: FlowSession, project_id: str, media_id: str) -> dict[str, Any]:
     """Save the frame the clip editor is showing as an image of the project, and answer its media id.
 
     Measured 2026-09-18: the control is ICON-ONLY, with the accessible name 'Save frame' (icon
-    add_photo_alternate), it fires rpc maseQ, and the grid then holds an image titled
-    'Saved frame from <clip title>'. Free.
+    add_photo_alternate), it fires rpc maseQ carrying the picture itself as a PNG data url, and the grid then
+    holds an image titled 'Saved frame from <clip title>'. The player is a CANVAS that stays blank for about
+    five seconds after the page is ready, so the frame is saved only once it has painted: the earlier blind
+    three second wait stored a pure black 1080x1920 image. Free.
     """
     page = session.page
     known = await media_ids(session, project_id)
     await session.goto(f"{session.project_url(project_id)}/edit/{media_id}", ready=EDITOR)
-    await page.wait_for_timeout(3_000)
+    await _wait_for_paint(page, media_id)
     button = page.get_by_role("button", name=re.compile("^save frame$", re.IGNORECASE)).first
     if not await button.count():
         raise LookupError(
