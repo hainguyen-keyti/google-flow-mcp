@@ -608,8 +608,9 @@ async def wait_for_new_media(
 SAVED_FRAME_TITLE = "Saved frame from"
 NOTICE_WAIT_S = 10.0
 NOTICE_STEP_S = 0.5
-# Measured 2026-09-18: a click Flow accepts raises this notice at once. Its absence is the only thing that tells
-# a slow save apart from a click that started nothing, and one live run in three started nothing.
+# Measured 2026-09-18: a click Flow accepts raises this notice at once. Both live runs that ended with no image
+# DID raise it, so this tells apart a click Flow never took from a save it took and lost; the second branch has
+# not been seen live yet.
 _SNACKBAR_JS = (
     "() => [...document.querySelectorAll('[class*=snack], [role=alert], [class*=toast]')]"
     "  .map(e => (e.innerText || '').trim()).filter(Boolean).slice(0, 5)"

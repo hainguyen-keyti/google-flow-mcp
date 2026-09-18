@@ -3014,11 +3014,12 @@ def test_save_clip_to_project_puts_a_timeline_clip_on_the_grid(monkeypatch):
     session = _editor(monkeypatch, page)
     wanted = _ids(page)[1]
     seen = {"m1": {"id": "m1", "kind": "video"}}
-    fresh = {"id": "saved-1", "kind": "video", "title": "Wooden sailboat model on desk", "created": 9}
+    fresh = {"id": "saved-1", "kind": "video", "title": ORBIT[1], "created": 9}
     monkeypatch.setattr(
         scenes.clips_mod, "media_ids", _media_in_turn([seen, seen, {**seen, "saved-1": fresh}])
     )
     monkeypatch.setattr(scenes.clips_mod, "INDEX_STEP_S", 0.01)
+    monkeypatch.setattr(scenes.clips_mod, "INDEX_WAIT_S", 0.05)
 
     async def fake_capture(session_, action, *, settle):
         await action()
@@ -3042,9 +3043,10 @@ def test_save_clip_to_project_reports_the_rpcs_it_heard_and_still_trusts_the_lis
     session = _editor(monkeypatch, page)
     wanted = _ids(page)[1]
     seen = {"m1": {"id": "m1", "kind": "video"}}
-    fresh = {"id": "saved-1", "kind": "video", "title": "Wooden sailboat model on desk", "created": 9}
+    fresh = {"id": "saved-1", "kind": "video", "title": ORBIT[1], "created": 9}
     monkeypatch.setattr(scenes.clips_mod, "media_ids", _media_in_turn([seen, {**seen, "saved-1": fresh}]))
     monkeypatch.setattr(scenes.clips_mod, "INDEX_STEP_S", 0.01)
+    monkeypatch.setattr(scenes.clips_mod, "INDEX_WAIT_S", 0.05)
     heard = {"Sc7aEb": [[]], "WuwhI": [[]]}
 
     async def fake_capture(session_, action, *, settle):
@@ -3075,13 +3077,14 @@ def test_save_clip_to_project_ignores_an_image_that_landed_during_the_wait(monke
     wanted = _ids(page)[1]
     seen = {"m1": {"id": "m1", "kind": "video"}}
     frame = {"id": "frame-9", "kind": "image", "title": "Saved frame from something", "created": 8}
-    clip = {"id": "saved-1", "kind": "video", "title": "Wooden sailboat model on desk", "created": 9}
+    clip = {"id": "saved-1", "kind": "video", "title": ORBIT[1], "created": 9}
     monkeypatch.setattr(
         scenes.clips_mod,
         "media_ids",
         _media_in_turn([seen, {**seen, "frame-9": frame}, {**seen, "frame-9": frame, "saved-1": clip}]),
     )
     monkeypatch.setattr(scenes.clips_mod, "INDEX_STEP_S", 0.01)
+    monkeypatch.setattr(scenes.clips_mod, "INDEX_WAIT_S", 0.05)
 
     async def fake_capture(session_, action, *, settle):
         await action()
@@ -3092,6 +3095,36 @@ def test_save_clip_to_project_ignores_an_image_that_landed_during_the_wait(monke
     result = asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, wanted))
 
     assert result["media_id"] == "saved-1", "an image that landed meanwhile is not the clip that was saved"
+
+
+def test_save_clip_to_project_takes_the_copy_that_carries_the_clips_own_title(monkeypatch):
+    """Measured 2026-09-18 (refix_live3): the copy reaches the grid under the clip's own title, 'Camera drifts
+    to left'. Another video landing inside the 90 s wait is a video too, so the title the timeline already knows
+    is what tells them apart."""
+    page = _Editor(FIVE, clips=FIVE)
+    session = _editor(monkeypatch, page)
+    wanted = _ids(page)[1]
+    title = asyncio.run(scenes.timeline(session, PROJECT, EDITOR_SCENE))["clips"][1]["title"]
+    seen = {"m1": {"id": "m1", "kind": "video"}}
+    stranger = {"id": "gen-9", "kind": "video", "title": "A dancer in a studio", "created": 8}
+    copy = {"id": "saved-1", "kind": "video", "title": title, "created": 9}
+    monkeypatch.setattr(
+        scenes.clips_mod,
+        "media_ids",
+        _media_in_turn([seen, {**seen, "gen-9": stranger}, {**seen, "gen-9": stranger, "saved-1": copy}]),
+    )
+    monkeypatch.setattr(scenes.clips_mod, "INDEX_STEP_S", 0.01)
+    monkeypatch.setattr(scenes.clips_mod, "INDEX_WAIT_S", 0.05)
+
+    async def fake_capture(session_, action, *, settle):
+        await action()
+        return {}
+
+    monkeypatch.setattr(scenes, "capture", fake_capture)
+
+    result = asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, wanted))
+
+    assert result["media_id"] == "saved-1", "a generation landing meanwhile is not the copy"
 
 
 def test_save_clip_to_project_refuses_a_clip_id_that_is_not_on_the_timeline(monkeypatch):

@@ -272,6 +272,9 @@ def a_voice_list(payload):
             return f"the voice name {name[:60]!r} is an icon ligature, not a name"
         if not isinstance(voice.get("custom"), bool):
             return f"voice {name!r} does not say whether it is one of your own"
+    if all(voice["custom"] for voice in payload):
+        # A flag read off the wrong element passes every other check here: 30 of these are Flow's own presets.
+        return "every voice claims to be one of your own, so the custom flag is not being read"
     return None
 
 

@@ -355,7 +355,7 @@ async def set_voice(session: FlowSession, project_id: str, entity_id: str, voice
     if VOICE_UPDATE_RPC not in frames:
         raise RuntimeError(
             f"the 'Add to character' click did not update the character ({VOICE_UPDATE_RPC} never came back, "
-            f"heard {sorted(frames)}); read flow_voices and the character page before trying again"
+            f"heard {sorted(frames)}); calling this again is free and sets the same voice, so just call it again"
         )
     return {"entity_id": entity_id, "voice": voice, "rpcids": sorted(frames)}
 
@@ -464,6 +464,6 @@ async def clear_voice(session: FlowSession, project_id: str, entity_id: str) -> 
     if VOICE_UPDATE_RPC not in frames:
         raise RuntimeError(
             f"the Remove click did not update the character ({VOICE_UPDATE_RPC} never came back, heard "
-            f"{sorted(frames)}); read the character page before trying again"
+            f"{sorted(frames)}); calling this again is free and leaves the same result, so just call it again"
         )
     return {"entity_id": entity_id, "voice": None, "rpcids": sorted(frames)}

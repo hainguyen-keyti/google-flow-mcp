@@ -252,6 +252,11 @@ def _voice_named_by_its_icon(replies):
     ]
 
 
+def _every_voice_claims_to_be_custom(replies):
+    # What a custom flag read off the wrong element answers: true for all 30 presets as well.
+    replies["voices"] = [{**voice, "custom": True} for voice in replies["voices"]]
+
+
 def _voice_without_the_custom_flag(replies):
     replies["voices"] = [{k: v for k, v in voice.items() if k != "custom"} for voice in replies["voices"]]
 
@@ -291,6 +296,7 @@ CORRUPTIONS = [
     (("flow_characters", "flow_voices"), _character_without_entity),
     ("flow_voices", _voice_named_by_its_icon),
     ("flow_voices", _voice_without_the_custom_flag),
+    ("flow_voices", _every_voice_claims_to_be_custom),
     ("flow_tools", _no_tools),
     ("scene_list", _trashed_scene_in_default_listing),
     ("scene_clips", _timeline_of_another_scene),

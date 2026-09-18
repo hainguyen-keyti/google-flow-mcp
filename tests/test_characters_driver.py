@@ -764,7 +764,12 @@ def test_clear_voice_refuses_when_the_click_never_updated_the_character(monkeypa
 def test_the_row_script_reads_the_rows_own_elements_and_never_its_run_on_text():
     """Rule 10: this is the one claim the page fakes cannot check, because they hand back rows already split.
     The bug it exists to prevent is reading the row itself, whose textContent runs the icon, the name and the
-    description together with no whitespace (`voice_selectionAchernarFemale, soft, high pitch`)."""
+    description together with no whitespace (`voice_selectionAchernarFemale, soft, high pitch`).
+
+    It is a BLACKLIST, not coverage: a rewrite that reads the run-on text by other spellings walks past it. The
+    live row of scripts/acceptance/mcp_smoke.py is what reads real rows, and it SKIPs on a project with no
+    character, so neither check alone is the net.
+    """
     script = characters.VOICE_ROWS_JS
 
     for selector in (".asset-title", ".asset-description", ".custom-voice-badge-icon"):

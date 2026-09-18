@@ -1026,6 +1026,9 @@ async def save_clip_to_project(
             f"clip {clip_id} is not on scene {scene_id}'s timeline; scene_clips lists its clip_ids"
         )
     index = ids.index(clip_id)
+    # Measured 2026-09-18: the copy carries the clip's own title, which is how it is told apart from anything
+    # else Flow indexes inside the wait.
+    copy_title = (before["clips"][index].get("title") or "").strip()
     known = await clips_mod.media_ids(session, project_id)
     await _open_scene(session, project_id, scene_id)
     clips = await _page_agrees(page, len(ids), scene_id)
@@ -1047,7 +1050,9 @@ async def save_clip_to_project(
         project_id,
         known,
         what="scene_save_clip",
-        wants=lambda row: row.get("kind") == "video",
+        wants=lambda row: (
+            row.get("kind") == "video" and (not copy_title or (row.get("title") or "").strip() == copy_title)
+        ),
     )
     return {
         "scene_id": scene_id,
