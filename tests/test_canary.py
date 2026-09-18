@@ -98,6 +98,24 @@ def test_a_project_with_no_video_skips_the_editor_check_instead_of_failing_it():
     assert canary.exit_code(canary.compare(observed)) == 0
 
 
+def test_the_summary_line_never_counts_a_skipped_anchor_as_a_pass():
+    """Review 2026-09-18: a project whose finished videos all live inside scenes leaves the clip-editor anchor
+    SKIPped, and the old line printed `anchors=11 pass=11 fail=0`, which reads as eleven anchors proven when ten
+    were. The plan's acceptance quotes that line, so it has to say what was actually tested."""
+    observed = {**HEALTHY, "custom_elements": ["flow-project-page", "flow-prompt-box"], "editor": None}
+    findings = canary.compare(observed)
+    assert [f["status"] for f in findings].count("SKIP") == 1
+
+    line = canary.summary(findings)
+
+    assert "skip=1" in line
+    assert f"pass={len(findings) - 1}" in line and f"pass={len(findings)}" not in line
+    assert "fail=0" in line
+    # With an editor page to open, nothing is skipped and every anchor counts as tested.
+    opened = canary.compare({**HEALTHY, "editor": "m1"})
+    assert canary.summary(opened) == f"anchors={len(opened)} pass={len(opened)} fail=0 skip=0"
+
+
 def test_the_report_exits_non_zero_only_on_drift():
     assert canary.exit_code(canary.compare(HEALTHY)) == 0
     broken = canary.compare({**HEALTHY, "composer_buttons": []})

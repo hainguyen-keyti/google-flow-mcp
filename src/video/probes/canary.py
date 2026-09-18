@@ -122,7 +122,10 @@ CHECKS: tuple[Check, ...] = (
         clips.EDITOR,
         "the clip editor that runs extend and the Omni edit that dresses a shot",
         applies=lambda observed: observed.get("editor") is not None,
-        skipped="no finished video in this project, so there was no editor page to open",
+        skipped=(
+            "no finished video the GRID lists in this project, so there was no editor page to open; a project "
+            "whose videos all live inside scenes leaves this anchor untested"
+        ),
     ),
     _button("settings trigger", "settings trigger", "opens the panel holding the mode, aspect and price"),
     _button("submit button", "start generation", "the one button that spends credits"),
@@ -164,6 +167,15 @@ def compare(observed: Observed) -> list[dict[str, str]]:
 
 def exit_code(findings: list[dict[str, str]]) -> int:
     return 1 if any(f["status"] == "FAIL" for f in findings) else 0
+
+
+def summary(findings: list[dict[str, str]]) -> str:
+    """The one line a report is read by, so a SKIP is counted apart: an anchor that was never tested is not a
+    pass, and quoting `pass=11` for ten tested anchors is coverage nobody earned (review 2026-09-18)."""
+    failed = sum(1 for f in findings if f["status"] == "FAIL")
+    skipped = sum(1 for f in findings if f["status"] == "SKIP")
+    passed = len(findings) - failed - skipped
+    return f"anchors={len(findings)} pass={passed} fail={failed} skip={skipped}"
 
 
 _ELEMENTS_JS = """() => [...new Set([...document.querySelectorAll('*')]
@@ -244,7 +256,10 @@ async def _run(project_id: str, profile: str, as_json: bool) -> int:
         for finding in findings:
             print(f"{finding['status']:7s} {finding['name']:24s} {finding['detail']}")
         failed = [f for f in findings if f["status"] == "FAIL"]
-        print(f"\nanchors={len(findings)} pass={len(findings) - len(failed)} fail={len(failed)}")
+        print("\n" + summary(findings))
+        for finding in findings:
+            if finding["status"] == "SKIP":
+                print(f"  SKIP {finding['name']}: {finding['detail']}")
         for finding in failed:
             print(f"  {finding['name']}: {finding['reason']}")
         print(f"\nfull observation: {record}")

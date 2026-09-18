@@ -329,6 +329,39 @@ def test_flow_media_can_ask_for_every_version(monkeypatch):
     assert [row["workflow_id"] for row in payload["versions"]] == ["w1", "w2"]
 
 
+def test_gen_i2v_refuses_an_end_frame_until_that_run_has_been_priced(monkeypatch):
+    """Review 2026-09-18 (Plan F). Through gflow 0.73.1 an end frame was refused on this migrated account at
+    exit 36 and cost nothing, so the parameter was harmless. gflow 0.78.0 drives it for real: a local end frame
+    submits on rpc nprQif with an interpolation model key, a different wire model from the omni-flash 10 s run
+    the tool's 15 credits were measured on. Nothing re-prices it, so an agent passing end_frame would budget 15
+    for a run whose price nobody has measured. Refuse until someone pays for that measurement."""
+    called = []
+
+    async def fake_generate(**kwargs):
+        called.append(kwargs)
+        return {"job_id": "x", "outputs": []}
+
+    monkeypatch.setattr(mcp_server.backend, "generate", fake_generate)
+
+    async def fn(session):
+        return await session.call_tool(
+            "gen_i2v",
+            {
+                "initial_frame": "/tmp/a.png",
+                "end_frame": "/tmp/b.png",
+                "prompt": "a boat",
+                "project": "P",
+                "job_id": "job-end",
+            },
+        )
+
+    result = with_client(fn)
+    text = "".join(getattr(c, "text", "") for c in result.content)
+    assert result.is_error, text
+    assert "end_frame" in text and "unmeasured" in text, text
+    assert called == [], "the run must be refused before anything can be spent"
+
+
 def test_gen_tool_refuses_a_missing_project(monkeypatch):
     called = []
 

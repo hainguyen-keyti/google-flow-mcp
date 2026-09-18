@@ -578,6 +578,8 @@ server = TellingServer(
         "errored or timed out: check flow_media and flow_credits first, and if you do call again keep the same "
         "job_id, which the ledger refuses instead of charging twice. When model is omitted gen_t2v and gen_i2v "
         "use omni-flash for 10 s, and gen_r2v uses omni-flash at 8 s, the only length this host offers it. "
+        "When aspect is omitted, all three run 9:16: that is gflow's own default, not the shape of the image you "
+        "passed, and Flow crops a start frame of another shape to fit. Name the aspect you want. "
         "If a tool reports that Google flagged unusual activity (WAF), stop: do not retry and "
         "do not re-authenticate; tell the owner. Pass an existing project id from flow_projects, or make one "
         "with project_create."
@@ -1099,12 +1101,13 @@ async def gen_t2v(
 @server.tool(
     name="gen_i2v",
     description=(
-        "Image (first frame, optional last frame) to video via gflow. It spends credits and is ledgered: "
-        "omni-flash 10 s x1 = 15 credits (the default when model is omitted), measured 2026-09-18 on the first "
-        "run that ever finished, in 105 s. Every attempt before that died in Flow's frame picker and spent "
-        "nothing, which gflow 0.78.0 fixed. PASS aspect: the composer keeps whatever ratio the last run left, so "
-        "a 16:9 photo came back as a 9:16 clip when aspect was omitted; name the one you want. Allow 2-5 min."
-        + _JOB_ID_RULE
+        "Image (first frame) to video via gflow. It spends credits and is ledgered: omni-flash 10 s x1 = 15 "
+        "credits (the default when model is omitted), measured 2026-09-18 on the first run that ever finished, in "
+        "105 s. Every attempt before that died in Flow's frame picker and spent nothing, which gflow 0.78.0 "
+        "fixed. PASS aspect, and match it to your image: leaving it out means 9:16, gflow's own default, and Flow "
+        "CROPS a start frame of another shape to fit, which pushed the subject of a 16:9 photo half out of the "
+        "left edge. end_frame is refused for now: gflow runs it through another submit whose price here is "
+        "unmeasured. Allow 2-5 min." + _JOB_ID_RULE
     ),
 )
 async def gen_i2v(
@@ -1118,6 +1121,15 @@ async def gen_i2v(
     duration: int | None = None,
 ) -> str:
     _require(initial_frame, "initial_frame")
+    # gflow 0.78.0 started driving an end frame on this host, where 0.73.1 refused it for free. It submits on
+    # another rpc with an interpolation model, so the 15 credits measured for a plain start frame do not price it
+    # and nothing else here does either: refuse rather than spend an unknown amount (review 2026-09-18).
+    if end_frame:
+        raise ValueError(
+            "end_frame is refused: gflow 0.78.0 runs it through Flow's interpolation submit, whose price on this "
+            "account is unmeasured, and this tool's 15 credits cover a start frame only. Ask the owner to price "
+            "one run before using it."
+        )
     return await _gen(
         "i2v",
         prompt=prompt,

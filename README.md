@@ -89,7 +89,8 @@ Sinh nội dung, tốn credit (video) hoặc quota (ảnh), luôn cần `--proje
 ```
 uv run video gen t2v "<prompt>" --project <id> --model veo-lite --aspect 16:9 --out out
 uv run video gen r2v "<prompt>" --ref anh.jpg --project <id> --model veo-lite
-uv run video gen i2v anh.png "<prompt>" --project <id> --aspect 9:16   # chạy được từ gflow 0.78.0, omni-flash 10 s = 15
+uv run video gen i2v anh.png "<prompt>" --project <id> --model omni-flash --duration 10 --aspect 9:16   # 15 credit
+uv run video gen i2v anh.png "<prompt>" --project <id> --aspect 9:16                      # bỏ trống model: gflow dùng veo-lite
 uv run video gen t2i "<prompt>" --project <id> --model nano2 --aspect 16:9
 uv run video gen i2i "<prompt>" --ref anh.jpg --project <id>
 ```
@@ -308,7 +309,11 @@ quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần
 - `gen i2v` từng hỏng 5/5 lần ("frame picker stayed open 15s", 0 credit mỗi lần) tới khi nâng gflow lên 0.78.0:
   bản 0.74.0 sửa picker không commit ở cú bấm đầu và lần chạy lại bám nhầm khung cũ (#792), 0.78.0 sửa tiếp
   picker không bind được khung vừa upload. Đo 2026-09-18: **15 credit**, 105 s, clip 10,005 s, khung đầu đúng
-  ảnh đưa vào. **Không truyền `--aspect` thì tỉ lệ là tỉ lệ còn sót của lần chạy trước**: ảnh 16:9 ra clip 9:16.
+  ảnh đưa vào (đã crop). **Không truyền `--aspect` thì ra 9:16**, vì `--aspect` của gflow mặc định `9:16` cho cả
+  t2v, i2v, r2v; đó là mặc định của gflow chứ không phải tỉ lệ còn sót của lần trước. Ảnh khác tỉ lệ bị Flow CẮT
+  cho vừa: ảnh 16:9 ra clip 720x1280 với con thuyền bị đẩy nửa ra khỏi mép trái. Truyền đúng tỉ lệ mình muốn.
+- `gen i2v --end-frame` (khung cuối): gflow 0.78.0 mới port lên host mới và nó đi submit khác (rpc `nprQif`, model
+  nội suy), **giá chưa đo**, nên tool MCP `gen_i2v` từ chối `end_frame` cho tới khi có một lần chạy trả tiền để đo.
 - URL trong listing là poster; tải tài sản gốc bằng hậu tố lh3 (`=s0` ảnh, `=m22` rồi `=m18` video).
 - Agent mode bật là Flow lưu theo project và ẩn chip settings của composer; tắt lại bằng
   `flow agent mode <project> off`.

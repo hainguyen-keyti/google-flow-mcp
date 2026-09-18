@@ -240,9 +240,10 @@ async def run_job(
         # invites the retry that pays twice (their own A/B, 2026-09-15).
         if code == 39 or problem.get("error_class") == "FlowAccessUnavailableError":
             raise RuntimeError(
-                f"gflow {job.kind} exit {code} (FlowAccessUnavailableError): Flow says this account has no "
-                "access to what the run needs. Nothing expired, so do not retry and do not re-run gflow auth "
-                f"login: tell the owner, who has to check the account's Flow access. ({summary})"
+                f"gflow {job.kind} exit {code} (FlowAccessUnavailableError): Flow showed its own no-access "
+                "screen for this Google account. Nothing expired, so do not retry and do not re-run gflow auth "
+                "login: tell the owner, who has to check the account's Flow subscription, age verification and "
+                f"region. ({summary})"
             )
         raise RuntimeError(f"gflow {job.kind} exit {code} ({problem.get('error_class', '?')}): {summary}")
     outputs = parse_result(job.kind, stdout)
