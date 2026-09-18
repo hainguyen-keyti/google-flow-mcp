@@ -773,7 +773,9 @@ async def character_set_voice(project_id: str, entity_id: str, voice: str) -> st
         "character_set_voice attaches a bare preset and the words are lost. Measured 2026-09-18: free, about "
         "45 s, because Flow synthesises a preview first and the save does nothing until that answer lands. "
         "sample is the line Flow speaks in the preview, 120 characters at most. attach false saves the voice "
-        "without changing the character's current one. Free."
+        "without changing the character's current one. The saved sample also shows up in flow_media as a row "
+        "whose kind is video, titled with the voice name, carrying no url and no prompt: that row is the voice, "
+        "not a clip. Free."
     ),
 )
 async def character_make_voice(

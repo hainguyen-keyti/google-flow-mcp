@@ -262,7 +262,8 @@ mặt, tay và món đồ.
     nhưng bấm sớm thì không gửi gì hết. Tool chờ đúng câu trả lời ấy rồi mới bấm, và một cú bấm không sinh rpc
     nào bị báo lỗi chứ không được gọi là đã lưu. Lưu xong fires `lt8g5` cộng `mYWVGd`, giọng hiện trên đầu danh
     sách. Đo thật: 44 s, $0. `sample` là câu Flow đọc thử, tối đa 120 ký tự; `attach=false` lưu mà không đổi giọng
-    đang gắn.
+    đang gắn. Lưu ý cho agent đọc listing: mẫu giọng đã lưu **hiện trong `flow_media`** thành một hàng
+    `kind: "video"` mang tên giọng, `url` và `prompt` đều `null`. Đó là giọng chứ không phải clip.
 - **Biến clip thành tài sản của project** (miễn phí, đo 2026-09-18): `clip_save_frame` lưu khung hình clip editor
   đang mở thành ẢNH của project (rpc `maseQ`, tiêu đề `Saved frame from <clip>`) để làm `initial_frame` cho cảnh
   sau; `scene_save_clip` chép một clip trong timeline ra grid thành media riêng (chuột phải, `Save to Project`,
