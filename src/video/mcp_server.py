@@ -1107,13 +1107,16 @@ async def gen_t2v(
 @server.tool(
     name="gen_i2v",
     description=(
-        "Image (first frame) to video via gflow. It spends credits and is ledgered: omni-flash 10 s x1 = 15 "
-        "credits (the default when model is omitted), measured 2026-09-18 on the first run that ever finished, in "
-        "105 s. Every attempt before that died in Flow's frame picker and spent nothing, which gflow 0.78.0 "
-        "fixed. PASS aspect, and match it to your image: leaving it out means 9:16, gflow's own default, and Flow "
-        "CROPS a start frame of another shape to fit, which pushed the subject of a 16:9 photo half out of the "
-        "left edge. end_frame is refused for now: gflow runs it through another submit whose price here is "
-        "unmeasured. Allow 2-5 min." + _JOB_ID_RULE
+        "Image (first frame, optionally a last frame too) to video via gflow. It spends credits and is ledgered, "
+        "both forms measured 2026-09-18 at omni-flash 10 s x1, the default when model is omitted: a start frame "
+        "alone = 15 credits in 105 s, and start + end_frame = 15 credits in 119 s. Pass end_frame to interpolate "
+        "between two local images: Flow takes that on its own interpolation submit, and the measured clip did "
+        "begin and end on the frames given (its first frame differed from the input by 3.4 of 255, its last by "
+        "8.0, while either input against the other's end read about 50). Both runs that finished did so on gflow "
+        "0.78.0; every attempt before it died in Flow's frame picker and spent nothing. PASS aspect, and match it "
+        "to your images: leaving it out means 9:16, gflow's own default, and Flow CROPS a frame of another shape "
+        "to fit, which pushed the subject of a 16:9 photo half out of the left edge. Allow 2-5 min."
+        + _JOB_ID_RULE
     ),
 )
 async def gen_i2v(
@@ -1127,15 +1130,6 @@ async def gen_i2v(
     duration: int | None = None,
 ) -> str:
     _require(initial_frame, "initial_frame")
-    # gflow 0.78.0 started driving an end frame on this host, where 0.73.1 refused it for free. It submits on
-    # another rpc with an interpolation model, so the 15 credits measured for a plain start frame do not price it
-    # and nothing else here does either: refuse rather than spend an unknown amount (review 2026-09-18).
-    if end_frame:
-        raise ValueError(
-            "end_frame is refused: gflow 0.78.0 runs it through Flow's interpolation submit, whose price on this "
-            "account is unmeasured, and this tool's 15 credits cover a start frame only. Ask the owner to price "
-            "one run before using it."
-        )
     return await _gen(
         "i2v",
         prompt=prompt,

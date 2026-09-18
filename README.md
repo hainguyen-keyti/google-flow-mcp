@@ -31,7 +31,7 @@ uv run video flow media <project> [--json]  # media, model, dung lượng, URL
 uv run video flow media <project> --all     # mọi record kể cả clip trong scene, ảnh nháp character (unlisted)
 uv run video flow tools <project>           # gallery Tools cộng đồng
 uv run video flow characters <project>
-uv run video flow download <project> <media_id> --out out/   # tài sản gốc (=s0, =m22), không ghi đè
+uv run video flow download <project> <media_id> --out out/   # tài sản gốc (=s0, =m22), không ghi đè; qua MCP thì out_dir phải nằm trong out/
 uv run video flow upload <project> <file>
 uv run video flow uploads <project>
 uv run video flow project create --title T | rename <id> T | delete <id> --yes
@@ -312,8 +312,10 @@ quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần
   ảnh đưa vào (đã crop). **Không truyền `--aspect` thì ra 9:16**, vì `--aspect` của gflow mặc định `9:16` cho cả
   t2v, i2v, r2v; đó là mặc định của gflow chứ không phải tỉ lệ còn sót của lần trước. Ảnh khác tỉ lệ bị Flow CẮT
   cho vừa: ảnh 16:9 ra clip 720x1280 với con thuyền bị đẩy nửa ra khỏi mép trái. Truyền đúng tỉ lệ mình muốn.
-- `gen i2v --end-frame` (khung cuối): gflow 0.78.0 mới port lên host mới và nó đi submit khác (rpc `nprQif`, model
-  nội suy), **giá chưa đo**, nên tool MCP `gen_i2v` từ chối `end_frame` cho tới khi có một lần chạy trả tiền để đo.
+- `gen i2v --end-frame` (khung cuối, nội suy giữa hai ảnh local): gflow 0.78.0 mới port lên host mới, đi submit
+  riêng (rpc `nprQif`, model nội suy). **Đo 2026-09-18 qua MCP: 15 credit, 119 s** cho omni-flash 10 s, bằng đúng
+  giá chạy một khung đầu (105 s). Clip ra đúng hai đầu: khung đầu lệch 3,4/255 so với ảnh đầu, khung cuối lệch
+  8,0 so với ảnh cuối, trong khi chéo nhau lệch khoảng 50 (`out/plan_i/end_frame_sheet.png`).
 - URL trong listing là poster; tải tài sản gốc bằng hậu tố lh3 (`=s0` ảnh, `=m22` rồi `=m18` video).
 - Agent mode bật là Flow lưu theo project và ẩn chip settings của composer; tắt lại bằng
   `flow agent mode <project> off`.

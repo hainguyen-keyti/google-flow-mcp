@@ -329,37 +329,32 @@ def test_flow_media_can_ask_for_every_version(monkeypatch):
     assert [row["workflow_id"] for row in payload["versions"]] == ["w1", "w2"]
 
 
-def test_gen_i2v_refuses_an_end_frame_until_that_run_has_been_priced(monkeypatch):
-    """Review 2026-09-18 (Plan F). Through gflow 0.73.1 an end frame was refused on this migrated account at
-    exit 36 and cost nothing, so the parameter was harmless. gflow 0.78.0 drives it for real: a local end frame
-    submits on rpc nprQif with an interpolation model key, a different wire model from the omni-flash 10 s run
-    the tool's 15 credits were measured on. Nothing re-prices it, so an agent passing end_frame would budget 15
-    for a run whose price nobody has measured. Refuse until someone pays for that measurement."""
-    called = []
+def test_gen_i2v_prices_the_end_frame_run_separately_from_the_start_frame_one():
+    """Plan I T3. The end frame goes out on Flow's interpolation submit, a different wire model from the plain
+    start-frame run the 15 credits were measured on, so the description has to carry BOTH numbers and say which
+    is which. Anything else lets an agent budget one run at the other's price."""
+    description = served_tool_objects()["gen_i2v"].description
+    assert "15" in description, description
+    assert "end_frame" in description and "interpolation" in description.lower(), description
+    # Only the end frame's own refusal is lifted; the shared job_id rule still says a used id is refused.
+    assert "end_frame is refused" not in description, (
+        "the refusal is lifted once the run has a measured price"
+    )
+    # Never merged into one figure: each form carries its own measurement, which is also how a reader can tell
+    # the two were priced separately rather than assumed equal (they happen to match today, at 15 each).
+    assert "105 s" in description and "119 s" in description, description
+    assert re.search(r"start frame[^.]*?15 credits in 105 s", description), description
+    assert re.search(r"end_frame = 15 credits in 119 s", description), description
 
-    async def fake_generate(**kwargs):
-        called.append(kwargs)
-        return {"job_id": "x", "outputs": []}
 
-    monkeypatch.setattr(mcp_server.backend, "generate", fake_generate)
-
-    async def fn(session):
-        return await session.call_tool(
-            "gen_i2v",
-            {
-                "initial_frame": "/tmp/a.png",
-                "end_frame": "/tmp/b.png",
-                "prompt": "a boat",
-                "project": "P",
-                "job_id": "job-end",
-            },
-        )
-
-    result = with_client(fn)
-    text = "".join(getattr(c, "text", "") for c in result.content)
-    assert result.is_error, text
-    assert "end_frame" in text and "unmeasured" in text, text
-    assert called == [], "the run must be refused before anything can be spent"
+def test_the_cli_says_an_end_frame_is_a_different_run(monkeypatch):
+    """The CLI is the owner's own surface and it advertised 'optional last frame' with no help text at all, so
+    `--help` sold a run nobody had priced (review 2026-09-18)."""
+    i2v = cli.main.commands["gen"].commands["i2v"]
+    end_frame = next(p for p in i2v.params if p.name == "end_frame")
+    assert end_frame.help, "--end-frame had no help text at all"
+    assert "credit" in end_frame.help.lower(), end_frame.help
+    assert "optional last frame" not in (i2v.__doc__ or ""), i2v.__doc__
 
 
 def test_gen_tool_refuses_a_missing_project(monkeypatch):

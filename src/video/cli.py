@@ -671,10 +671,18 @@ def t2v(prompt: str, **opts) -> None:
 @gen.command()
 @click.argument("initial_frame", type=click.Path(exists=True, dir_okay=False))
 @click.argument("prompt")
-@click.option("--end-frame", default=None, type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--end-frame",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help=(
+        "Interpolate to this local image: Flow takes it on its own submit, measured 2026-09-18 at 15 credits "
+        "for omni-flash 10 s, the same as a start frame alone."
+    ),
+)
 @_gen_options
 def i2v(initial_frame: str, prompt: str, end_frame: str | None, **opts) -> None:
-    """Image (first frame, optional last frame) to video."""
+    """Image to video from a start frame, and with --end-frame between two frames."""
     from pathlib import Path
 
     _run_gen(
