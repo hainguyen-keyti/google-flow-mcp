@@ -54,9 +54,10 @@ EXPECTED_TOOLS = {
     "scene_set_aspect",
     "scene_remove_clip",
     "scene_move_clip",
-    # Plan J: voices belong to a character, and two ways to turn a clip into project media. 37 to 42 on purpose.
+    # Plan J: voices belong to a character, and two ways to turn a clip into project media. 37 to 43 on purpose.
     "flow_voices",
     "character_set_voice",
+    "character_make_voice",
     "character_clear_voice",
     "clip_save_frame",
     "scene_save_clip",
@@ -123,6 +124,13 @@ TOOL_CALLS: dict[str, dict] = {
     "scene_move_clip": {"project_id": "P", "scene_id": "S", "clip_id": "C", "position": 2},
     "flow_voices": {"project_id": "P", "entity_id": "E"},
     "character_set_voice": {"project_id": "P", "entity_id": "E", "voice": "Leda"},
+    "character_make_voice": {
+        "project_id": "P",
+        "entity_id": "E",
+        "preset": "Leda",
+        "performance": "giọng nữ Sài Gòn",
+        "name": "SaigonGirl20",
+    },
     "character_clear_voice": {"project_id": "P", "entity_id": "E"},
     "clip_save_frame": {"project_id": "P", "media_id": "M"},
     "scene_save_clip": {"project_id": "P", "scene_id": "S", "clip_id": "C"},

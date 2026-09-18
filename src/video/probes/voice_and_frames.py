@@ -208,12 +208,8 @@ async def act_voicepicker(
     target = entity or (listed[0]["entity_id"] if listed else None)
     if not target:
         return {"note": "the project holds no character to open"}
-    await session.goto(f"{session.project_url(project)}/character/{target}", ready=characters_mod.EDIT_PAGE)
-    await page.wait_for_timeout(3_000)
-    opener = page.get_by_role("button", name=re.compile("select a voice|voice", re.IGNORECASE)).first
-    label = (await opener.inner_text()).strip()
-    _safe(label, "opening the voice selector")
-    await opener.click(timeout=10_000)
+    _safe("voice selector", "opening the voice selector")
+    await characters_mod._open_voice_selector(session, project, target)
     await page.wait_for_timeout(2_500)
     # The list scrolls: the first read showed 15 of gflow's 29 presets, and whether anything at the BOTTOM makes
     # a voice of your own is exactly the question this probe exists to answer.
@@ -274,7 +270,7 @@ async def act_voicepicker(
     await page.keyboard.press("Escape")
     return {
         "entity_id": target,
-        "opened_with": label,
+        "opened_with": "voice selector (driver opener)",
         "dialog_rows": dialog_text,
         "voice_cards": cards,
         "fields": fields,
@@ -334,6 +330,42 @@ async def _media_ids(session: FlowSession, project: str) -> set[str]:
     return {row["id"] for row in listing["media"]} | {row["id"] for row in listing.get("versions") or []}
 
 
+class AllTraffic:
+    """EVERY request the page makes, not only batchexecute.
+
+    The first pass used the scene probe's Traffic, which filters on 'batchexecute' in the URL, so the
+    'Save new voice' click looked like it fired nothing at all. A save that goes out over REST would be
+    invisible to that filter, which is exactly the hole this closes (2026-09-18).
+    """
+
+    def __init__(self, session: FlowSession) -> None:
+        self.session = session
+        self.t0 = time.monotonic()
+        self.calls: list[dict[str, Any]] = []
+
+    def _on_request(self, request: Any) -> None:
+        body = request.post_data or ""
+        self.calls.append(
+            {
+                "t": round(time.monotonic() - self.t0, 2),
+                "method": request.method,
+                "url": request.url[:160],
+                "kind": request.resource_type,
+                "body": body[:400],
+            }
+        )
+
+    def start(self) -> AllTraffic:
+        self.t0 = time.monotonic()
+        self.session.page.on("request", self._on_request)
+        return self
+
+    def stop(self) -> list[dict[str, Any]]:
+        self.session.page.remove_listener("request", self._on_request)
+        # Images, fonts and the media the preview plays are noise; what matters is what the page SENDS.
+        return [c for c in self.calls if c["kind"] in ("xhr", "fetch", "other") or c["method"] != "GET"]
+
+
 async def act_setvoice(session: FlowSession, project: str, spec: str, stamp: str) -> dict[str, Any]:
     """Give a character a voice the way the page does it: pick a preset, write the performance, listen-free, and
     commit with 'Add to character'. Records the rpc traffic so the driver is written against what Flow stores.
@@ -345,12 +377,10 @@ async def act_setvoice(session: FlowSession, project: str, spec: str, stamp: str
     performance, _, wanted_name = rest2.partition("|")
     performance = performance or "giọng nữ trẻ miền Nam, nhỏ nhẹ, nhí nhảnh, khoảng 20 tuổi"
     page = session.page
-    await session.goto(f"{session.project_url(project)}/character/{entity}", ready=characters_mod.EDIT_PAGE)
-    await page.wait_for_timeout(2_500)
-    opener = page.get_by_role("button", name=re.compile("select a voice|voice", re.IGNORECASE)).first
-    _safe((await opener.inner_text()).strip(), "opening the voice selector")
-    await opener.click(timeout=10_000)
-    await page.wait_for_timeout(2_000)
+    # The driver's own opener, so the probe exercises the code the tool ships rather than a copy of it: a
+    # character that already HAS a voice offers no button named "voice" to the accessibility tree (2026-09-18).
+    _safe("voice selector", "opening the voice selector")
+    await characters_mod._open_voice_selector(session, project, entity)
     # The voice list renders a window at a time, exactly like the project grid: Leda sat below the fold and the
     # first attempt reported "no voice row named 'Leda'". Scroll until the wanted row renders.
     row = page.locator(f"{OVERLAY} [role=option], {OVERLAY} button").filter(has_text=voice).first
@@ -381,6 +411,7 @@ async def act_setvoice(session: FlowSession, project: str, spec: str, stamp: str
         await box.fill(text)
         filled[placeholder[:40]] = text
     await page.wait_for_timeout(600)
+    t_fill = time.monotonic()
     before = await _shot(page, stamp, "voice_filled")
     # Typing a performance turns the dialog into a voice MAKER: a "Voice name" field appears (prefilled
     # "<Preset> custom") and the footer swaps "Add to character" for "Reset" + "Save new voice". So the commit
@@ -394,12 +425,34 @@ async def act_setvoice(session: FlowSession, project: str, spec: str, stamp: str
                 await named.nth(index).fill(wanted_name)
                 value = wanted_name
             voice_name = value
+    # Preview first, the way a person would: the save may only be offered once Flow has synthesised the voice.
+    preview = page.get_by_role("button", name=re.compile("^preview$|play preview", re.IGNORECASE)).first
+    previewed = bool(await preview.count())
+    if previewed:
+        _safe("preview", "listening to the voice")
+        await preview.click(timeout=10_000)
+        await page.wait_for_timeout(6_000)
     commit = page.get_by_role(
         "button", name=re.compile("save new voice|add to character", re.IGNORECASE)
     ).first
     label = (await commit.inner_text()).strip()
     _safe(label, "committing the voice")
-    await commit.click(timeout=10_000)
+    # Measured 2026-09-18: the footer button carries disabled="true" for a while, which is why an earlier run
+    # "clicked save" and saw no request at all. Watch the flag instead of assuming the click landed.
+    states: list[list[Any]] = []
+    for _ in range(20):
+        flag = await commit.get_attribute("disabled")
+        states.append([round(time.monotonic() - t_fill, 1), flag])
+        if flag is None:
+            break
+        await page.wait_for_timeout(2_000)
+    everything = AllTraffic(session).start()
+    clicked = False
+    if states and states[-1][1] is None:
+        await commit.click(timeout=10_000)
+        clicked = True
+        await page.wait_for_timeout(6_000)
+    all_calls = everything.stop()
     await page.wait_for_timeout(4_000)
     seen = await traffic.stop()
     await session.goto(f"{session.project_url(project)}/character/{entity}", ready=characters_mod.EDIT_PAGE)
@@ -410,6 +463,10 @@ async def act_setvoice(session: FlowSession, project: str, spec: str, stamp: str
         "filled": filled,
         "voice_name": voice_name,
         "committed_with": label,
+        "previewed": previewed,
+        "commit_disabled_over_time": states,
+        "clicked": clicked,
+        "all_network_on_save": all_calls[:12],
         "rpcids": sorted({r["rpcids"] for r in seen["requests"] if r["rpcids"]}),
         "requests": seen["requests"][:6],
         "replies": seen["replies"][:6],

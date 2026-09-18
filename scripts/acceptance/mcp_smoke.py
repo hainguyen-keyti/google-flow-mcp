@@ -71,6 +71,7 @@ MUTATING = (
     "character_create",
     "character_delete",
     "character_set_voice",
+    "character_make_voice",
     "character_clear_voice",
     "scene_save_clip",
     "clip_save_frame",

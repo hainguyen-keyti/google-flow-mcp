@@ -224,9 +224,13 @@ async def list_characters(session: FlowSession, project_id: str) -> list[dict[st
 VOICE_OPENER = re.compile("select a voice|voice_selection", re.IGNORECASE)
 VOICE_COMMIT = re.compile("add to character", re.IGNORECASE)
 VOICE_REMOVE = re.compile("^remove$", re.IGNORECASE)
+VOICE_ROW = ".cdk-overlay-pane [role=option]"
+VOICE_TITLE = ".asset-title"
 VOICE_ROWS_JS = (
-    "() => [...document.querySelectorAll('.cdk-overlay-pane [role=option], .cdk-overlay-pane button')]"
-    "  .map(e => (e.innerText || '').trim().replace(/\\s+/g, ' ')).filter(t => t.startsWith('voice_selection'))"
+    "() => [...document.querySelectorAll('.cdk-overlay-pane [role=option]')].map(e => ["
+    "  ((e.querySelector('.asset-title') || {}).textContent || '').trim(),"
+    "  ((e.querySelector('.asset-description') || {}).textContent || '').trim(),"
+    "  !!e.querySelector('.custom-voice-badge-icon')]).filter(row => row[0])"
 )
 VOICE_SCROLL_JS = (
     "() => { const p = document.querySelector('.cdk-overlay-pane');"
@@ -235,13 +239,42 @@ VOICE_SCROLL_JS = (
     "  return was === Math.round(box.scrollTop) ? null : [was, Math.round(box.scrollTop)]; }"
 )
 VOICE_SWEEP_STEPS = 14
+VOICE_SAVE = re.compile("save new voice", re.IGNORECASE)
+VOICE_BOXES = ".cdk-overlay-pane textarea"
+VOICE_NAME_INPUT = ".cdk-overlay-pane input:not([aria-label='Search assets'])"
+VOICE_SAMPLE_MAX = 120
+VOICE_READY_WAIT_S = 90.0
+VOICE_READY_STEP_S = 2.0
+VOICE_PREVIEW_RPC = "no0P6"
+# Measured 2026-09-18: the control reads "autorenew Preview" but its aria-label, which is what the role query
+# sees, is "Play preview", so an anchored pattern finds nothing.
+VOICE_PREVIEW = re.compile("preview", re.IGNORECASE)
 
 
-def _voice_of(row: str) -> dict[str, str]:
-    """A row reads 'voice_selection <Name> <description>', the icon ligature running into the label."""
-    body = row.removeprefix("voice_selection").strip()
-    name, _, description = body.partition(" ")
-    return {"name": name, "description": description.strip()}
+def _watch_rpc(page: Any, rpcid: str) -> Any:
+    """Count Flow's answers to one rpc, so a wait can end on the answer rather than on a guess about timing."""
+
+    class Watch:
+        count = 0
+
+        def note(self, response: Any) -> None:
+            if rpcid in response.request.url:
+                self.count += 1
+
+        def stop(self) -> None:
+            page.remove_listener("response", self.note)
+
+    watch = Watch()
+    page.on("response", watch.note)
+    return watch
+
+
+def _voice_of(row: list[Any]) -> dict[str, Any]:
+    """A row is a button[role=option] carrying span.asset-title, span.asset-description and, for a voice saved
+    on this account, mat-icon.custom-voice-badge-icon. Its textContent runs all of them together with no
+    whitespace, so the parts are read from their own elements (measured 2026-09-18)."""
+    name, description, custom = row
+    return {"name": name.strip(), "description": description.strip(), "custom": bool(custom)}
 
 
 async def _open_voice_selector(session: FlowSession, project_id: str, entity_id: str) -> Any:
@@ -249,6 +282,10 @@ async def _open_voice_selector(session: FlowSession, project_id: str, entity_id:
     await session.goto(f"{session.project_url(project_id)}/character/{entity_id}", ready=EDIT_PAGE)
     await page.wait_for_timeout(2_500)
     opener = page.get_by_role("button", name=VOICE_OPENER).first
+    if not await opener.count():
+        # With a voice attached the control's accessible name is only the voice: the words voice_selection are a
+        # Material icon ligature Flow hides from the tree, and filtering on text content sees it (2026-09-18).
+        opener = page.locator("button").filter(has_text=VOICE_OPENER).first
     if not await opener.count():
         raise LookupError(
             f"character {entity_id} shows no voice control; voices live on the character's own page"
@@ -265,15 +302,36 @@ async def list_voices(session: FlowSession, project_id: str, entity_id: str) -> 
     at a time, so it is swept rather than read once.
     """
     page = await _open_voice_selector(session, project_id, entity_id)
-    seen: list[str] = []
+    seen: dict[str, dict[str, Any]] = {}
     for _ in range(VOICE_SWEEP_STEPS):
         for row in await page.evaluate(VOICE_ROWS_JS):
-            if row not in seen:
-                seen.append(row)
+            voice = _voice_of(row)
+            seen.setdefault(voice["name"], voice)
         if not await page.evaluate(VOICE_SCROLL_JS):
             break
         await page.wait_for_timeout(700)
-    return [_voice_of(row) for row in seen]
+    return list(seen.values())
+
+
+async def _pick_voice(session: FlowSession, page: Any, project_id: str, entity_id: str, voice: str) -> Any:
+    """Scroll the virtual list to the row whose OWN title is that voice and select it."""
+    wanted = re.compile(rf"^\s*{re.escape(voice)}\s*$", re.IGNORECASE)
+    row = page.locator(VOICE_ROW).filter(has=page.locator(VOICE_TITLE, has_text=wanted))
+    for _ in range(VOICE_SWEEP_STEPS):
+        if await row.count():
+            break
+        if not await page.evaluate(VOICE_SCROLL_JS):
+            break
+        await page.wait_for_timeout(700)
+    if not await row.count():
+        names = [v["name"] for v in await list_voices(session, project_id, entity_id)]
+        raise LookupError(f"no voice named {voice!r} in the selector; it offers {names}")
+    # The dialog opens with the voice it last edited already selected. Clicking that row again deselects it and
+    # empties the dialog, the footer button included, so the click only happens when it is needed (2026-09-18).
+    if await row.first.get_attribute("aria-selected") != "true":
+        await row.first.click(timeout=8_000)
+        await page.wait_for_timeout(1_200)
+    return row
 
 
 async def set_voice(session: FlowSession, project_id: str, entity_id: str, voice: str) -> dict[str, Any]:
@@ -284,19 +342,7 @@ async def set_voice(session: FlowSession, project_id: str, entity_id: str, voice
     The list is virtual, so the wanted row is scrolled to rather than assumed rendered.
     """
     page = await _open_voice_selector(session, project_id, entity_id)
-    wanted = re.compile(rf"voice_selection\s+{re.escape(voice)}\b", re.IGNORECASE)
-    row = page.locator(".cdk-overlay-pane [role=option], .cdk-overlay-pane button").filter(has_text=wanted)
-    for _ in range(VOICE_SWEEP_STEPS):
-        if await row.count():
-            break
-        if not await page.evaluate(VOICE_SCROLL_JS):
-            break
-        await page.wait_for_timeout(700)
-    if not await row.count():
-        names = [v["name"] for v in await list_voices(session, project_id, entity_id)]
-        raise LookupError(f"no voice named {voice!r} in the selector; it offers {names}")
-    await row.first.click(timeout=8_000)
-    await page.wait_for_timeout(1_200)
+    await _pick_voice(session, page, project_id, entity_id, voice)
     commit = page.get_by_role("button", name=VOICE_COMMIT).first
     if not await commit.count():
         raise LookupError(
@@ -305,6 +351,98 @@ async def set_voice(session: FlowSession, project_id: str, entity_id: str, voice
     await commit.click(timeout=10_000)
     await page.wait_for_timeout(3_000)
     return {"entity_id": entity_id, "voice": voice, "rpcids": ["rzMKMb"]}
+
+
+async def make_voice(
+    session: FlowSession,
+    project_id: str,
+    entity_id: str,
+    preset: str,
+    performance: str,
+    *,
+    name: str,
+    sample: str = "Xin chào",
+    attach: bool = True,
+    wait_s: float | None = None,
+    step_s: float | None = None,
+) -> dict[str, Any]:
+    """Make a voice of your own: a preset plus a written performance, saved under a name. Free.
+
+    Measured 2026-09-18 on project 118aece2: writing into the performance box turns the picker into a voice
+    MAKER, but typing sends NOTHING: clicking Preview is what makes Flow synthesise the voice (rpc no0P6,
+    'gemini_v4s_tts_flow', about 24 s), and 'Save new voice' stays a no-op until that answer lands even though
+    it looks enabled the whole time. A run that trusted the flag clicked at once and left no voice behind.
+    The save fires lt8g5 (the sample becomes visible media) and mYWVGd (its display name), after which the
+    voice is listed above the presets and attaches like one.
+    """
+    if len(sample) > VOICE_SAMPLE_MAX:
+        raise ValueError(f"the sample dialogue box holds {VOICE_SAMPLE_MAX} characters, got {len(sample)}")
+    if not name.strip() or not performance.strip():
+        raise ValueError("a voice of your own needs both a name and a performance description")
+    wait_s = VOICE_READY_WAIT_S if wait_s is None else wait_s
+    step_s = VOICE_READY_STEP_S if step_s is None else step_s
+    page = await _open_voice_selector(session, project_id, entity_id)
+    await _pick_voice(session, page, project_id, entity_id, preset)
+    boxes = page.locator(VOICE_BOXES)
+    if await boxes.count() < 2:
+        raise LookupError("the voice dialog shows no sample dialogue and performance boxes")
+    watch = _watch_rpc(page, VOICE_PREVIEW_RPC)
+    try:
+        await boxes.nth(0).fill(sample)
+        await boxes.nth(1).fill(performance)
+        await page.wait_for_timeout(600)
+        await page.locator(VOICE_NAME_INPUT).first.fill(name)
+        await page.wait_for_timeout(600)
+        # Typing sends nothing at all: the footer only swaps the Preview icon for autorenew. Clicking Preview is
+        # what makes Flow synthesise the voice, and the save stays a no-op until that answer lands (2026-09-18).
+        preview = page.get_by_role("button", name=VOICE_PREVIEW).first
+        if not await preview.count():
+            raise LookupError("the voice dialog offers no Preview, so the synthesis cannot be started")
+        await preview.click(timeout=10_000)
+        commit = page.get_by_role("button", name=VOICE_SAVE).first
+        if not await commit.count():
+            raise LookupError(
+                "the dialog offers no 'Save new voice'; a performance is what turns it into a maker"
+            )
+        attempts = max(1, round(wait_s / step_s))
+        for _ in range(attempts):
+            if watch.count:
+                break
+            await page.wait_for_timeout(int(step_s * 1_000))
+        else:
+            raise TimeoutError(
+                f"Flow never answered the preview synthesis ({VOICE_PREVIEW_RPC}) within {wait_s:.0f} s; "
+                "clicking save before that answer does nothing at all"
+            )
+    finally:
+        watch.stop()
+    polls = 0
+    for _ in range(attempts):
+        polls += 1
+        if await commit.get_attribute("disabled") is None:
+            break
+        await page.wait_for_timeout(int(step_s * 1_000))
+    else:
+        raise TimeoutError(f"'Save new voice' was still disabled {wait_s:.0f} s after the preview answer")
+    frames = await capture(session, lambda: commit.click(timeout=10_000), settle=8.0)
+    if not frames:
+        # rpcids [] is what the failed live run returned: the click landed on a button that did nothing, and
+        # reporting it as a save would send an agent hunting a voice that is not there.
+        raise RuntimeError("the 'Save new voice' click fired no rpc at all, so no voice was saved")
+    result: dict[str, Any] = {
+        "entity_id": entity_id,
+        "voice": name,
+        "preset": preset,
+        "performance": performance,
+        "sample": sample,
+        "polls": polls,
+        "attached": False,
+        "rpcids": sorted(frames),
+    }
+    if attach:
+        await set_voice(session, project_id, entity_id, name)
+        result["attached"] = True
+    return result
 
 
 async def clear_voice(session: FlowSession, project_id: str, entity_id: str) -> dict[str, Any]:

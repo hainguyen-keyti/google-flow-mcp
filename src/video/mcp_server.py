@@ -283,6 +283,23 @@ class Backend:
     async def character_set_voice(self, project_id: str, entity_id: str, voice: str) -> dict[str, Any]:
         return await self._with(lambda s: characters_mod.set_voice(s, project_id, entity_id, voice))
 
+    async def character_make_voice(
+        self,
+        project_id: str,
+        entity_id: str,
+        preset: str,
+        performance: str,
+        name: str,
+        sample: str | None = None,
+        attach: bool = True,
+    ) -> dict[str, Any]:
+        extra = {} if sample is None else {"sample": sample}
+        return await self._with(
+            lambda s: characters_mod.make_voice(
+                s, project_id, entity_id, preset, performance, name=name, attach=attach, **extra
+            )
+        )
+
     async def character_clear_voice(self, project_id: str, entity_id: str) -> dict[str, Any]:
         return await self._with(lambda s: characters_mod.clear_voice(s, project_id, entity_id))
 
@@ -745,6 +762,39 @@ async def character_set_voice(project_id: str, entity_id: str, voice: str) -> st
     _require(entity_id, "entity_id")
     _require(voice, "voice")
     return _json(await backend.character_set_voice(project_id, entity_id, voice))
+
+
+@server.tool(
+    name="character_make_voice",
+    description=(
+        "Make a VOICE OF YOUR OWN and give it to a character: a preset from flow_voices plus a written "
+        "performance ('giọng nữ Sài Gòn, nhỏ nhẹ, nhí nhảnh, khoảng 20 tuổi'), saved under a name so later "
+        "characters can reuse it. This is the only way the description reaches the generation: "
+        "character_set_voice attaches a bare preset and the words are lost. Measured 2026-09-18: free, about "
+        "45 s, because Flow synthesises a preview first and the save does nothing until that answer lands. "
+        "sample is the line Flow speaks in the preview, 120 characters at most. attach false saves the voice "
+        "without changing the character's current one. Free."
+    ),
+)
+async def character_make_voice(
+    project_id: str,
+    entity_id: str,
+    preset: str,
+    performance: str,
+    name: str,
+    sample: str | None = None,
+    attach: bool = True,
+) -> str:
+    _require(project_id, "project_id")
+    _require(entity_id, "entity_id")
+    _require(preset, "preset")
+    _require(performance, "performance")
+    _require(name, "name")
+    return _json(
+        await backend.character_make_voice(
+            project_id, entity_id, preset, performance, name, sample=sample, attach=attach
+        )
+    )
 
 
 @server.tool(
