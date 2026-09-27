@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import shlex
 import subprocess
@@ -24,19 +25,33 @@ LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11"
 # the wardrobe shot had 15.7 dB of range and 2.6 dB of headroom, and loudnorm stopped at -19.7 LUFS.
 COMPRESSOR = "acompressor=threshold=-30dB:ratio=6:attack=10:release=200:makeup=2"
 LUFS_RE = re.compile(r"^\s*I:\s*(-?\d+(?:\.\d+)?)\s*LUFS", re.MULTILINE)
+# Set this to draw captions with a font of your own; it wins over the candidates below. Added 2026-09-27
+# after the first CI run on Linux failed for want of a font, which the macOS-only list could never find.
+FONT_ENV = "VIDEO_FONT"
 FONTS = (
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/Library/Fonts/Arial Unicode.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
 )
 Caption = tuple[float, float, str]
 
 
 def font() -> str:
+    """The font captions are drawn with: whatever VIDEO_FONT names, else the first candidate that exists."""
+    named = os.environ.get(FONT_ENV, "").strip()
+    if named:
+        if not Path(named).is_file():
+            raise FileNotFoundError(f"{FONT_ENV} points at {named}, which is not a file")
+        return named
     for candidate in FONTS:
         if Path(candidate).is_file():
             return candidate
-    raise FileNotFoundError(f"no usable font found, looked for {FONTS}")
+    raise FileNotFoundError(
+        f"no usable font found, looked for {FONTS}; set {FONT_ENV} to a .ttf or .ttc of your own"
+    )
 
 
 def _escape(text: str) -> str:

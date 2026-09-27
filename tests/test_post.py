@@ -291,3 +291,39 @@ def test_contact_sheet_has_one_cell_per_clip(tmp_path):
     info = probe(sheet)
     image = next(s for s in info["streams"] if s["codec_type"] == "video")
     assert image["width"] == post.SHEET_CELL * 3, info
+
+
+def test_a_font_can_be_named_by_the_environment(tmp_path, monkeypatch):
+    """CI on Linux had to copy a font to a macOS path to make this repo find one, which is a workaround
+    pretending to be a fix. Anyone not on a Mac needs a way to say which font to draw with."""
+    chosen = tmp_path / "MyFont.ttf"
+    chosen.write_bytes(b"not really a font, but it is a file")
+    monkeypatch.setenv(post.FONT_ENV, str(chosen))
+
+    assert post.font() == str(chosen)
+
+
+def test_a_font_named_by_the_environment_but_missing_says_so(tmp_path, monkeypatch):
+    monkeypatch.setenv(post.FONT_ENV, str(tmp_path / "gone.ttf"))
+
+    with pytest.raises(FileNotFoundError, match=post.FONT_ENV):
+        post.font()
+
+
+def test_the_candidates_cover_more_than_one_operating_system():
+    """Rule 10: the list is the thing being claimed, so the check reads the list. Three macOS paths and
+    nothing else is what made 2 tests fail on a Linux runner."""
+    linux = [c for c in post.FONTS if c.startswith("/usr/share/fonts")]
+
+    assert linux, f"no Linux candidate in {post.FONTS}"
+    assert any(c.startswith(("/System/", "/Library/")) for c in post.FONTS)
+
+
+def test_without_any_font_anywhere_the_error_names_the_way_out(monkeypatch):
+    monkeypatch.delenv(post.FONT_ENV, raising=False)
+    monkeypatch.setattr(post, "FONTS", ("/nowhere/at/all.ttf",))
+
+    with pytest.raises(FileNotFoundError) as caught:
+        post.font()
+
+    assert post.FONT_ENV in str(caught.value), "the message has to say how to fix it, not just what failed"
