@@ -17,6 +17,7 @@ from typing import Any
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen
+from video.flow import composer as composer_mod
 from video.flow import download as download_mod
 from video.flow import parsers, reader
 from video.flow.reader import capture, one
@@ -280,20 +281,34 @@ async def _generate_from_editor(
     # Exactly one click, ever. A second click lands in the plain edit box once the editor re-renders and
     # submits a differently priced job on top (measured 2026-09-13: an extra Omni edit, 20 credits).
     # Whether the submit worked is decided by the listing and the credit balance below, not by a retry.
-    frames = await _await_submit(session, lambda: start.click(timeout=8_000))
-    fresh: list[dict[str, Any]] = []
-    scenes_after: set[str] = set()
-    deadline = asyncio.get_running_loop().time() + wait
-    while True:
-        rows, scenes_after = await _snapshot(session, project_id)
-        fresh = new_records(before, rows)
-        # The scene copy of the source shows up first and is already "done": wait for our own record.
-        ours = [r for r in fresh if role_of(r, prompt) == "generated"]
-        if ours and all(is_done(r) for r in ours):
-            break
-        if asyncio.get_running_loop().time() >= deadline:
-            break
-        await asyncio.sleep(10)
+    # Heard from before the click until the outcome row is written: Flow can take the click, charge, and drop
+    # the job with nothing on the page, and its own replies are the only place a reason shows up (measured on
+    # the gen path 2026-09-13). report() and reported_failed() never raise, by design: they run after a click
+    # that already spent money, where an exception would cost the outcome row.
+    # The module, not the name: composer imports clips too, and a name import turns that into a cycle.
+    replies = composer_mod.FlowReplies()
+    session.page.on("response", replies.on_response)
+    try:
+        frames = await _await_submit(session, lambda: start.click(timeout=8_000))
+        fresh: list[dict[str, Any]] = []
+        scenes_after: set[str] = set()
+        deadline = asyncio.get_running_loop().time() + wait
+        while True:
+            rows, scenes_after = await _snapshot(session, project_id)
+            fresh = new_records(before, rows)
+            # The scene copy of the source shows up first and is already "done": wait for our own record.
+            ours = [r for r in fresh if role_of(r, prompt) == "generated"]
+            if ours and all(is_done(r) for r in ours):
+                break
+            # Flow saying it failed ends the wait now; waiting the rest out only delays the same answer.
+            if replies.reported_failed():
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(10)
+        flow = await replies.report()
+    finally:
+        session.page.remove_listener("response", replies.on_response)
     credits_after = (await reader.credits(session))["balance"]
     outputs = []
     for row in fresh:
@@ -327,11 +342,12 @@ async def _generate_from_editor(
         credits_after=credits_after,
         spent=credits_before - credits_after,
         rpcids=sorted(frames),
+        flow=flow,
     )
     if not generated:
         raise RuntimeError(
             f"{kind}: nothing was generated within {wait:.0f}s, spent {credits_before - credits_after} "
-            f"credits; rpcids {sorted(frames)}"
+            f"credits; {composer_mod.flow_said(flow)}; rpcids {sorted(frames)}"
         )
     return {
         "job_id": job_id,

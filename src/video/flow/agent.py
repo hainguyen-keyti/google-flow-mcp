@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from video import gen
+from video.flow import composer as composer_mod
 from video.flow import reader
 from video.flow.reader import capture
 from video.session import PROJECT_READY, FlowSession
@@ -94,7 +95,16 @@ async def send(
     ledger.append(
         job_id, "submitted", kind="agent", project=project_id, message=message, credits_before=credits_before
     )
-    frames = await capture(session, lambda: send_button.click(timeout=8_000), settle=wait)
+    # Heard from before the click until the row is written: agent_send can spend, and when Flow drops a job
+    # its own replies are the only place a reason shows up (measured on the gen path 2026-09-13). The module,
+    # not the name: composer imports agent too, and a name import turns that into a cycle.
+    replies = composer_mod.FlowReplies()
+    page.on("response", replies.on_response)
+    try:
+        frames = await capture(session, lambda: send_button.click(timeout=8_000), settle=wait)
+        flow = await replies.report()
+    finally:
+        page.remove_listener("response", replies.on_response)
     after = await page.evaluate(_TEXT_JS)
     reply = after[len(before) - 200 if len(before) > 200 else 0 :][:800]
     restored = await set_mode(session, project_id, state["was"])
@@ -106,10 +116,12 @@ async def send(
         credits_after=credits_after,
         spent=credits_before - credits_after,
         rpcids=sorted(frames),
+        flow=flow,
     )
     return {
         "job_id": job_id,
         "rpcids": sorted(frames),
+        "flow": flow,
         "reply_excerpt": reply,
         "mode_restored": restored["enabled"] == state["was"],
         "credits_before": credits_before,

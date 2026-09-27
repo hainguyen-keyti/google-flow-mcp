@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from click.testing import CliRunner
@@ -125,6 +126,20 @@ class _Page:
     request = object()
     keyboard = _Keyboard()
 
+    def __init__(self):
+        # A real page carries listeners, and the editor path attaches one to hear what Flow replies about the
+        # job it just paid for, so the fake has to carry them too. `attached` keeps the history, because
+        # "nothing is left behind" is also true of a driver that never listened at all.
+        self.listeners: list[tuple[str, object]] = []
+        self.attached: list[str] = []
+
+    def on(self, event, handler):
+        self.listeners.append((event, handler))
+        self.attached.append(event)
+
+    def remove_listener(self, event, handler):
+        self.listeners = [row for row in self.listeners if row != (event, handler)]
+
     async def wait_for_timeout(self, ms):
         return None
 
@@ -136,7 +151,8 @@ class _Page:
 
 
 class _Session:
-    page = _Page()
+    def __init__(self):
+        self.page = _Page()
 
 
 class _Download:
@@ -1946,3 +1962,147 @@ def test_save_frame_says_whether_flow_ever_started_the_save(monkeypatch):
 
     with pytest.raises(RuntimeError, match="accepted the click"):
         asyncio.run(clips.save_frame(session, "P", "m1"))
+
+
+class _ListeningSession:
+    def __init__(self):
+        self.page = _Page()
+
+
+class _SaidFailed:
+    """Stands in for FlowReplies: Flow answered that it failed the job. The interface is pinned against the
+    real class by test_the_editor_path_hears_flow_through_the_same_reader_as_the_gen_path."""
+
+    said: ClassVar[dict] = {
+        "workflow_id": "wf-1",
+        "statuses": [6, 4],
+        "reasons": ["PUBLIC_ERROR_SOMETHING"],
+    }
+
+    def __init__(self):
+        self.attached = 0
+
+    def on_response(self, response):
+        self.attached += 1
+
+    def reported_failed(self):
+        return True
+
+    async def report(self):
+        return dict(self.said)
+
+
+def _spending_but_barren(monkeypatch, tmp_path, replies_class):
+    """A job that submits, moves the balance, and never produces a record of its own."""
+    sleeps: list[float] = []
+
+    async def fake_snapshot(session, project_id):
+        return ([], set())
+
+    async def fake_credits(session):
+        return {"balance": 300 if not sleeps else 280}
+
+    async def fake_open(session, project_id, media_id):
+        return None
+
+    async def fake_menu_item(session, button, item):
+        return _Clickable()
+
+    async def fake_await_submit(session, click, **kwargs):
+        await click()
+        return {"uwAyfb": [[]]}
+
+    async def counting_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips.reader, "credits", fake_credits)
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", fake_menu_item)
+    monkeypatch.setattr(clips, "_await_submit", fake_await_submit)
+    monkeypatch.setattr(clips.asyncio, "sleep", counting_sleep)
+    monkeypatch.setattr(clips.composer_mod, "FlowReplies", replies_class)
+
+    async def prompt_is_there(page, box, start, prompt):
+        return True
+
+    monkeypatch.setattr(clips, "_prompt_ready", prompt_is_there)
+    return sleeps
+
+
+def test_an_editor_job_stops_waiting_as_soon_as_flow_says_it_failed(monkeypatch, tmp_path):
+    """Measured on the gen path 2026-09-13: Flow can take the click, charge, render to 23% and drop the job
+    with no record and no message. The editor tools waited out the full 240 s for that and then said only
+    "nothing was generated", which is the cost of not listening to what Flow itself replied."""
+    sleeps = _spending_but_barren(monkeypatch, tmp_path, _SaidFailed)
+    session = _ListeningSession()
+
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(
+            clips._generate_from_editor(
+                # Short on purpose: with the early exit gone this loop would spin out the whole wait, and a
+                # mutant has to fail fast rather than hang the suite.
+                session,
+                "p",
+                "src",
+                "dress her",
+                kind="edit",
+                out_dir=tmp_path,
+                job_id="j",
+                wait=20.0,
+            )
+        )
+
+    # 10 s is this loop's own beat; anything else in the list belongs to another wait.
+    assert 10 not in sleeps, f"it kept polling after Flow said the job failed: {sleeps[:8]}"
+    assert "wf-1" in str(caught.value), caught.value
+    assert "PUBLIC_ERROR_SOMETHING" in str(caught.value), caught.value
+
+
+def test_the_outcome_row_of_an_editor_job_carries_what_flow_said(monkeypatch, tmp_path):
+    _spending_but_barren(monkeypatch, tmp_path, _SaidFailed)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            clips._generate_from_editor(
+                _ListeningSession(),
+                "p",
+                "src",
+                "dress her",
+                kind="edit",
+                out_dir=tmp_path,
+                job_id="j",
+                wait=5.0,
+            )
+        )
+
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
+    assert last["status"] == "failed", last
+    assert last["flow"]["workflow_id"] == "wf-1", last
+    assert last["flow"]["statuses"] == [6, 4], last
+
+
+def test_the_editor_job_removes_its_listener_when_it_is_done(monkeypatch, tmp_path):
+    """A listener left on the shared page keeps reading every later call's traffic."""
+    _spending_but_barren(monkeypatch, tmp_path, _SaidFailed)
+    session = _ListeningSession()
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            clips._generate_from_editor(
+                session, "p", "src", "dress her", kind="edit", out_dir=tmp_path, job_id="j", wait=5.0
+            )
+        )
+
+    assert session.page.attached == ["response"], "it never listened to Flow at all"
+    assert session.page.listeners == [], session.page.listeners
+
+
+def test_the_editor_path_hears_flow_through_the_same_reader_as_the_gen_path():
+    """The stub above is only honest while it matches the real class, and the gen path is where that class
+    was measured against Flow."""
+    from video.flow import composer
+
+    assert clips.composer_mod is composer, "it must use the reader measured on the gen path"
+    for name in ("on_response", "reported_failed", "report"):
+        assert hasattr(composer.FlowReplies, name), name

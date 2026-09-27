@@ -68,6 +68,17 @@ class _Page:
     request = object()
     keyboard = _Keyboard()
 
+    def __init__(self):
+        # A real page carries listeners: the editor path attaches one to hear what Flow replies about the job
+        # it just paid for, so this stand-in has to accept them too.
+        self.listeners: list[tuple[str, object]] = []
+
+    def on(self, event, handler):
+        self.listeners.append((event, handler))
+
+    def remove_listener(self, event, handler):
+        self.listeners = [row for row in self.listeners if row != (event, handler)]
+
     async def wait_for_timeout(self, ms):
         return None
 
@@ -79,7 +90,8 @@ class _Page:
 
 
 class _Session:
-    page = _Page()
+    def __init__(self):
+        self.page = _Page()
 
 
 _CREDITS = "reader.credits"

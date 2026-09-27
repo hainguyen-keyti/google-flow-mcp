@@ -1728,7 +1728,7 @@ def test_flow_replies_never_credit_this_job_with_a_code_another_workflow_carried
         [],
         ["PUBLIC_ERROR_UNSAFE_CONTENT", "PUBLIC_ERROR_UNSAFE_FACE"],
     )
-    said = composer._flow_said(flow)
+    said = composer.flow_said(flow)
     assert said.startswith(f"Flow last reported status 2 for workflow {JOB_WORKFLOW};")
     assert "codes heard in other replies" in said
 
@@ -1764,10 +1764,10 @@ def test_flow_replies_credit_this_job_with_a_code_its_own_reply_carries(reply):
 def test_flow_replies_call_an_unmeasured_status_unmeasured_and_speak_of_the_last_one():
     # Re-review G2 (2026-09-17): a status gflow never saw is not proof of a failure when the job keeps running.
     flow = _judged([SUBMIT_REPLY, _status_reply(7), _status_reply(2)])
-    said = composer._flow_said(flow)
+    said = composer.flow_said(flow)
     assert flow["statuses"] == [6, 7, 2] and flow["unmeasured"]["status"] == 7
     assert "last reported status 2" in said and "unmeasured status 7" in said and "failed" not in said
-    last_odd = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(5)]))
+    last_odd = composer.flow_said(_judged([SUBMIT_REPLY, _status_reply(5)]))
     assert last_odd.startswith(f"Flow last reported unmeasured status 5 for workflow {JOB_WORKFLOW}")
 
 
@@ -1905,7 +1905,7 @@ def test_flow_replies_credit_codes_by_the_ids_beside_them():
 
 def test_flow_replies_call_any_last_status_outside_the_measured_ones_unmeasured():
     # Re-review H3 (2026-09-17): statuses 6, 7, 5 read "last reported status 5 ... after unmeasured status 7".
-    said = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(7), _status_reply(5)]))
+    said = composer.flow_said(_judged([SUBMIT_REPLY, _status_reply(7), _status_reply(5)]))
     assert said.startswith(
         f"Flow last reported unmeasured status 5 for workflow {JOB_WORKFLOW} after unmeasured status 7"
     )
@@ -1916,13 +1916,13 @@ def test_flow_replies_call_status_4_a_failure_with_the_reason_it_carried():
     filtered = _status_reply(4, extra=[["PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"]])
     flow = _judged([SUBMIT_REPLY, _status_reply(2), filtered])
     assert (flow["statuses"], flow["unmeasured"]) == ([6, 2, 4], None)
-    assert composer._flow_said(flow).startswith(
+    assert composer.flow_said(flow).startswith(
         f"Flow failed workflow {JOB_WORKFLOW} (status 4) with PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"
     )
 
 
 def test_flow_replies_never_call_a_statusless_last_record_unmeasured():
-    said = composer._flow_said(_judged([SUBMIT_REPLY, _status_reply(2), _status_reply(None)]))
+    said = composer.flow_said(_judged([SUBMIT_REPLY, _status_reply(2), _status_reply(None)]))
     assert said.startswith(f"Flow last reported status None for workflow {JOB_WORKFLOW}")
     assert "unmeasured" not in said
 

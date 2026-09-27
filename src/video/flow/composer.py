@@ -279,7 +279,7 @@ def _page_note(url: str | None, project_id: str) -> str:
     return f"; the page had moved to {url} after the click"
 
 
-def _flow_said(flow: dict[str, Any]) -> str:
+def flow_said(flow: dict[str, Any]) -> str:
     if flow.get("error"):
         return f"Flow's replies could not be read ({flow['error']})"
     workflow = flow.get("workflow_id")
@@ -729,7 +729,7 @@ async def _submit(
         # The advice leads: an agent sees at most 500 characters and a job_id can be long (re-review A, 2026-09-17).
         raise RuntimeError(
             "Start generation was clicked, so credits may already be spent: check flow_media and flow_credits and "
-            f"never run this job again under a new job_id; it then failed with {detail}; {_flow_said(flow)}"
+            f"never run this job again under a new job_id; it then failed with {detail}; {flow_said(flow)}"
             f"{_page_note(page_after_click, project_id)}; job {job_id}"
         ) from exc
     session.page.remove_listener("response", replies.on_response)
@@ -778,30 +778,30 @@ async def _submit(
         raise RuntimeError(
             "check flow_media and never run this job again under a new job_id: "
             f"{len(unclaimed)} new records could be this job's clip ({[c['id'] for c in unclaimed]}), so none is "
-            f"taken; spent {spent} credits; {_flow_said(flow)}{page_note}; job {job_id}"
+            f"taken; spent {spent} credits; {flow_said(flow)}{page_note}; job {job_id}"
         )
     if status == "unknown" and spent:
         raise RuntimeError(
             "check flow_media and flow_credits and never run this job again under a new job_id: no new video showed "
-            f"up within {wait:.0f}s, yet the balance moved by {spent} credits; {_flow_said(flow)}{page_note}; "
+            f"up within {wait:.0f}s, yet the balance moved by {spent} credits; {flow_said(flow)}{page_note}; "
             f"job {job_id}"
         )
     if status == "unknown":
         raise RuntimeError(
             "check flow_media and flow_credits again in a few minutes and never run this job again under a new "
             f"job_id: Flow had not finished the job when the {wait:.0f}s wait ended and nothing new was listed; "
-            f"{_flow_said(flow)}{page_note}; job {job_id}"
+            f"{flow_said(flow)}{page_note}; job {job_id}"
         )
     if status == "failed" and spent == 0 and statuses and statuses[-1] == STATUS_FAILED:
         # The advice, the reason and Flow's own words lead: an agent sees at most 500 characters (dancer-1, 2026-09-17).
         raise RuntimeError(
             "Flow refused this job and charged nothing: do not retry the same inputs hoping they pass, tell the owner; "
-            f"{_flow_said(flow)}; Flow said: {notice or '(no message captured)'}{page_note}; rpcids {sorted(frames)}; "
+            f"{flow_said(flow)}; Flow said: {notice or '(no message captured)'}{page_note}; rpcids {sorted(frames)}; "
             f"settings {settings['applied']}; job {job_id}"
         )
     if status == "failed":
         raise RuntimeError(
-            f"nothing was generated within {wait:.0f}s, spent {spent} credits; {_flow_said(flow)}{page_note}; rpcids "
+            f"nothing was generated within {wait:.0f}s, spent {spent} credits; {flow_said(flow)}{page_note}; rpcids "
             f"{sorted(frames)}; settings {settings['applied']}; Flow said: {notice or '(no message captured)'}; "
             f"job {job_id}"
         )
