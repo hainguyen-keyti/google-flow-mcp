@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "video": {
+      "command": "uv",
+      "args": ["run", "--no-sync", "video", "mcp", "run"],
+      "env": {
+        "GFLOW_CLI_LOG_LEVEL": "WARNING"
+      }
+    }
+  }
+}

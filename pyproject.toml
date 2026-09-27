@@ -2,11 +2,20 @@
 name = "video"
 version = "0.1.0"
 description = "Agent-driven Google Flow (flow.google.com) orchestration with ffmpeg post-production"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "hainguyen-keyti" }]
+keywords = ["google-flow", "veo", "mcp", "video-generation", "agent"]
 requires-python = ">=3.11"
 dependencies = [
     "gflow-cli==0.78.0",
     "mcp==2.2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/hainguyen-keyti/google-flow-mcp"
+Issues = "https://github.com/hainguyen-keyti/google-flow-mcp/issues"
 
 [project.scripts]
 video = "video.cli:main"

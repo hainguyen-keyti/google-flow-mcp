@@ -12,12 +12,17 @@ Two decisions written down here rather than left to taste:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from timeline import Segment
 
 ONSCREEN = "clip_onscreen"
-IMAGES = Path("/Users/keyti/Sources/kt_tools/Character/LeeLyLy/images")
+# The photographs this film is cut from are not in the repo: they are the owner's character folder. Point
+# LEELYLY_IMAGES at a folder of stills to run this example on your own material.
+# Path("") is Path("."), which is truthy, so the raw value is what gets checked.
+IMAGES_ENV = os.environ.get("LEELYLY_IMAGES", "").strip()
+IMAGES = Path(IMAGES_ENV).expanduser()
 CLIPS = Path("out/leelyly/clips")
 
 # Six frames were dropped on 2026-09-18 after looking at a contact sheet of the chosen stills: they read as
@@ -47,6 +52,12 @@ STILL = {
 
 
 def still(key: str) -> str:
+    if not IMAGES_ENV:
+        raise RuntimeError(
+            "LEELYLY_IMAGES is not set: this example cuts from a folder of photographs that is not in the "
+            "repo. Set it to a folder holding the stills named in STILL, or read docs/leelyly/story.md to see "
+            "what the shot list expects."
+        )
     return str(IMAGES / STILL[key])
 
 
