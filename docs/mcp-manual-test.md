@@ -1,5 +1,10 @@
 # Test tay MCP `video`: 43 tool, có giá và có rào chắn
 
+> **English readers**: this page is a by-hand test pass written in Vietnamese for the repo owner. For the tool
+> reference in English, with prices, see [tools.md](tools.md), which is generated from the running server. The
+> gist of this page: call the free read tools first, then the ones that change a scratch project, and only then
+> the ones that spend credits, checking the balance before and after each.
+
 Hướng dẫn để chủ repo tự test, hoặc giao cho một agent khác gọi qua MCP. Mọi hình dạng kết quả dưới đây là
 **đo thật ngày 2026-09-14 và 2026-09-15** (riêng `gen_character` và `character_create` nhận ảnh: 2026-09-16 và
 2026-09-17; các tool scene ghép phim: 2026-09-17; giọng nói và hai tool lưu clip: 2026-09-18), không phải suy từ code.

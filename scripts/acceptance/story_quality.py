@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from video import post
+from video import gen, post
 from video.story import pipeline, shots2
 
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
@@ -283,12 +283,9 @@ def main(argv: list[str] | None = None) -> int:
         f"exists={sheet.is_file()}",
     )
 
+    # The shared reader answers [] for a ledger that is not there, and splits on the newline alone.
     ledger_path = out / "ledger.jsonl"
-    ledger_rows = (
-        [json.loads(line) for line in ledger_path.read_text().splitlines() if line.strip()]
-        if ledger_path.is_file()
-        else []
-    )
+    ledger_rows = gen.Ledger(ledger_path).rows()
     row("takes", *takes_check(ledger_rows))
     row("provenance", *provenance_check(clips, ledger_rows))
     row("ledger", *ledger_check(ledger_rows))

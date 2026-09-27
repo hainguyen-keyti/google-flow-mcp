@@ -16,6 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from video import gen
+
 ROWS: list[tuple[str, str, str]] = []
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 SHOTS = 5
@@ -106,8 +110,9 @@ def main() -> int:
         f"{sheet} width={width} (want {CELL * SHOTS}, one {CELL}px cell per shot)",
     )
 
-    ledger_path = out / "ledger.jsonl"
-    rows = [json.loads(line) for line in ledger_path.read_text().splitlines() if line.strip()]
+    # Read through the shared reader: it splits on the newline alone, because splitlines() also breaks on
+    # U+2028, U+2029 and U+0085, which json keeps inside prompts.
+    rows = gen.Ledger(out / "ledger.jsonl").rows()
     jobs = {f"tryon-{i:02d}" for i in range(1, SHOTS + 1)}
     done = {j: sum(1 for r in rows if r["job_id"] == j and r["status"] == "done") for j in sorted(jobs)}
     free_failures = all(r.get("spent") == 0 for r in rows if r["status"] == "failed")

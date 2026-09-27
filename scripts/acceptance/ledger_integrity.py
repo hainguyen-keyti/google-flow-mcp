@@ -473,8 +473,16 @@ def check_scrub_keeps_rows(tmp: Path) -> tuple[str, str]:
 
 
 def check_no_leak(tmp: Path) -> tuple[str, str]:
-    """Nothing this run wrote may carry session material."""
-    leaked = [p.name for p in tmp.rglob("*") if p.is_file() and SECRET.search(p.read_text(errors="ignore"))]
+    """Nothing this run wrote may carry session material.
+
+    This one is handed the WHOLE run, not a room of its own, and it runs last: until 2026-09-27 it read the
+    empty folder `run_all` had just made for it, so it passed every run including one that leaked.
+    """
+    leaked = sorted(
+        str(path.relative_to(tmp))
+        for path in tmp.rglob("*")
+        if path.is_file() and SECRET.search(path.read_text(errors="ignore"))
+    )
     return ("PASS" if not leaked else "FAIL"), (f"session material in {leaked}" if leaked else "clean")
 
 
@@ -491,12 +499,21 @@ CHECKS = (
 )
 
 
+# This row judges the whole run rather than a room of its own, so it is given `tmp` and always goes last.
+WHOLE_RUN = ("I2 no leak",)
+
+
 def run_all(tmp: Path) -> list[dict[str, str]]:
-    """Each check gets its own ledger file so one cannot mask another."""
+    """Each check gets its own ledger file so one cannot mask another, except the ones that judge the lot."""
     findings = []
-    for name, check in CHECKS:
-        room = tmp / name.replace(" ", "_")
-        room.mkdir(parents=True, exist_ok=True)
+    ordered = [row for row in CHECKS if row[0] not in WHOLE_RUN]
+    ordered += [row for row in CHECKS if row[0] in WHOLE_RUN]
+    for name, check in ordered:
+        if name in WHOLE_RUN:
+            room = tmp
+        else:
+            room = tmp / name.replace(" ", "_")
+            room.mkdir(parents=True, exist_ok=True)
         try:
             status, detail = check(room)
         except Exception as exc:  # noqa: BLE001

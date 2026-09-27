@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "leelyly"))
 from shots import SEGMENTS
 from timeline import AVERAGE_MAX_S, SEGMENT_MAX_S, fit, plan, problems, voice_problems
 
+from video import gen
+
 TARGET_S = 120.0
 SLACK_S = 5.0
 CREDIT_CAP = 160
@@ -87,17 +89,12 @@ def rows(out_dir: Path) -> list[tuple[str, str, str]]:
         )
 
     ledger = out_dir / "clips" / "ledger.jsonl"
-    spent = 0
-    jobs: dict[str, int] = {}
-    if ledger.exists():
-        for raw in ledger.read_text(encoding="utf-8").splitlines():
-            try:
-                entry = json.loads(raw)
-            except ValueError:
-                continue
-            if entry.get("spent"):
-                jobs[entry["job_id"]] = int(entry["spent"])
-        spent = sum(jobs.values())
+    # Through the shared reader: it splits on the newline alone, because splitlines() also breaks on U+2028,
+    # U+2029 and U+0085, which json keeps inside a prompt.
+    jobs: dict[str, int] = {
+        entry["job_id"]: int(entry["spent"]) for entry in gen.Ledger(ledger).rows() if entry.get("spent")
+    }
+    spent = sum(jobs.values())
     wanted = sorted({Path(segment.source).stem for segment in SEGMENTS if segment.kind != "still"})
     paid = sorted(job.replace("leelyly-", "") for job in jobs)
     row(
