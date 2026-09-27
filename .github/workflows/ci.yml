@@ -13,6 +13,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install ffmpeg
+        # 25 tests render and measure real video; they are not mocks, and that is deliberate.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+
+      - name: Provide a unicode font where the code looks for one
+        # src/video/post.py hunts for a font at macOS paths only, so on Linux one is put where it looks. This
+        # is a runner workaround, not a fix: the fix is to teach that lookup about other platforms.
+        run: |
+          sudo mkdir -p /Library/Fonts
+          sudo cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf "/Library/Fonts/Arial Unicode.ttf"
+
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true

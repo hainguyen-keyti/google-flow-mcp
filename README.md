@@ -147,9 +147,11 @@ These are not suggestions; they are enforced in code and pinned by tests.
 uv run ruff check . && uv run ruff format --check . && uv run pytest
 ```
 
-890 tests, none of which call Flow or spend anything: tests use fixtures and fakes, which is a hard rule here.
-The live acceptance scripts under `scripts/acceptance/` do talk to Flow, are read-only by default, and say in
-their own output what they spent.
+893 tests, none of which call Flow or spend anything: tests use fixtures and fakes, which is a hard rule here.
+About 25 of them do render and measure real video, so **ffmpeg must be installed**, and two of them need a
+unicode font: the font lookup in `src/video/post.py` currently knows macOS paths only, which CI works around
+by placing one where it looks. The live acceptance scripts under `scripts/acceptance/` do talk to Flow, are
+read-only by default, and say in their own output what they spent.
 
 ## Documentation
 
