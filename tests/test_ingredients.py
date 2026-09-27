@@ -1702,11 +1702,12 @@ def test_submit_keeps_no_signed_url_from_a_failed_reply(monkeypatch, tmp_path):
     assert JOB_WORKFLOW in head and "Signature=" not in head and "Expires=" not in head
 
 
-def _judged(responses):
+def _judged(responses, about=None, editor=False):
     """Feed replies straight to a FlowReplies and return its report."""
 
     async def run():
-        replies = composer.FlowReplies()
+        replies = composer.FlowReplies(editor=editor)
+        replies.about(about)
         for response in responses:
             replies.on_response(response)
         return await replies.report()
@@ -2422,3 +2423,104 @@ def test_the_option_script_reads_title_and_kind_and_the_chip_script_reads_kind_a
     assert ".asset-title" in ingredients._OPTIONS_JS and ".type-subtitle" in ingredients._OPTIONS_JS
     assert "data-reference-type" in ingredients._CHIPS_JS and "data-mention-id" in ingredients._CHIPS_JS
     assert re.fullmatch(r"flow-prompt-box \.mention-chip", ingredients.CHIP)
+
+
+def test_a_job_whose_submit_reply_names_nothing_is_named_by_the_caller():
+    """Measured 2026-09-28 on a paid clip_edit (job plan-n-edit-1, 20 credits, 79 to 59): the editor submits with
+    `jIps6`, which is in neither of gflow's rpc sets and appears nowhere in its source, so the listener heard 20
+    rpcids and still reported workflow_id null, statuses [], reasons [] for a job that ran fine. The editor's own
+    listing knows the workflow (that run wrote d2327819-... into its outputs), so it says so, and the report says
+    the name came from there. No media id comes with it: on the editor path the output keeps the SOURCE clip's
+    media id (that run's source and output are both 26f0e503-...), so counting it as the job's own would let a code
+    about the source clip be read as this job's."""
+    flow = _judged([_status_reply(4)], about=JOB_WORKFLOW, editor=True)
+
+    assert flow["workflow_id"] == JOB_WORKFLOW
+    assert flow["named_by_caller"] is True
+    assert flow["media_id"] is None
+    assert flow["statuses"] == [4]
+    assert composer.flow_said(flow).startswith(f"Flow failed workflow {JOB_WORKFLOW}")
+
+
+def test_a_named_job_that_flow_says_it_failed_ends_the_wait():
+    """The one control-flow consequence of a name on a job already paid for (review F4): without it,
+    `reported_failed` was structurally dead on the editor path, since no submit reply ever named the workflow."""
+
+    async def run():
+        replies = composer.FlowReplies(editor=True)
+        replies.on_response(_status_reply(4))
+        replies.about(JOB_WORKFLOW)
+        await replies.report()
+        return replies.reported_failed()
+
+    assert asyncio.run(run()) is True
+
+
+def test_a_named_job_that_flow_says_is_running_keeps_waiting():
+    """The counter-case, so the test above cannot pass by returning True for everything: money is already spent
+    here, and abandoning a job Flow never failed loses the asset it paid for."""
+
+    async def run():
+        replies = composer.FlowReplies(editor=True)
+        replies.on_response(_status_reply(2))
+        replies.about(JOB_WORKFLOW)
+        await replies.report()
+        return replies.reported_failed()
+
+    assert asyncio.run(run()) is False
+
+
+def test_a_name_from_the_caller_is_never_a_word_from_flow():
+    """The listing is not Flow's reply: named a workflow no reply mentions, the reader must still report that it
+    heard nothing, not dress the caller's own id up as something Flow said."""
+    flow = _judged([_status_reply(3, workflow=OTHER_WORKFLOW)], about=JOB_WORKFLOW, editor=True)
+
+    assert flow["workflow_id"] is None
+    assert flow["named_by_caller"] is False
+    assert flow["statuses"] == []
+    assert composer.flow_said(flow).startswith("no submit reply from Flow was heard")
+
+
+def test_a_reply_under_the_editors_submit_rpc_is_read_and_not_dropped_as_noise():
+    """What was lost before: the RECORDS inside a `jIps6` reply, always, because the rpcid was in neither of
+    gflow's sets, so no status of the job could come from its own submit reply and a code in there could at best
+    be listed apart as another workflow's. The live payload SHAPE is still unmeasured (that paid run kept no
+    body): what this pins is that the body is kept whatever its size and searched wherever the record sits."""
+    big = _FlowReply("jIps6", [None, 1, [[JOB_MEDIA]], ["x" * 30_000, [_flow_record(4)]]])
+
+    flow = _judged([big], about=JOB_WORKFLOW, editor=True)
+
+    assert composer._about_the_job("jIps6", composer.FlowReplies(editor=True).job_rpcs) is True
+    assert flow["workflow_id"] == JOB_WORKFLOW
+    assert flow["statuses"] == [4]
+
+
+def test_the_editors_submit_reply_cannot_hand_the_job_another_workflows_record():
+    """An edit is submitted against a source clip, so its replies can carry records that are not the job's. The
+    job's identity stays the caller's: a record under the editor's rpc only ever adds to the job it names."""
+    source = _FlowReply("jIps6", [None, 1, [_flow_record(3, workflow=OTHER_WORKFLOW)]])
+
+    flow = _judged([source], about=JOB_WORKFLOW, editor=True)
+
+    assert flow["workflow_id"] is None
+    assert flow["statuses"] == []
+
+
+def test_the_gen_path_never_hears_the_editors_submit_rpc():
+    """The gen path's replies are the measured ones, and `jIps6` is not among them: an unmeasured rpc must not be
+    able to add a status, a reason or an early stop to a job the composer submitted (review F3)."""
+    editor_reply = _FlowReply("jIps6", [None, 1, [_flow_record(4)]])
+
+    flow = _judged([SUBMIT_REPLY, _status_reply(2), editor_reply])
+
+    assert flow["statuses"] == [6, 2]
+    assert flow["reasons"] == []
+    assert composer.flow_said(flow).startswith(f"Flow last reported status 2 for workflow {JOB_WORKFLOW}")
+
+
+def test_a_gen_job_is_still_named_by_flows_own_submit_reply():
+    """The gen path passes no name: what it hears must not change, and a name must never outrank the reply."""
+    assert _judged([SUBMIT_REPLY, _status_reply(2)])["workflow_id"] == JOB_WORKFLOW
+    assert _judged([SUBMIT_REPLY, _status_reply(2)])["statuses"] == [6, 2]
+    assert _judged([SUBMIT_REPLY, _status_reply(2)])["named_by_caller"] is False
+    assert _judged([SUBMIT_REPLY, _status_reply(2)], about=OTHER_WORKFLOW)["workflow_id"] == JOB_WORKFLOW

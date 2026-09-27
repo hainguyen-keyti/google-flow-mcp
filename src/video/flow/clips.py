@@ -286,7 +286,7 @@ async def _generate_from_editor(
     # the gen path 2026-09-13). report() and reported_failed() never raise, by design: they run after a click
     # that already spent money, where an exception would cost the outcome row.
     # The module, not the name: composer imports clips too, and a name import turns that into a cycle.
-    replies = composer_mod.FlowReplies()
+    replies = composer_mod.FlowReplies(editor=True)
     session.page.on("response", replies.on_response)
     try:
         frames = await _await_submit(session, lambda: start.click(timeout=8_000))
@@ -298,6 +298,10 @@ async def _generate_from_editor(
             fresh = new_records(before, rows)
             # The scene copy of the source shows up first and is already "done": wait for our own record.
             ours = [r for r in fresh if role_of(r, prompt) == "generated"]
+            # Named only when the listing leaves no choice. An extend whose prompt matches the source's puts the
+            # scene copy in here too, and picking by order would hand the reader the copy (review F1, 2026-09-28).
+            if len(ours) == 1:
+                replies.about(ours[0]["workflow_id"])
             if ours and all(is_done(r) for r in ours):
                 break
             # Flow saying it failed ends the wait now; waiting the rest out only delays the same answer.

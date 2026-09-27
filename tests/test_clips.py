@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from pathlib import Path
 from typing import ClassVar
 
@@ -1979,8 +1980,9 @@ class _SaidFailed:
         "reasons": ["PUBLIC_ERROR_SOMETHING"],
     }
 
-    def __init__(self):
+    def __init__(self, *, editor=False):
         self.attached = 0
+        self.editor = editor
 
     def on_response(self, response):
         self.attached += 1
@@ -2098,11 +2100,106 @@ def test_the_editor_job_removes_its_listener_when_it_is_done(monkeypatch, tmp_pa
     assert session.page.listeners == [], session.page.listeners
 
 
+def test_an_editor_job_tells_the_reader_which_workflow_the_listing_named(monkeypatch, tmp_path):
+    """Measured 2026-09-28 on a paid clip_edit: the editor submits with an rpc gflow never captured, so Flow's
+    submit reply names no workflow and the ledger's `flow` came back empty for a job that ran fine. The listing
+    knows the workflow (that run wrote it in outputs), so the wait loop passes it on as soon as the row appears."""
+    told: list[str] = []
+    made: list[object] = []
+
+    class _Listens(_SaidFailed):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            made.append(self)
+
+        def about(self, workflow_id):
+            told.append(workflow_id)
+
+    _spending_but_barren(monkeypatch, tmp_path, _Listens)
+
+    seen: list[int] = []
+
+    async def one_running_record(session, project_id):
+        seen.append(1)
+        row = {
+            "workflow_id": "wf-9",
+            "id": "m-9",
+            "prompt": "dress her",
+            "status": 2,
+            "url": None,
+            "created": 1,
+            "kind": "video",
+        }
+        return ([] if len(seen) == 1 else [row], set())
+
+    monkeypatch.setattr(clips, "_snapshot", one_running_record)
+
+    asyncio.run(
+        clips._generate_from_editor(
+            _ListeningSession(), "p", "src", "dress her", kind="edit", out_dir=tmp_path, job_id="j", wait=5.0
+        )
+    )
+
+    assert told == ["wf-9"], f"the reader was never told which workflow is the job: {told}"
+    # The editor's own submit rpc is unmeasured, so only the editor's reader listens for it.
+    assert [r.editor for r in made] == [True], "the editor reader was built as if it were the gen path's"
+
+
+def test_an_editor_job_names_no_workflow_when_the_listing_holds_two_candidates(monkeypatch, tmp_path):
+    """An extend copies the source clip into the new scene, and the copy carries the SOURCE prompt: an extend whose
+    prompt matches it puts both rows in `ours`, where a pick by order hands the reader the copy and every status,
+    reason and early stop in the ledger would then be about a clip this job never made (review F1, 2026-09-28)."""
+    told: list[str] = []
+
+    class _Listens(_SaidFailed):
+        def about(self, workflow_id):
+            told.append(workflow_id)
+
+    _spending_but_barren(monkeypatch, tmp_path, _Listens)
+    seen: list[int] = []
+
+    async def copy_and_ours(session, project_id):
+        seen.append(1)
+        rows = [
+            {
+                "workflow_id": w,
+                "id": m,
+                "prompt": "dress her",
+                "status": 2,
+                "url": None,
+                "created": c,
+                "kind": "video",
+            }
+            for w, m, c in (("wf-copy", "m-copy", 100), ("wf-9", "m-9", 200))
+        ]
+        return ([] if len(seen) == 1 else rows, set())
+
+    monkeypatch.setattr(clips, "_snapshot", copy_and_ours)
+
+    asyncio.run(
+        clips._generate_from_editor(
+            _ListeningSession(),
+            "p",
+            "src",
+            "dress her",
+            kind="extend",
+            out_dir=tmp_path,
+            job_id="j",
+            wait=5.0,
+        )
+    )
+
+    assert told == [], f"it named a workflow the listing left ambiguous: {told}"
+
+
 def test_the_editor_path_hears_flow_through_the_same_reader_as_the_gen_path():
     """The stub above is only honest while it matches the real class, and the gen path is where that class
     was measured against Flow."""
     from video.flow import composer
 
     assert clips.composer_mod is composer, "it must use the reader measured on the gen path"
-    for name in ("on_response", "reported_failed", "report"):
+    for name in ("on_response", "reported_failed", "report", "about"):
         assert hasattr(composer.FlowReplies, name), name
+    # By name only, a stub keeps passing after the real signature moves; the stubs above call both of these.
+    assert list(inspect.signature(composer.FlowReplies).parameters) == ["editor"]
+    assert list(inspect.signature(composer.FlowReplies.about).parameters) == ["self", "workflow_id"]
