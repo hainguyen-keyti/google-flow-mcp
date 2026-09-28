@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -394,3 +395,50 @@ def test_run_job_says_an_account_without_flow_access_is_not_a_retry(tmp_path):
     assert len(runner.calls) == 1
     row = ledger.rows("job-a")[-1]
     assert row["status"] == "failed" and row["exit_code"] == 39
+
+
+def test_every_ledger_row_says_which_code_wrote_it(tmp_path):
+    """Paid for on 2026-09-28: 20 credits were read as proof of a fix they never ran. The MCP server process had
+    started at 00:33:51, before the commits at 01:01 and 02:02, and Python keeps the modules it loaded, so the tool
+    answered with old code while the repo on disk held the new. Nothing in the row said so."""
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("job-code", "done", spent=20)
+
+    row = ledger.rows("job-code")[0]
+
+    assert row["code"] == gen.code_version()
+    assert re.fullmatch(r"[0-9a-f]{7,40}(-dirty)?|unknown", row["code"]), row["code"]
+
+
+def test_the_code_marker_says_dirty_while_the_source_is_uncommitted(monkeypatch):
+    """A sha alone would name the wrong code for any run made from a working tree: this session spent money at
+    three different states of the same sha."""
+    calls = []
+
+    def fake_git(args):
+        calls.append(args)
+        return "abc1234" if "rev-parse" in args else " M src/video/gen.py"
+
+    gen.code_version.cache_clear()
+    monkeypatch.setattr(gen, "_git", fake_git)
+    assert gen.code_version() == "abc1234-dirty"
+
+    gen.code_version.cache_clear()
+    monkeypatch.setattr(gen, "_git", lambda args: "abc1234" if "rev-parse" in args else "")
+    assert gen.code_version() == "abc1234"
+
+    gen.code_version.cache_clear()
+    monkeypatch.setattr(gen, "_git", lambda args: "")
+    assert gen.code_version() == "unknown"
+
+
+def test_the_code_marker_reads_git_once_per_process(monkeypatch):
+    """It runs on the money path, once per ledger row otherwise: two subprocesses per row is a tax on every write."""
+    runs = []
+
+    gen.code_version.cache_clear()
+    monkeypatch.setattr(gen, "_git", lambda args: runs.append(args) or "abc1234")
+    for _ in range(5):
+        gen.code_version()
+
+    assert len(runs) == 2, runs

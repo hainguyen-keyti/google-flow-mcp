@@ -8,8 +8,10 @@ the row touches disk, and a job id the scrub would change is refused, since it c
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import re
+import subprocess
 import sys
 import time
 from collections.abc import Awaitable, Callable
@@ -153,13 +155,40 @@ def gflow_problem(stderr: str) -> dict[str, Any]:
     return {"stderr_tail": stderr[-300:]}
 
 
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _git(args: list[str]) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", *args], capture_output=True, text=True, timeout=10, cwd=_REPO, check=False
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+@functools.lru_cache(maxsize=1)
+def code_version() -> str:
+    """Which code wrote a row, so a bill is never read as proof of code that did not run it.
+
+    Paid for on 2026-09-28: a `clip_edit` of 20 credits was taken as the acceptance of a fix, while the MCP server
+    process had started before the commit and Python keeps the modules it loaded, so the tool answered with the old
+    code. `-dirty` when `src/` holds uncommitted work, since one sha covered three different states of this session.
+    """
+    sha = _git(["rev-parse", "--short", "HEAD"])
+    if not sha:
+        return "unknown"
+    return f"{sha}-dirty" if _git(["status", "--porcelain", "--", "src"]) else sha
+
+
 class Ledger:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
 
     def append(self, job_id: str, status: str, **fields: Any) -> None:
         check_job_id(job_id)
-        row = {"ts": time.time(), "job_id": job_id, "status": status, **fields}
+        row = {"ts": time.time(), "job_id": job_id, "status": status, **fields, "code": code_version()}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(_scrubbed(row), ensure_ascii=False, default=_scrub_other) + "\n")
