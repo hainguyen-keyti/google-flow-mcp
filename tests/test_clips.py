@@ -2203,3 +2203,167 @@ def test_the_editor_path_hears_flow_through_the_same_reader_as_the_gen_path():
     # By name only, a stub keeps passing after the real signature moves; the stubs above call both of these.
     assert list(inspect.signature(composer.FlowReplies).parameters) == ["editor"]
     assert list(inspect.signature(composer.FlowReplies.about).parameters) == ["self", "workflow_id"]
+
+
+class _SaidNothing:
+    """Stands in for FlowReplies on a job Flow never complained about."""
+
+    def __init__(self, **kwargs):
+        self.editor = kwargs.get("editor", False)
+
+    def on_response(self, response):
+        return None
+
+    def about(self, workflow_id):
+        return None
+
+    def reported_failed(self):
+        return False
+
+    async def report(self):
+        return {"workflow_id": "wf-9", "statuses": [6, 3]}
+
+
+def _spending_and_producing(monkeypatch, tmp_path, *, before, after, produces=True):
+    """A job that submits, moves the balance by `before - after`, and produces one finished clip or nothing."""
+    balances = [before, after]
+    seen: list[int] = []
+
+    async def fake_snapshot(session, project_id):
+        seen.append(1)
+        if not produces:
+            return ([], set())
+        row = {
+            "workflow_id": "wf-9",
+            "id": "m-9",
+            "prompt": "dress her",
+            "status": clips.DONE_STATUS,
+            "url": "https://lh3.googleusercontent.com/x",
+            "created": 1,
+            "kind": "video",
+        }
+        return ([] if len(seen) == 1 else [row], set())
+
+    async def fake_credits(session):
+        return {"balance": balances.pop(0) if balances else after}
+
+    async def fake_fetch(request, row, stem):
+        path = Path(f"{stem}.mp4")
+        path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+        return path
+
+    async def fake_open(session, project_id, media_id):
+        return None
+
+    async def fake_menu_item(session, button, item):
+        return _Clickable()
+
+    async def fake_await_submit(session, click, **kwargs):
+        await click()
+        return {"jIps6": [[]]}
+
+    async def prompt_is_there(page, box, start, prompt):
+        return True
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips.reader, "credits", fake_credits)
+    monkeypatch.setattr(clips, "_fetch_with_retry", fake_fetch)
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", fake_menu_item)
+    monkeypatch.setattr(clips, "_await_submit", fake_await_submit)
+    monkeypatch.setattr(clips, "_prompt_ready", prompt_is_there)
+    monkeypatch.setattr(clips.composer_mod, "FlowReplies", _SaidNothing)
+
+
+def _run_editor_job(tmp_path, kind="edit"):
+    return asyncio.run(
+        clips._generate_from_editor(
+            _ListeningSession(), "p", "src", "dress her", kind=kind, out_dir=tmp_path, job_id="j", wait=5.0
+        )
+    )
+
+
+def test_an_editor_job_says_so_when_the_bill_is_not_the_price_this_repo_measured(monkeypatch, tmp_path):
+    """Flow's own table prices Omni Flash Edit at 40 while all eight edits measured on this account cost exactly
+    20, and the editor publishes no price the driver can read before the click (probe 2026-09-28: the line only
+    appears while hovering Start, and it read 12 on a clip whose edit charged 20). So the balance moving by
+    something else is the only signal there is, and today it passes in silence as another number in the row."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=275)
+
+    answer = _run_editor_job(tmp_path)
+
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
+    assert last["status"] == "done", last
+    said = last["balance_moved"]
+    assert (said["kind"], said["measured"], said["moved"]) == ("edit", 20, 25), last
+    assert "not proof that Flow changed its price" in said["note"], said
+    assert answer["balance_moved"] == said, answer
+
+
+def test_an_editor_job_at_the_measured_price_says_nothing_about_it(monkeypatch, tmp_path):
+    """The alarm has to stay quiet on the ordinary case, or nobody reads it on the day it matters."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=280)
+
+    answer = _run_editor_job(tmp_path)
+
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
+    assert "balance_moved" not in last, last
+    assert "balance_moved" not in answer, answer
+    assert last["spent"] == 20, last
+
+
+def test_the_price_a_job_is_judged_against_is_the_price_of_its_own_kind(monkeypatch, tmp_path):
+    """20 credits is the measured price of an edit and twice the measured price of an extend, so one table for
+    both kinds would let a doubled extend bill pass as normal."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=280)
+
+    answer = _run_editor_job(tmp_path, kind="extend")
+
+    said = answer["balance_moved"]
+    assert (said["kind"], said["measured"], said["moved"]) == ("extend", 10, 20), answer
+
+
+def test_a_job_flow_dropped_for_free_is_not_a_balance_moved(monkeypatch, tmp_path):
+    """Measured 2026-09-17 on the gen path: Flow can take the click, drop the job and charge nothing. Getting
+    nothing for nothing is the honest refusal, not a price to shout about, and the empty-handed RuntimeError
+    already says the job produced nothing."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=300, produces=False)
+
+    with pytest.raises(RuntimeError):
+        _run_editor_job(tmp_path)
+
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
+    assert last["status"] == "failed" and last["spent"] == 0, last
+    assert "balance_moved" not in last, last
+
+
+def test_a_job_that_paid_the_measured_price_and_made_nothing_is_not_called_a_balance_moved(
+    monkeypatch, tmp_path
+):
+    """The worst case this repo knows (2026-09-13: 20 credits, no clip) is a LOSS, not a price change, and the
+    error already carries the number. Naming it a price surprise would teach a reader to ignore the alarm."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=280, produces=False)
+
+    with pytest.raises(RuntimeError, match="spent 20 credits"):
+        _run_editor_job(tmp_path)
+
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
+    assert last["spent"] == 20 and "balance_moved" not in last, last
+
+
+def test_a_broken_price_table_never_costs_the_outcome_row(monkeypatch, tmp_path):
+    """The notice runs after the money is gone. On 2026-09-13 an exception in that window cost the outcome row of a
+    20-credit job, so whatever goes wrong inside it has to leave the row written and the notice simply absent."""
+
+    class _Broken(dict):
+        def get(self, *args):
+            raise RuntimeError("table unreadable")
+
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=275)
+    monkeypatch.setattr(clips, "MEASURED_PRICE", _Broken())
+
+    answer = _run_editor_job(tmp_path)
+
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
+    assert last["status"] == "done" and last["spent"] == 25, last
+    assert "balance_moved" not in last and "balance_moved" not in answer, last

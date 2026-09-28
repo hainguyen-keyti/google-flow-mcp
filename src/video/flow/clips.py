@@ -219,6 +219,43 @@ async def download_rendition(
     return target
 
 
+# Read off the balance on both sides of real calls, never off a price table: in every ledger under out/, each
+# editor job that settled with a charge paid 20 for an edit or 10 for an extend, except one extend billed 30 on
+# 2026-09-13 (the double click behind rule 9), the one bill this check would have flagged. Agent sends measured 0
+# when the agent generated nothing. Flow's own table says Omni Flash Edit costs 40, and the editor publishes no
+# price the driver can read before the click (probe 2026-09-28: the line appears only while hovering Start, and
+# it read 12 on a clip whose edit charged 20), so the balance on both sides is all there is.
+MEASURED_PRICE = {"extend": 10, "edit": 20, "agent": 0}
+_WHY = {
+    "agent": (
+        "0 was measured only on sends where the agent generated nothing; a send that makes it generate pays that "
+        "generation's price, and another call or the daily credit grant can move the balance too"
+    ),
+}
+_WHY_DEFAULT = (
+    "the balance also moves when another call spends at the same time or the daily credit grant lands, so this "
+    "is not proof that Flow changed its price"
+)
+
+
+def price_notice(kind: str, spent: int, produced: bool = True) -> dict[str, Any] | None:
+    """What to say when the balance moved by something other than the price measured for this call.
+
+    A statement, not a verdict, and the payload says why in `note`, so an agent reading only the JSON sees it too.
+    Getting nothing for nothing is not a price change, and paying the measured price for nothing is a loss the
+    empty-handed error already reports. `clip_reconcile` stays silent on purpose: its `spent` spans the whole time
+    a job was open, which other calls share. Never raises: it runs after the money is gone, where an exception would
+    cost the outcome row (2026-09-13, 20 credits with an empty ledger).
+    """
+    try:
+        measured = MEASURED_PRICE.get(kind)
+        if measured is None or spent == measured or (spent == 0 and not produced):
+            return None
+        return {"kind": kind, "measured": measured, "moved": spent, "note": _WHY.get(kind, _WHY_DEFAULT)}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _snapshot(session: FlowSession, project_id: str) -> tuple[list[dict[str, Any]], set[str]]:
     frames = await capture(
         session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=8.0
@@ -337,6 +374,9 @@ async def _generate_from_editor(
     status = (
         "done" if generated and all(o["path"] for o in generated) else "pending" if generated else "failed"
     )
+    spent = credits_before - credits_after
+    surprise = price_notice(kind, spent, bool(generated))
+    said = {"balance_moved": surprise} if surprise else {}
     ledger.append(
         job_id,
         status,
@@ -344,9 +384,10 @@ async def _generate_from_editor(
         scenes=new_scenes,
         credits_before=credits_before,
         credits_after=credits_after,
-        spent=credits_before - credits_after,
+        spent=spent,
         rpcids=sorted(frames),
         flow=flow,
+        **said,
     )
     if not generated:
         raise RuntimeError(
@@ -362,6 +403,7 @@ async def _generate_from_editor(
         "outputs": outputs,
         "credits_before": credits_before,
         "credits_after": credits_after,
+        **said,
     }
 
 

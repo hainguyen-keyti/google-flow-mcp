@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 from video import gen
+
+# The module, not the name: imported while clips is still loading, a name import fails.
+from video.flow import clips as clips_mod
 from video.flow import composer as composer_mod
 from video.flow import reader
 from video.flow.reader import capture
@@ -109,19 +112,24 @@ async def send(
     reply = after[len(before) - 200 if len(before) > 200 else 0 :][:800]
     restored = await set_mode(session, project_id, state["was"])
     credits_after = (await reader.credits(session))["balance"]
+    spent = credits_before - credits_after
+    surprise = clips_mod.price_notice("agent", spent)
+    said = {"balance_moved": surprise} if surprise else {}
     ledger.append(
         job_id,
         "done",
         credits_before=credits_before,
         credits_after=credits_after,
-        spent=credits_before - credits_after,
+        spent=spent,
         rpcids=sorted(frames),
         flow=flow,
+        **said,
     )
     return {
         "job_id": job_id,
         "rpcids": sorted(frames),
         "flow": flow,
+        **said,
         "reply_excerpt": reply,
         "mode_restored": restored["enabled"] == state["was"],
         "credits_before": credits_before,

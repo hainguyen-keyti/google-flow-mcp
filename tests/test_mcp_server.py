@@ -2415,3 +2415,24 @@ def test_scene_add_clip_tells_the_agent_the_clip_goes_last_and_to_read_the_timel
     for phrase in phrases:
         assert phrase in text, phrase
     assert "changed" not in text and "usually" not in text
+
+
+def test_the_measured_price_a_bill_is_judged_against_is_the_one_the_tool_promises():
+    """Two copies of a price drift, and the one that drifts is the one nobody is looking at: `clips.MEASURED_PRICE`
+    decides whether a bill gets flagged, while the tool description is what an agent reads before spending. This
+    reads BOTH sides, the table and the descriptions the server is serving right now, and pins the mapping so a
+    new paid kind cannot be added to the table without a description that states its price."""
+    from video.flow import clips
+
+    tool_of = {"extend": "clip_extend", "edit": "clip_edit", "agent": "agent_send"}
+    assert sorted(tool_of) == sorted(clips.MEASURED_PRICE), (
+        f"a kind in the price table has no tool to check it against: {sorted(clips.MEASURED_PRICE)}"
+    )
+    served = {name: (tool.description or "") for name, tool in served_tool_objects().items()}
+
+    for kind, price in clips.MEASURED_PRICE.items():
+        description = served[tool_of[kind]]
+        # A plain substring let "0 credit" hide inside "10 credits" and "20 credits" (review of plan P).
+        assert re.search(rf"(?<!\d){price} credits?\b", description), (
+            f"{tool_of[kind]} never states the measured {price}: {description[:160]}"
+        )
