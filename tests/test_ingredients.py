@@ -2588,11 +2588,12 @@ def test_a_name_two_characters_share_is_not_answered_with_ids_that_would_be_refu
 OTHER_MEDIA = "7c3b2a19-5d4e-4f60-8a71-b2c3d4e5f6a7"
 
 
-def _edit_record(status, *, workflow=JOB_WORKFLOW, media=JOB_MEDIA):
-    """An Omni edit's record, measured 2026-09-28 in the jIps6 reply of job price2-edit: the generation-record shape
-    with "CAI" where a generation carries "CAE", the edit's workflow first and the SOURCE clip's media id third."""
+def _edit_record(status, *, workflow=JOB_WORKFLOW, media=JOB_MEDIA, version="CAI"):
+    """An Omni edit's record, measured 2026-09-28 in the jIps6 replies of jobs price2-edit and plan-t-edit-1: the
+    generation-record shape, the edit's workflow first, the SOURCE clip's media id third, and in the fourth field the
+    base64 protobuf {1: version} of that clip, "CAI" (2) for its first edit and "CAM" (3) for its second."""
     record = _flow_record(status, workflow=workflow)
-    record[2], record[3] = media, "CAI"
+    record[2], record[3] = media, version
     return record
 
 
@@ -2755,4 +2756,51 @@ def test_the_ledger_lists_every_edit_record_the_submit_reply_carried():
         source_media=JOB_MEDIA,
     )
 
-    assert flow["edit_records"] == sorted([f"{JOB_WORKFLOW}:6:source", f"{EARLIER_EDIT}:3:other"]), flow
+    assert flow["edit_records"] == sorted([f"{JOB_WORKFLOW}:v2:6:source", f"{EARLIER_EDIT}:v2:3:other"]), flow
+
+
+@pytest.mark.parametrize(
+    ("token", "version"),
+    [
+        ("CAE", 1),
+        ("CAI", 2),
+        ("CAM", 3),
+        ("CAQ", 4),
+        ("CBA", 16),
+        ("CKwC", 300),  # computed, not measured: a two-byte varint whose first byte alone would read 172
+        ("CAA", None),  # version 0 does not exist
+        ("", None),
+        ("XYZ", None),
+        (None, None),
+    ],
+)
+def test_a_records_fourth_field_is_the_version_of_its_media(token, version):
+    """Measured 2026-09-28: a clip's own generation is "CAE", its first edit "CAI", its second "CAM"; decoded, these
+    are the protobuf {1: 1}, {1: 2}, {1: 3}. The reader treated the field as a type and matched "CAI" literally, so
+    the second edit of a clip (plan-t-edit-1, 20 credits) was heard as nothing again."""
+    assert composer._record_version(token) == version
+
+
+def test_the_editor_hears_a_second_edit_of_the_same_clip():
+    """The exact case that failed live: the edit record of a clip's SECOND edit is typed "CAM"."""
+    flow = _judged(
+        [_edit_submit(_edit_record(6, version="CAM")), _status_reply(2)], editor=True, source_media=JOB_MEDIA
+    )
+
+    assert flow["workflow_id"] == JOB_WORKFLOW and flow["named_by_editor_submit"] is True, flow
+
+
+def test_an_original_generation_under_the_editors_submit_is_not_an_edit():
+    """Version 1 is a clip's own generation; only a later version is an edit of it."""
+    flow = _judged([_edit_submit(_edit_record(6, version="CAE"))], editor=True, source_media=JOB_MEDIA)
+
+    assert flow["workflow_id"] is None, flow
+
+
+def test_the_gen_reader_still_hears_only_first_versions():
+    """A generation is always its media's version 1; the gen path's reader stays exactly as it was."""
+    later = _FlowReply("as29s", [None, 1, [_edit_record(4, version="CAM")]])
+
+    flow = _judged([SUBMIT_REPLY, _status_reply(2), later])
+
+    assert flow["statuses"] == [6, 2], flow

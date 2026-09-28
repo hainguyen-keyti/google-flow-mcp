@@ -13,6 +13,7 @@ Two money guards, both measured the hard way in Plan 1 and T2:
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
@@ -105,19 +106,38 @@ _SIGNED_KEY_RE = re.compile(r"signature=|x-goog-signature=|x-goog-credential=|ex
 _WORD_RE = re.compile(r"\S+")
 
 
-def _records_in(node: Any, types: tuple[str, ...] = ("CAE",)) -> list[list[Any]]:
-    """Every generation record in a reply, shaped [workflow_id, project_id, media_id, "CAE", ...] (gflow
-    batchexecute.py), where gflow's own parser returns only the first. An Omni edit's record is the same shape typed
-    "CAI" (measured 2026-09-28 in jIps6; the listing parser reads both, parsers.records)."""
+def _record_version(token: Any) -> int | None:
+    """The fourth field of a generation record: base64 of the protobuf {1: version} of its media, "CAE" for the media's
+    own generation (1), "CAI" for its first edit (2), "CAM" for its second (3), measured 2026-09-28. It is not a type:
+    reading it as one heard a clip's second edit as nothing (plan-t-edit-1, 20 credits)."""
+    if not isinstance(token, str) or not token:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+    except ValueError:
+        return None
+    if len(raw) < 2 or raw[0] != 0x08:
+        return None
+    value, shift = 0, 0
+    for byte in raw[1:]:
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value or None
+        shift += 7
+    return None
+
+
+def _records_in(node: Any, edits: bool = False) -> list[list[Any]]:
+    """Every generation record in a reply, shaped [workflow_id, project_id, media_id, <version>, ...] (gflow
+    batchexecute.py), where gflow's own parser returns only the first. A generation is always its media's version 1;
+    an edit is a later version of its source clip, heard only when `edits` is asked for."""
     if not isinstance(node, list):
         return []
-    if (
-        len(node) >= 6
-        and node[3] in types
-        and all(isinstance(node[i], str) and _UUID_RE.match(node[i]) for i in (0, 1, 2))
-    ):
-        return [node]
-    return [record for child in node for record in _records_in(child, types)]
+    if len(node) >= 6 and all(isinstance(node[i], str) and _UUID_RE.match(node[i]) for i in (0, 1, 2)):
+        version = _record_version(node[3])
+        if version == 1 or (edits and version is not None and version > 1):
+            return [node]
+    return [record for child in node for record in _records_in(child, edits)]
 
 
 def _status_of(record: list[Any]) -> int | None:
@@ -186,7 +206,7 @@ class FlowReplies:
         # Only the editor reader hears the editor's submit rpc and edit records: on the gen path, whose replies are the
         # measured ones, neither may change a status, a reason or the wait (review F3, 2026-09-28).
         self.job_rpcs: tuple[str, ...] = (*GFLOW_RPCS, EDITOR_SUBMIT) if editor else GFLOW_RPCS
-        self.record_types: tuple[str, ...] = ("CAE", "CAI") if editor else ("CAE",)
+        self.edits = editor
         self.source_media = source_media
         self._reads: list[asyncio.Future[tuple[str, str]]] = []
 
@@ -263,7 +283,7 @@ class FlowReplies:
             for rpcids, text in bodies
             if _about_the_job(rpcids, self.job_rpcs)
             for rpcid, payload in parse_frames(text)
-            for record in _records_in(payload, self.record_types)
+            for record in _records_in(payload, self.edits)
         ]
         submitted = next((record for rpcid, record in replies if rpcid in mc.SUBMIT_RPCS), None)
         # The edit's own record in its submit reply, trusted only when it is the one edit record on the source clip.
@@ -271,7 +291,7 @@ class FlowReplies:
             record[0]
             for rpcid, record in replies
             if rpcid == EDITOR_SUBMIT
-            and record[3] == "CAI"
+            and (_record_version(record[3]) or 0) > 1
             and self.source_media
             and record[2] == self.source_media
         }
@@ -322,9 +342,10 @@ class FlowReplies:
             "identity_conflict": conflict,
             # What the edit's submit reply carried, for the day it holds more than the job (one sample so far).
             "edit_records": sorted(
-                f"{record[0]}:{_status_of(record)}:{'source' if record[2] == self.source_media else 'other'}"
+                f"{record[0]}:v{_record_version(record[3])}:{_status_of(record)}:"
+                f"{'source' if record[2] == self.source_media else 'other'}"
                 for rpcid, record in replies
-                if rpcid == EDITOR_SUBMIT and record[3] == "CAI"
+                if rpcid == EDITOR_SUBMIT
             ),
             "told_unmatched": self._no_reply_about(replies, bodies) if self.workflow and not told else None,
             "media_id": media,
