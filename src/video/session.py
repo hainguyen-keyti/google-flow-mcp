@@ -17,7 +17,7 @@ from gflow_cli import auth as _auth
 from gflow_cli.api.client import FlowApiClient
 
 import video  # noqa: F401
-from video import gen
+from video import gen, offscreen
 
 _GUARD = threading.Lock()
 _GUARD_POLL_S = 0.05
@@ -64,6 +64,7 @@ class FlowSession:
         while not _GUARD.acquire(blocking=False):
             await asyncio.sleep(_GUARD_POLL_S)
         try:
+            offscreen.install()
             self.client = self._factory(self.profile_dir, headless=self.headless)
             await self.client.__aenter__()
             self._entered = True
