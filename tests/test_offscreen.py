@@ -129,6 +129,9 @@ def test_a_long_running_server_installs_the_wrapper_once_however_many_sessions_i
         (["image", "t2i", "a boat"], True),
         (["auth", "login", "--profile", "default"], False),
         (["auth", "status"], False),
+        (["-v", "auth", "login"], False),
+        (["--verbose", "auth", "login"], False),
+        (["-v", "video", "t2v", "a boat"], True),
         ([], False),
     ],
 )
@@ -140,22 +143,24 @@ def test_the_gflow_entry_point_never_hides_a_sign_in(argv, hide):
 
 
 def test_every_place_gflow_opens_chrome_goes_through_the_wrapped_launch():
-    """The wrapper covers gflow only while gflow opens Chrome with launch_persistent_context. Read from the installed
-    gflow itself, so a gflow upgrade that opens it another way turns this red instead of silently showing windows."""
+    """The wrapper covers gflow only while gflow opens Chrome with the async launch_persistent_context. Read from the
+    installed gflow itself (review of plan V: a regex for `.launch(` alone missed `launch_server`, `connect` and the
+    sync API), so a gflow upgrade that opens it another way turns this red instead of silently showing windows."""
     import gflow_cli
 
     root = pathlib.Path(gflow_cli.__file__).parent
-    launches = {
-        str(path.relative_to(root)): re.findall(
-            r"\.(launch_persistent_context|launch|connect_over_cdp)\(", text
-        )
-        for path in root.rglob("*.py")
-        if (text := path.read_text(encoding="utf-8"))
-        and re.search(r"\.(launch_persistent_context|launch|connect_over_cdp)\(", text)
-    }
-    others = {name: calls for name, calls in launches.items() if set(calls) - {"launch_persistent_context"}}
-    assert launches, "found no browser launch in gflow at all; the scan is not reading it"
+    called, sync = {}, []
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        names = set(re.findall(r"chromium\s*\.\s*(\w+)\s*\(", text))
+        if names:
+            called[str(path.relative_to(root))] = names
+        if re.search(r"^\s*(from|import)\s+playwright\.sync_api", text, re.MULTILINE):
+            sync.append(str(path.relative_to(root)))
+    others = {name: calls for name, calls in called.items() if calls - {"launch_persistent_context"}}
+    assert called, "found no browser launch in gflow at all; the scan is not reading it"
     assert others == {}, f"gflow opens a browser another way: {others}"
+    assert sync == [], f"gflow uses the sync API, which the wrapper does not cover: {sync}"
 
 
 def test_the_repos_own_browser_session_installs_it_before_it_launches(monkeypatch):
@@ -192,3 +197,51 @@ def test_the_move_says_where_the_window_ended_up(launch, capsys):
     _launch(headless=False)
 
     assert "[video] browser window moved aside (left=-1242)" in capsys.readouterr().err
+
+
+def test_the_gflow_entry_point_installs_it_for_a_generation_and_never_for_a_sign_in(monkeypatch):
+    """Review of plan V, F1: only the helper was tested, so an entry point that installed for `auth` too, or never
+    installed at all, stayed green. This drives the entry point itself."""
+    from video import gflow_cli
+
+    for argv, expected in (
+        (["gflow", "image", "t2i", "a cup"], ["install", "main"]),
+        (["gflow", "-v", "auth", "login"], ["main"]),
+    ):
+        order = []
+        monkeypatch.setattr(gflow_cli.offscreen, "install", lambda order=order: order.append("install"))
+        monkeypatch.setattr(gflow_cli, "main", lambda order=order: order.append("main"))
+        gflow_cli.run(argv)
+        assert order == expected, (argv, order)
+
+
+def test_a_move_chrome_never_answers_cannot_hang_the_launch(launch, monkeypatch):
+    """Review of plan V, F3: a CDP call has no timeout of its own, so a Chrome that never answered stalled the launch
+    and the paid run behind it. The move gives up and the caller gets its browser."""
+    log, _ = launch
+
+    class _Silent:
+        async def send(self, method, params=None):
+            await asyncio.sleep(3600)
+
+        async def detach(self):
+            log.append(("detach", None))
+
+    async def silent_session(self, page):
+        return _Silent()
+
+    monkeypatch.setattr(_Context, "new_cdp_session", silent_session)
+    monkeypatch.setattr(offscreen, "MOVE_TIMEOUT_S", 0.05)
+    offscreen.install()
+
+    context = _launch(headless=False)
+
+    assert isinstance(context, _Context)
+    assert ("detach", None) in log, "a move that gave up must still let go of its DevTools session"
+
+
+def test_a_launch_that_names_no_headless_is_headless_as_playwright_defaults_it():
+    """Review of plan V, F4: Playwright launches headless when the flag is omitted, so there is no window to move."""
+    assert offscreen.headed({}) is False
+    assert offscreen.headed({"headless": True}) is False
+    assert offscreen.headed({"headless": False}) is True
