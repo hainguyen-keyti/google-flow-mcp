@@ -2524,3 +2524,38 @@ def test_a_gen_job_is_still_named_by_flows_own_submit_reply():
     assert _judged([SUBMIT_REPLY, _status_reply(2)])["statuses"] == [6, 2]
     assert _judged([SUBMIT_REPLY, _status_reply(2)])["named_by_caller"] is False
     assert _judged([SUBMIT_REPLY, _status_reply(2)], about=OTHER_WORKFLOW)["workflow_id"] == JOB_WORKFLOW
+
+
+def test_a_named_job_no_reply_mentions_leaves_a_trail_worth_measuring():
+    """Measured 2026-09-28 on three paid editor runs (60 credits): the caller named the workflow from the listing and
+    NOT ONE reply heard between the click and the outcome carried a record for it, so the reader honestly reported
+    nothing. What it could not say is which workflows those replies DID name, or what the editor's own submit reply
+    held, and without that the question costs another paid run to ask again."""
+    editor = _FlowReply("jIps6", [None, 1, [_flow_record(6, workflow=OTHER_WORKFLOW)]])
+
+    flow = _judged([editor], about=JOB_WORKFLOW, editor=True)
+
+    assert flow["workflow_id"] is None
+    assert flow["told_unmatched"]["workflow"] == JOB_WORKFLOW
+    assert flow["told_unmatched"]["records_named"] == [f"jIps6:{OTHER_WORKFLOW}"]
+    assert OTHER_WORKFLOW in flow["told_unmatched"]["editor_reply"]
+
+
+def test_the_trail_is_absent_when_flow_did_name_the_job():
+    """A diagnostic that is always there is one more thing to read on the rows that need reading least."""
+    assert _judged([_status_reply(3)], about=JOB_WORKFLOW, editor=True)["told_unmatched"] is None
+    assert _judged([SUBMIT_REPLY, _status_reply(3)])["told_unmatched"] is None
+    assert _judged([_status_reply(3)])["told_unmatched"] is None
+
+
+def test_the_trail_carries_no_signed_url_out_of_the_editors_reply():
+    """It goes into a ledger file: a signed lh3 query in there is session material on disk."""
+    token = "A" * 200
+    editor = _FlowReply(
+        "jIps6", [None, 1, [f"https://lh3.googleusercontent.com/x?Expires=1&Signature={token}"]]
+    )
+
+    trail = _judged([editor], about=JOB_WORKFLOW, editor=True)["told_unmatched"]
+
+    assert token not in trail["editor_reply"]
+    assert "<token>" in trail["editor_reply"] or "<redacted:url>" in trail["editor_reply"]

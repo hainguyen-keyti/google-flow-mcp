@@ -234,6 +234,22 @@ class FlowReplies:
         except Exception as exc:  # noqa: BLE001
             return {"error": f"{type(exc).__name__}: {str(exc)[:160]}", "heard": sorted(self.heard)}
 
+    def _no_reply_about(
+        self, replies: list[tuple[str, Any]], bodies: list[tuple[str, str]]
+    ) -> dict[str, Any]:
+        """The trail left when the caller named a workflow and no reply heard here carried a record for it.
+
+        Measured 2026-09-28 across three paid editor runs (60 credits): that is what happens on every one of them, so
+        the next paid editor job answers for free which workflows those replies DO name and what the editor's own
+        submit reply holds, instead of costing a run of its own to ask again.
+        """
+        editor = next((text for rpcids, text in bodies if EDITOR_SUBMIT in rpcids.split(",")), "")
+        return {
+            "workflow": self.workflow,
+            "records_named": sorted({f"{rpcid}:{record[0]}" for rpcid, record in replies}),
+            "editor_reply": _head(editor)[:1200],
+        }
+
     def _judge(self, bodies: list[tuple[str, str]]) -> dict[str, Any]:
         replies = [
             (rpcid, record)
@@ -283,6 +299,7 @@ class FlowReplies:
         return {
             "workflow_id": workflow,
             "named_by_caller": bool(told and not submitted),
+            "told_unmatched": self._no_reply_about(replies, bodies) if self.workflow and not told else None,
             "media_id": media,
             "statuses": statuses,
             "unmeasured": unmeasured,
