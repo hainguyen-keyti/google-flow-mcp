@@ -311,4 +311,6 @@ def test_the_home_page_is_ready_on_an_account_with_no_projects():
     selectors = [part.strip() for part in session_mod.GRID_READY.split(",")]
 
     assert 'a[href*="/project/"]' in selectors, "an account with projects must still be ready on its links"
-    assert "button.new-project-button" in selectors, selectors
+    assert session_mod.NEW_PROJECT_BUTTON in selectors, selectors
+    # Scoped to the signed-in projects page, so no other page's button can pass for a signed-in grid.
+    assert session_mod.NEW_PROJECT_BUTTON == "flow-projects-page button.new-project-button"

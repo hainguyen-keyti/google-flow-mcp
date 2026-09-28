@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from video.session import NEW_PROJECT_BUTTON
+
 LABS_ROOT = "https://labs.google/fx/tools/flow"
 MIGRATED_ROOT = "https://flow.google.com/"
 
@@ -21,10 +23,10 @@ PROBE_JS = """
       router_outlet: count('router-outlet'),
     },
     project_links: count('a[href*="/project/"]'),
-    new_project_button: count('button.new-project-button'),
+    new_project_button: count('__NEW_PROJECT_BUTTON__'),
   };
 }
-"""
+""".replace("__NEW_PROJECT_BUTTON__", NEW_PROJECT_BUTTON)
 
 
 def verdict(labs: dict[str, Any], migrated: dict[str, Any]) -> str:

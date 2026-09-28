@@ -6,11 +6,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from video.flow import parsers
 from video.flow.reader import capture, one
 from video.session import GRID_READY, MIGRATED_ROOT, PROJECT_READY, FlowSession
 
 _PROJECT_RE = re.compile(r"/project/([A-Za-z0-9_-]+)")
+CARD_WAIT_MS = 15_000
 
 
 def project_id_from_url(url: str) -> str:
@@ -76,6 +79,11 @@ async def delete(session: FlowSession, project_id: str) -> dict[str, Any]:
     page = session.page
     await session.goto(MIGRATED_ROOT, ready=GRID_READY)
     card = page.locator("flow-project-card", has=page.locator(f"a[href*='/project/{project_id}']")).first
+    # The page can be ready on the New project button before the listing draws the cards (review of plan Q).
+    try:
+        await card.wait_for(state="attached", timeout=CARD_WAIT_MS)
+    except PlaywrightTimeoutError:
+        raise LookupError(f"project {project_id} is not on the grid") from None
     if await card.count() == 0:
         raise LookupError(f"project {project_id} is not on the grid")
     await card.hover(timeout=8_000)

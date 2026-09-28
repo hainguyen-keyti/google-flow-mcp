@@ -91,3 +91,12 @@ def test_projects_of_an_account_with_none_is_an_empty_list_rather_than_an_error(
     """Measured 2026-09-28 on a brand-new account: Flow still sends UpteDb, with the payload `[]`, and this parser
     raised TypeError, so `flow projects` died on the one account that most needs to see it has nothing yet."""
     assert parsers.projects([]) == []
+
+
+@pytest.mark.parametrize("damaged", [None, {}, [None], "", [{}]])
+def test_projects_still_refuses_a_listing_that_is_damaged_rather_than_empty(damaged):
+    """Only the exact `[]` Flow sends an account with no projects is an empty answer (review of plan Q: a check
+    written as `if not payload` passed the whole suite while turning None and {} into "no projects", which would
+    send an agent off to create a project it already has)."""
+    with pytest.raises(TypeError):
+        parsers.projects(damaged)

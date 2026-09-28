@@ -39,6 +39,8 @@ def test_no_grid_and_no_new_project_button_is_still_signed_out():
 
 def test_the_probe_counts_the_button_the_verdict_reads():
     """The verdict can only see what the page script counts."""
+    from video import session
     from video.flow import lane
 
-    assert "new-project-button" in lane.PROBE_JS and "new_project_button" in lane.PROBE_JS
+    # The exact selector the home page waits on, not a word that merely resembles it (review of plan Q).
+    assert f"new_project_button: count('{session.NEW_PROJECT_BUTTON}')" in lane.PROBE_JS

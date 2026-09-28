@@ -24,8 +24,9 @@ _GUARD_POLL_S = 0.05
 PAGE_CLOSE_TIMEOUT_S = 10.0
 
 MIGRATED_ROOT = "https://flow.google.com/"
-# An account with no projects renders only the New project button (measured 2026-09-28), so both count.
-GRID_READY = 'a[href*="/project/"], button.new-project-button'
+# An account with no projects renders only this button, inside the signed-in projects page (measured 2026-09-28).
+NEW_PROJECT_BUTTON = "flow-projects-page button.new-project-button"
+GRID_READY = f'a[href*="/project/"], {NEW_PROJECT_BUTTON}'
 PROJECT_READY = "flow-project-page"
 COMPOSER_READY = ".settings-trigger-button"
 

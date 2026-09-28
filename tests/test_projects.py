@@ -161,3 +161,60 @@ def test_delete_refuses_ids_not_created_by_this_pipeline_unless_explicit():
     assert projects.may_delete("abc", created_ids={"abc"}, explicit=False) is True
     assert projects.may_delete("xyz", created_ids={"abc"}, explicit=False) is False
     assert projects.may_delete("xyz", created_ids=set(), explicit=True) is True
+
+
+class _ReachedTheCard(Exception):
+    """Raised by the fake card's hover: proof that delete got past the "is it on the grid" check."""
+
+
+class _LateCard:
+    def __init__(self, *, shows_up: bool):
+        self.shows_up = shows_up
+        self.waited = False
+
+    @property
+    def first(self):
+        return self
+
+    async def wait_for(self, state=None, timeout=None):
+        if not self.shows_up:
+            raise PlaywrightTimeoutError("no such card")
+        self.waited = True
+
+    async def count(self):
+        return 1 if self.waited else 0
+
+    async def hover(self, timeout=None):
+        raise _ReachedTheCard
+
+
+class _CardGridPage:
+    def __init__(self, card):
+        self.card = card
+
+    def locator(self, selector, has=None):
+        return self.card if selector == "flow-project-card" else object()
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+class _CardGridSession:
+    def __init__(self, card):
+        self.page = _CardGridPage(card)
+
+    async def goto(self, url, *, ready=None, timeout_ms=60_000):
+        return None
+
+
+def test_delete_waits_for_the_card_the_listing_draws_after_the_new_project_button():
+    """Review of plan Q (2026-09-28): the home page can now be ready on the New project button before the listing
+    has drawn the project cards, and delete counted the card at once, so on an account WITH projects it could say
+    "not on the grid" about a project that exists. An agent reads that as "already gone"."""
+    with pytest.raises(_ReachedTheCard):
+        asyncio.run(projects.delete(_CardGridSession(_LateCard(shows_up=True)), "p-late"))
+
+
+def test_delete_still_says_so_when_the_card_never_shows_up():
+    with pytest.raises(LookupError, match="not on the grid"):
+        asyncio.run(projects.delete(_CardGridSession(_LateCard(shows_up=False)), "p-gone"))
