@@ -1358,6 +1358,14 @@ async def gen_r2v(
     )
 
 
+def _longer_lengths() -> str:
+    # Written from the price table the driver charges against, so the two cannot drift apart.
+    return " ".join(
+        f"duration={seconds} is offered on {model} at {price} credits (the composer's own quote)."
+        for (model, seconds), price in sorted(ingredients_mod.LONGER_PRICES.items())
+    )
+
+
 @server.tool(
     name="gen_character",
     description=(
@@ -1365,8 +1373,9 @@ async def gen_r2v(
         "in the project (media ids from flow_media, images only). Each goes into the prompt as a Flow @ mention, and "
         "every chip is checked against its id before anything is spent. It spends credits and is ledgered, at x1: "
         "8 s by default, omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 "
-        "credits by Flow's own price table, unmeasured. duration=10 is offered on omni-flash only, at 15 credits (the "
-        "composer's own quote, 2026-09-28); other models show no length choice here. The live price line is read first and a different price is refused "
+        "credits by Flow's own price table, unmeasured. "
+        + _longer_lengths()
+        + " Veo 3.1 Lite showed no length choice here (measured); veo-fast stays at 8 s, unmeasured. The live price line is read first and a different price is refused "
         "before the click. dry_run=true returns the quote and the chips, clicks nothing, writes no ledger row, leaves "
         "the composer empty and needs no job_id (each chip's id is the character's entity id or the image's workflow "
         "id). out_dir puts the clip and its ledger in a folder of your own, which keeps one film's takes together; "

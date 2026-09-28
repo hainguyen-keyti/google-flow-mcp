@@ -2876,17 +2876,168 @@ def test_a_length_whose_price_was_never_measured_is_quoted_but_never_run(monkeyp
 
 
 def test_every_gen_character_price_is_the_one_the_tool_promises():
-    """Both sides read, never a copy typed into the test: every (model, length) the driver charges against must be
-    stated in the description the server is serving."""
+    """Both sides read, never a copy typed into the test, and each price tied to its own model and length (review of
+    plan U, F4: a bare "N credits" anywhere let 10 s at 12 pass because 12 is the 8 s price)."""
     import re as _re
 
     from video import mcp_server
 
     tools = asyncio.run(mcp_server.server.list_tools())
     description = next(tool.description for tool in tools if tool.name == "gen_character")
-    priced = {(model, ingredients.SECONDS): price for model, price in ingredients.PRICES.items()}
-    priced.update(ingredients.LONGER_PRICES)
-    for (model, seconds), price in priced.items():
-        assert _re.search(rf"(?<!\d){price} credits?\b", description), (
-            f"{model} {seconds}s at {price} is not stated"
+    for model, price in ingredients.PRICES.items():
+        assert _re.search(rf"{_re.escape(model)}\b[^;.]*?(?<!\d){price} credits", description), (model, price)
+    for (model, seconds), price in ingredients.LONGER_PRICES.items():
+        assert f"duration={seconds} is offered on {model} at {price} credits" in description, (
+            model,
+            seconds,
+            price,
         )
+
+
+def _ten_second_setup_world(monkeypatch, log, pinned="pinned"):
+    captured = _generate_world(monkeypatch, log)
+    asked = []
+
+    async def apply_settings(page, model, aspect, references):
+        log.append("settings")
+
+    async def pin_duration(page, seconds=None):
+        asked.append(seconds)
+        return pinned
+
+    async def attach(page, reference):
+        return {"kind": reference.kind, "id": min(reference.mention_ids), "text": reference.title}
+
+    async def chips_on(page):
+        return [{}]
+
+    monkeypatch.setattr(ingredients, "apply_settings", apply_settings)
+    monkeypatch.setattr(ingredients, "pin_duration", pin_duration)
+    monkeypatch.setattr(ingredients, "attach", attach)
+    monkeypatch.setattr(ingredients, "chips_on", chips_on)
+    return captured, asked
+
+
+def test_a_ten_second_run_is_priced_pinned_and_recorded_at_ten_seconds(monkeypatch, tmp_path):
+    """Review of plan U, F2: a driver that priced, pinned or recorded 8 s whatever it was asked passed every test,
+    so the whole feature could collapse into a silent 8 s run at 12 credits. Driven end to end at 10 s here."""
+    log = []
+    captured, asked = _ten_second_setup_world(monkeypatch, log)
+
+    asyncio.run(
+        ingredients.generate(
+            object(),
+            "p-1",
+            prompt=PROMPT,
+            characters=[ENTITY],
+            duration=10,
+            job_id="job-10",
+            out_dir=tmp_path,
+        )
+    )
+    extra = asyncio.run(captured["setup"](type("Session", (), {"page": _GeneratePage(log)})()))
+
+    assert captured["expected_credits"] == ingredients.LONGER_PRICES[("omni-flash", 10)]
+    assert asked == [10], asked
+    assert extra["seconds"] == 10, extra
+
+
+def test_ten_seconds_asked_for_and_no_length_control_found_is_refused_before_the_click(monkeypatch, tmp_path):
+    """Review of plan U, F3: an absent length row let the run go on at whatever length the composer remembered, while
+    the row said 10. setup runs before the click, so refusing there spends nothing."""
+    log = []
+    captured, _ = _ten_second_setup_world(monkeypatch, log, pinned="absent")
+
+    asyncio.run(
+        ingredients.generate(
+            object(),
+            "p-1",
+            prompt=PROMPT,
+            characters=[ENTITY],
+            duration=10,
+            job_id="job-10",
+            out_dir=tmp_path,
+        )
+    )
+
+    with pytest.raises(LookupError, match="10s"):
+        asyncio.run(captured["setup"](type("Session", (), {"page": _GeneratePage(log)})()))
+
+
+def test_an_unmeasured_length_is_still_quoted_by_a_dry_run(monkeypatch, tmp_path):
+    """Review of plan U, F5: only the refusal half of "quoted but never run" was tested. The quote carries no expected
+    price, so the dry run can never report a guessed price as matching."""
+    log = []
+    captured = _generate_world(monkeypatch, log)
+    monkeypatch.setattr(ingredients, "LONGER_PRICES", {})
+
+    asyncio.run(
+        ingredients.generate(
+            object(), "p-1", prompt=PROMPT, characters=[ENTITY], duration=10, dry_run=True, out_dir=tmp_path
+        )
+    )
+
+    assert captured["dry_run"] is True and captured["expected_credits"] == 0, captured
+
+
+def test_a_paid_run_whose_submit_carried_no_references_is_not_reported_as_done(monkeypatch, tmp_path):
+    """Review of plan U, F1: the body check only watched. gflow warns that off 8 s Flow drops the references and runs
+    text to video at full price, and on omni-flash 10 s that is the same 15 credits, so the price guard cannot tell;
+    the run came back done. The request is already gone by then, so the credits are spent: the caller must hear it."""
+    log = []
+    _generate_world(monkeypatch, log, was=True)
+
+    async def submit(session, project_id, **kwargs):
+        log.append("submit")
+        return {
+            "status": "done",
+            "path": "out/x.mp4",
+            "credits_before": 100,
+            "credits_after": 85,
+            "body_check": {
+                "rpcid": "MZZa6b",
+                "model_keys": ["abra_t2v_10s"],
+                "missing": [ENTITY],
+                "ok": False,
+            },
+        }
+
+    monkeypatch.setattr(ingredients.composer, "_submit", submit)
+
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(
+            ingredients.generate(
+                object(),
+                "p-1",
+                prompt=PROMPT,
+                characters=[ENTITY],
+                duration=10,
+                job_id="job-10",
+                out_dir=tmp_path,
+            )
+        )
+
+    said = str(caught.value)
+    assert "15 credits" in said and "abra_t2v_10s" in said and ENTITY in said, said
+    assert log[-1] == "agent True", "agent mode must be restored before the error leaves"
+
+
+def test_a_dry_run_is_never_failed_by_the_body_check(monkeypatch, tmp_path):
+    """A dry run sends no request, so its body check always reads 'never saw a submit'; that is not a failure."""
+    log = []
+    _generate_world(monkeypatch, log)
+
+    async def submit(session, project_id, **kwargs):
+        return {
+            "dry_run": True,
+            "body_check": {"rpcid": None, "model_keys": [], "missing": [ENTITY], "ok": False},
+        }
+
+    monkeypatch.setattr(ingredients.composer, "_submit", submit)
+
+    result = asyncio.run(
+        ingredients.generate(
+            object(), "p-1", prompt=PROMPT, characters=[ENTITY], dry_run=True, out_dir=tmp_path
+        )
+    )
+    assert result["dry_run"] is True

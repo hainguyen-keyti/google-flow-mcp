@@ -1455,7 +1455,13 @@ def test_gen_character_refuses_what_it_cannot_price_or_name_before_a_browser_ope
 
 def test_gen_character_forwards_every_option_to_the_driver(monkeypatch, tmp_path):
     _spending_backend(monkeypatch, tmp_path)
-    arguments = SPEND_CALLS["gen_character"] | {"media_ids": ["M"], "model": "veo-lite", "aspect": "16:9"}
+    # A non-default length on the one model that has one: a backend passing a constant 8 must not look correct.
+    arguments = SPEND_CALLS["gen_character"] | {
+        "media_ids": ["M"],
+        "model": "omni-flash",
+        "aspect": "16:9",
+        "duration": 10,
+    }
 
     async def fn(s):
         return await s.call_tool("gen_character", arguments)
@@ -1467,12 +1473,12 @@ def test_gen_character_forwards_every_option_to_the_driver(monkeypatch, tmp_path
         "prompt": "a boat",
         "characters": ["E"],
         "media_ids": ["M"],
-        "model": "veo-lite",
+        "model": "omni-flash",
         "aspect": "16:9",
         "job_id": "job-character",
         "out_dir": str(tmp_path),
         "dry_run": False,
-        "duration": 8,
+        "duration": 10,
     }
 
 

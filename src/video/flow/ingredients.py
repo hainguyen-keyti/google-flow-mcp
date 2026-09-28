@@ -457,6 +457,12 @@ async def generate(
         page = active.page
         await apply_settings(page, model, aspect, references)
         duration_row = await pin_duration(page, duration)
+        # Shown no length control, a longer run would go out at whatever length the composer remembers (review of
+        # plan U, F3); the default keeps its old behaviour, where the price line tells the lengths apart.
+        if duration_row != "pinned" and duration != SECONDS:
+            raise LookupError(
+                f"asked for {duration}s but the composer shows no {duration}s length to pin; refusing"
+            )
         await page.locator(BOX).first.click(timeout=8_000)
         attached[:] = [await attach(page, reference) for reference in references]
         on_page = await chips_on(page)
@@ -533,4 +539,15 @@ async def generate(
             await agent.set_mode(session, project_id, True)
         except Exception as exc:  # noqa: BLE001
             result["agent_mode_restored"] = f"no: {type(exc).__name__}"
+    # The request is already gone, so this cannot stop the charge; it stops a clip without its references from being
+    # reported as done (review of plan U, F1: off 8 s gflow warns Flow drops them, at the same 15 credits).
+    check = result.get("body_check") or {}
+    if not dry_run and check and not check.get("ok"):
+        spent = result.get("spent", (result.get("credits_before") or 0) - (result.get("credits_after") or 0))
+        raise RuntimeError(
+            f"{spent} credits were spent, but Flow's submit request did not carry the references: model keys "
+            f"{check.get('model_keys')}, missing {check.get('missing')}, rpc {check.get('rpcid')}. The clip "
+            f"({result.get('path') or result.get('media_id')}) may not show them. Do not run this job again under a new "
+            f"job_id; its ledger row holds the body check. job {job_id}"
+        )
     return result
