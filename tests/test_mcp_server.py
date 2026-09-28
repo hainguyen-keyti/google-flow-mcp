@@ -2457,3 +2457,31 @@ def test_the_mcp_generate_path_spends_on_the_profile_it_reads_the_balance_on(mon
 
     assert handed.get("profile") == "acc2", handed
     assert "read_credits" not in handed, "a second, separate profile for the reads is how the two drift apart"
+
+
+def test_every_served_tool_refuses_an_argument_it_does_not_declare(monkeypatch, tmp_path):
+    """Measured 2026-09-28 (plan R, job plan-r-t2i-2): gen_t2i took an `out_dir` it does not declare, succeeded, and
+    wrote its row somewhere else; every tool swallowed unknown arguments. On a paying tool a mistyped `aspect_ratio`
+    silently pays for the default aspect. Generated from the tools actually served, so a new tool is covered the
+    day it is added, and no backend may run for a refused call."""
+
+    class _Untouchable:
+        def __getattr__(self, name):
+            raise AssertionError(f"the backend ran ({name}) for a call that should have been refused")
+
+    monkeypatch.setattr(mcp_server, "backend", _Untouchable())
+    names = sorted(served_tool_objects())
+    assert len(names) >= 40, names
+
+    async def fn(session):
+        answers = {}
+        for name in names:
+            result = await session.call_tool(name, {"not_a_real_argument": 1})
+            answers[name] = (result.is_error, "".join(getattr(c, "text", "") for c in result.content))
+        return answers
+
+    answers = with_client(fn)
+
+    for name, (is_error, text) in answers.items():
+        assert is_error, f"{name} accepted an undeclared argument: {text[:200]}"
+        assert "not_a_real_argument" in text and "unknown argument" in text, f"{name}: {text[:300]}"

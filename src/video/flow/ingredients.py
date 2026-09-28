@@ -123,6 +123,15 @@ def resolve(
     for entity in characters:
         found = by_entity.get(entity)
         if found is None:
+            # A name passed for an id read as "not a character" about one that was (measured 2026-09-28).
+            named = [
+                each["entity_id"] for each in listed_characters if _norm(each.get("name")) == _norm(entity)
+            ]
+            if named:
+                raise LookupError(
+                    f"{entity!r} is a character's name, not its entity id; pass {' or '.join(named)} "
+                    "(flow_characters lists both)"
+                )
             raise LookupError(f"{entity} is not a character of this project; flow_characters lists them")
         name = found.get("name") or ""
         if not _norm(name):

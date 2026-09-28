@@ -586,6 +586,17 @@ class TellingServer(MCPServer):
     project all reached the agent as that same bare line, so the reason is passed on here, scrubbed of secrets."""
 
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        # An undeclared argument used to vanish and the tool ran on its defaults (measured 2026-09-28: gen_t2i took an
+        # out_dir it does not declare). On a paying tool that is a bill for the default, so it stops here, first.
+        declared = {tool.name: tool.input_schema or {} for tool in await self.list_tools()}
+        if name in declared:
+            takes = sorted((declared[name].get("properties") or {}).keys())
+            unknown = sorted(set(arguments or {}) - set(takes))
+            if unknown:
+                raise ToolError(
+                    f"{name} got unknown argument(s) {unknown}; it takes {takes}. "
+                    "Nothing was run and nothing was spent."
+                )
         try:
             return await super().call_tool(name, arguments, context)
         except UnexpectedToolError as exc:

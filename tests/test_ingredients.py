@@ -2559,3 +2559,14 @@ def test_the_trail_carries_no_signed_url_out_of_the_editors_reply():
 
     assert token not in trail["editor_reply"]
     assert "<token>" in trail["editor_reply"] or "<redacted:url>" in trail["editor_reply"]
+
+
+def test_resolve_says_so_when_it_is_given_a_character_name_instead_of_its_entity_id():
+    """Measured 2026-09-28 in the price batch: `characters=["Mia"]` got "Mia is not a character of this project" while
+    Mia was one; the parameter takes entity ids. The refusal has to say what went wrong and hand over the id."""
+    with pytest.raises(LookupError) as caught:
+        ingredients.resolve([_character()], [], [], ["Thu"], [], "omni-flash")
+
+    said = str(caught.value)
+    assert "name" in said and ENTITY in said, said
+    assert "is not a character of this project" not in said, said
