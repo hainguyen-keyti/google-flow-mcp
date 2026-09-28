@@ -93,10 +93,11 @@ guess about; the tool says so too.
 |---|---|
 | `gen_t2v` / `gen_r2v`, veo-lite, 8 s | 10 |
 | `gen_t2v` / `gen_i2v`, omni-flash, 10 s | 15 |
-| `gen_r2v`, omni-flash, 8 s (the only length this host offers) | 12 |
+| `gen_r2v`, omni-flash, 8 s (the only length gflow offers it) | 12 |
 | `gen_character` (video starring a project character), omni-flash | 12 |
 | `gen_character`, veo-lite | 10 |
 | `gen_character`, veo-fast | 20, from Flow's own price table, *unmeasured* |
+| `gen_character`, omni-flash, 10 s, with characters or from project images alone (the only 10 s reference video; `gen_r2v` runs 8 s) | 15 |
 | `clip_extend` (Veo clips only) | 10 |
 | `clip_edit` (Omni 1.1 Flash) | 20 measured, Flow's table says 40 |
 | `gen_t2i` / `gen_i2i` (Nano Banana 2) | 0 credits, but a daily image quota |
