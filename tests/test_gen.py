@@ -410,7 +410,7 @@ def test_every_ledger_row_says_which_code_wrote_it(tmp_path):
     assert re.fullmatch(r"[0-9a-f]{7,40}(-dirty)?|unknown", row["code"]), row["code"]
 
 
-def test_the_code_marker_says_dirty_while_the_source_is_uncommitted(monkeypatch):
+def test_the_code_marker_says_dirty_while_the_source_is_uncommitted(monkeypatch, request):
     """A sha alone would name the wrong code for any run made from a working tree: this session spent money at
     three different states of the same sha."""
     calls = []
@@ -419,6 +419,7 @@ def test_the_code_marker_says_dirty_while_the_source_is_uncommitted(monkeypatch)
         calls.append(args)
         return "abc1234" if "rev-parse" in args else " M src/video/gen.py"
 
+    request.addfinalizer(gen.code_version.cache_clear)
     gen.code_version.cache_clear()
     monkeypatch.setattr(gen, "_git", fake_git)
     assert gen.code_version() == "abc1234-dirty"
@@ -432,10 +433,11 @@ def test_the_code_marker_says_dirty_while_the_source_is_uncommitted(monkeypatch)
     assert gen.code_version() == "unknown"
 
 
-def test_the_code_marker_reads_git_once_per_process(monkeypatch):
+def test_the_code_marker_reads_git_once_per_process(monkeypatch, request):
     """It runs on the money path, once per ledger row otherwise: two subprocesses per row is a tax on every write."""
     runs = []
 
+    request.addfinalizer(gen.code_version.cache_clear)
     gen.code_version.cache_clear()
     monkeypatch.setattr(gen, "_git", lambda args: runs.append(args) or "abc1234")
     for _ in range(5):
@@ -446,8 +448,8 @@ def test_the_code_marker_reads_git_once_per_process(monkeypatch):
 
 def test_the_gflow_process_is_told_which_profile_to_spend_on(monkeypatch):
     """Measured 2026-09-28: with two gflow profiles on the machine, gflow refused to guess ("Cannot pick a default
-    profile") and every gen_* died at exit 2. Its generation commands take no --profile flag; GFLOW_CLI_PROFILE is
-    the one way to say it (gflow_cli/profile_store.py:12), and the rest of the environment must still reach it."""
+    profile") and every gen_* died at exit 2. The argv names the profile with --profile; the environment names the
+    same one as a second layer, overriding whatever the parent process had set, and the rest of it still arrives."""
     seen = {}
 
     class _Proc:
@@ -461,6 +463,7 @@ def test_the_gflow_process_is_told_which_profile_to_spend_on(monkeypatch):
         return _Proc()
 
     monkeypatch.setenv("PATH_CANARY", "still-here")
+    monkeypatch.setenv("GFLOW_CLI_PROFILE", "someone-else")
     monkeypatch.setattr(gen.asyncio, "create_subprocess_exec", fake_exec)
 
     asyncio.run(gen.run_gflow(["image", "t2i", "a boat"], profile="acc2"))
@@ -543,20 +546,135 @@ def test_the_cli_spends_on_the_profile_it_was_given(monkeypatch, tmp_path):
 
 
 def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
-    """The mechanical form of plan R's invariant: every run_job call in src/ hands over ONE profile and lets run_job
-    derive both the spend and the reads from it. A `read_credits=` beside it is exactly how the two drift apart.
-    Read from the source, so a new caller is covered the day it is written."""
+    """The mechanical form of plan R's invariant, read from the source so a new caller is covered the day it is
+    written: every call to run_job in src/ hands over ONE profile and nothing else that could carry a second account,
+    no `read_credits=`, no `runner=`, no `**kwargs`, and run_job is never passed around under another name (review
+    of plan R: a regex scan let 7 of 8 such mutants through)."""
+    import ast
+
     src = Path(__file__).resolve().parents[1] / "src"
-    offenders = []
+    offenders, calls = [], 0
     for path in src.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        for match in re.finditer(r"run_job\((?:[^()]|\([^()]*\))*\)", text):
-            call = match.group(0)
-            if (
-                call.startswith("run_job(\n    job: Job")
-                or "def run_job" in text[max(0, match.start() - 10) : match.start()]
-            ):
-                continue
-            if "read_credits=" in call:
-                offenders.append(f"{path.relative_to(src)}: {call[:80]}")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        called = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+                if name == "run_job":
+                    calls += 1
+                    called.add(id(node.func))
+                    for keyword in node.keywords:
+                        if keyword.arg in (None, "read_credits", "runner"):
+                            offenders.append(
+                                f"{path.relative_to(src)}:{node.lineno} passes {keyword.arg or '**'}"
+                            )
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in called:
+                name = getattr(node, "attr", None) or getattr(node, "id", None)
+                if name == "run_job" and not isinstance(getattr(node, "ctx", None), ast.Store):
+                    offenders.append(f"{path.relative_to(src)}:{node.lineno} uses run_job without calling it")
+    assert calls >= 3, f"the scan found only {calls} run_job calls; it is not reading what it claims to"
     assert offenders == [], offenders
+
+
+def test_the_argv_a_paid_call_records_names_the_account_it_spends_on(tmp_path):
+    """All five generation commands take --profile (measured 2026-09-28 on gflow 0.78.0; an earlier reading said
+    they did not, because zsh passed `image t2i` as ONE word to --help). The flag outranks every other way gflow picks
+    a profile, and it lands in the ledger's argv, so each bill says which account paid it."""
+    argv = gen.build_argv(job(kind="t2i"), tmp_path, profile="acc2")
+
+    assert argv[argv.index("--profile") + 1] == "acc2", argv
+    assert "--profile" not in gen.build_argv(job(kind="t2i"), tmp_path), "no profile named, none invented"
+
+
+def test_run_job_writes_the_profile_into_the_argv_it_records(tmp_path):
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    seen = []
+
+    async def runner(argv):
+        seen.append(argv)
+        image = {"media_name": "m1", "local_path": "x.jpg", "dimensions": {"width": 1, "height": 1}}
+        return 0, json.dumps({"status": "ok", "images": [image]}), ""
+
+    async def read_credits():
+        return 100
+
+    asyncio.run(
+        gen.run_job(
+            job(kind="t2i", job_id="job-argv"),
+            tmp_path,
+            ledger=ledger,
+            runner=runner,
+            read_credits=read_credits,
+            profile="acc2",
+        )
+    )
+
+    recorded = ledger.rows("job-argv")[0]["argv"]
+    assert recorded[recorded.index("--profile") + 1] == "acc2", recorded
+    assert seen == [recorded], "the argv run must be the argv recorded"
+
+
+def test_a_stdout_reason_beats_log_noise_on_stderr(tmp_path):
+    """Review of plan R: gflow logs JSON to stderr when piped, so a plain refusal on stdout lost to log lines."""
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+
+    async def runner(argv):
+        return (
+            2,
+            "Cannot pick a default profile.\n",
+            '{"event": "client.context_cookie_state", "level": "info"}\n',
+        )
+
+    async def read_credits():
+        return 100
+
+    with pytest.raises(RuntimeError, match="Cannot pick a default profile"):
+        asyncio.run(
+            gen.run_job(
+                job(kind="t2i", job_id="job-noise"),
+                tmp_path,
+                ledger=ledger,
+                runner=runner,
+                read_credits=read_credits,
+            )
+        )
+
+
+def test_the_stdout_tail_carries_no_signed_url_into_the_ledger(tmp_path):
+    """Review of plan R: a success JSON printed before a late failure can put a signed lh3 URL in the last 300
+    characters of stdout, and the ledger scrub only knows cookie names."""
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    signed = "https://lh3.googleusercontent.com/abc?Expires=1790000000&Signature=" + "S" * 80
+    stdout = json.dumps({"status": "ok", "fife_url": signed}) + "\nTraceback: teardown failed\n"
+
+    async def runner(argv):
+        return 1, stdout, ""
+
+    async def read_credits():
+        return 100
+
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(
+            gen.run_job(
+                job(kind="t2i", job_id="job-signed"),
+                tmp_path,
+                ledger=ledger,
+                runner=runner,
+                read_credits=read_credits,
+            )
+        )
+
+    row = json.dumps(ledger.rows("job-signed")[-1])
+    assert "Signature=" not in row and "S" * 40 not in row, row
+    assert "Signature=" not in str(caught.value), caught.value
+
+
+def test_no_test_leaves_a_fake_code_marker_behind(tmp_path):
+    """The marker tests plant a fake git; its answer outlived them in the cache, so every later ledger row in the run
+    claimed to come from `abc1234-dirty` (seen 2026-09-28). A row written here must name the real code."""
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append("job-real", "planned")
+
+    assert ledger.rows("job-real")[0]["code"] == gen.code_version()
+    assert not gen.code_version().startswith("abc1234"), gen.code_version()
