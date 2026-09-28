@@ -10,6 +10,8 @@ import asyncio
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 _GEN = ROOT / "scripts" / "gen_tool_docs.py"
 _spec = importlib.util.spec_from_file_location("gen_tool_docs", _GEN)
@@ -42,3 +44,57 @@ def test_a_tool_that_never_says_what_it_costs_is_reported():
     silent = asyncio.run(gen.priceless())
 
     assert silent == [], f"these tools never mention a price: {silent}"
+
+
+def _sections(rendered: str) -> dict[str, str]:
+    """The rendered text of each tool's own section, split the way render() joins it."""
+    sections = {}
+    for chunk in rendered.split("### `")[1:]:
+        name, _, body = chunk.partition("`")
+        sections[name] = body
+    return sections
+
+
+def test_the_table_lists_the_arguments_the_server_actually_takes():
+    """Measured 2026-09-28: the generator read `tool.inputSchema`, a name the served Tool does not have (it has
+    `input_schema`), so `getattr` returned None, `or {}` made it empty and all 43 tools were published as taking
+    no arguments. The expected table is GENERATED from the server here, never typed (rule 13), because a typed
+    one drifts the moment a tool gains a parameter."""
+    sections = _sections(asyncio.run(gen.render()))
+    served = {tool.name: tool for tool in asyncio.run(gen.tools())}
+
+    for name, tool in served.items():
+        schema = tool.input_schema or {}
+        properties = list((schema.get("properties") or {}).keys())
+        required = set(schema.get("required") or ())
+        stated = [ln for ln in sections[name].splitlines() if ln.startswith("**Arguments**: ")]
+        assert len(stated) == 1, f"{name} states its arguments {len(stated)} times"
+        line = stated[0]
+        if not properties:
+            assert line == "**Arguments**: none", f"{name} takes nothing but says {line}"
+            continue
+        for argument in properties:
+            wanted = f"`{argument}`" + ("" if argument in required else " (optional)")
+            assert wanted in line, f"{name} serves {argument} but the table says {line}"
+
+
+def test_the_tools_that_really_take_nothing_are_the_only_ones_saying_none():
+    """The three reads that take no argument are the whole of the honest "none"; 43 of them was the bug."""
+    rendered = asyncio.run(gen.render())
+    served = asyncio.run(gen.tools())
+
+    nothing = sorted(t.name for t in served if not (t.input_schema or {}).get("properties"))
+    assert nothing == ["flow_credits", "flow_lane", "flow_projects"], nothing
+    assert rendered.count("**Arguments**: none") == len(nothing), rendered.count("**Arguments**: none")
+
+
+def test_a_served_tool_with_no_schema_at_all_stops_the_generator():
+    """The failure mode this bug had: a renamed attribute answered "none" instead of saying it could not read the
+    schema. A generator that cannot find a schema must stop, not publish an empty column."""
+
+    class _Schemaless:
+        name = "mystery_tool"
+        description = "free"
+
+    with pytest.raises(AttributeError, match="mystery_tool"):
+        gen._arguments(_Schemaless())

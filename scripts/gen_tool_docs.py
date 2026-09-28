@@ -103,8 +103,22 @@ async def priceless() -> list[str]:
     return sorted(tool.name for tool in await tools() if not PRICE_WORDS.search(tool.description or ""))
 
 
+def _schema(tool: Any) -> dict[str, Any]:
+    """The schema the server really serves, read by whichever name it exposes.
+
+    Measured 2026-09-28: this MCP version names it `input_schema`, and reading `inputSchema` instead published all
+    43 tools as taking no arguments, silently, because `getattr` returned None. So a name that is not there is an
+    error now, never an empty column.
+    """
+    for name in ("input_schema", "inputSchema"):
+        schema = getattr(tool, name, None)
+        if isinstance(schema, dict):
+            return schema
+    raise AttributeError(f"{getattr(tool, 'name', tool)}: served tool exposes no input_schema or inputSchema")
+
+
 def _arguments(tool: Any) -> str:
-    schema = getattr(tool, "inputSchema", None) or {}
+    schema = _schema(tool)
     properties = schema.get("properties") or {}
     required = set(schema.get("required") or ())
     if not properties:
