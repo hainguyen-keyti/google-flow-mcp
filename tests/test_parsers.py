@@ -85,3 +85,9 @@ def test_media_still_refuses_a_listing_whose_sections_are_the_wrong_type():
         parsers.media([None, 1, [], None])
     with pytest.raises(TypeError):
         parsers.media([None, [], "nope", None])
+
+
+def test_projects_of_an_account_with_none_is_an_empty_list_rather_than_an_error():
+    """Measured 2026-09-28 on a brand-new account: Flow still sends UpteDb, with the payload `[]`, and this parser
+    raised TypeError, so `flow projects` died on the one account that most needs to see it has nothing yet."""
+    assert parsers.projects([]) == []

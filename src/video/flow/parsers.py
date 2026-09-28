@@ -34,6 +34,9 @@ def _str(value: Any) -> str | None:
 
 
 def projects(payload: Any) -> list[dict[str, Any]]:
+    # An account with no projects gets UpteDb as `[]` (measured 2026-09-28), which is an answer, not damage.
+    if payload == []:
+        return []
     cards = _at(payload, 0)
     if not isinstance(cards, list):
         raise TypeError("UpteDb: expected [[card, ...]]")

@@ -21,6 +21,7 @@ PROBE_JS = """
       router_outlet: count('router-outlet'),
     },
     project_links: count('a[href*="/project/"]'),
+    new_project_button: count('button.new-project-button'),
   };
 }
 """
@@ -28,7 +29,8 @@ PROBE_JS = """
 
 def verdict(labs: dict[str, Any], migrated: dict[str, Any]) -> str:
     def grid(r: dict[str, Any]) -> bool:
-        return int(r.get("project_links") or 0) > 0
+        # A signed-in account with no projects shows only the New project button (measured 2026-09-28).
+        return int(r.get("project_links") or 0) > 0 or int(r.get("new_project_button") or 0) > 0
 
     if not grid(labs) and not grid(migrated):
         return "SIGNED_OUT"

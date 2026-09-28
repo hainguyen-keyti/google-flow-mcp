@@ -302,3 +302,13 @@ def test_locked_profile_error_propagates_and_guard_is_released(tmp_path):
 
     asyncio.run(run())
     assert log == ["client.enter", "new_page", "page.close", "client.exit"]
+
+
+def test_the_home_page_is_ready_on_an_account_with_no_projects():
+    """Measured 2026-09-28: an account with no projects renders `button.new-project-button` inside
+    `flow-projects-page` and no project link, so a readiness that waits for a project link times out after 60 s on
+    every home read, including the one before the click that would create the first project."""
+    selectors = [part.strip() for part in session_mod.GRID_READY.split(",")]
+
+    assert 'a[href*="/project/"]' in selectors, "an account with projects must still be ready on its links"
+    assert "button.new-project-button" in selectors, selectors
