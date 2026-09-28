@@ -135,7 +135,7 @@ These are not suggestions; they are enforced in code and pinned by tests.
 
 - macOS only, one account lane (`flow.google.com`), one browser (real Chrome with the gflow profile).
 - Chrome cannot run headless here (reCAPTCHA answers a headless browser with a 403), so every call opens a real
-  window, placed off the left edge of the screen; macOS keeps a strip of about 40 px visible. Set
+  window and then moves it off the left edge of the screen; macOS keeps a strip of about 40 px visible. Set
   `VIDEO_BROWSER_OFFSCREEN=0` to see the windows. Signing in (`gflow auth login`) always opens a visible window.
 - `clip_edit` does not read the live price line before clicking, unlike `gen_character`: the only guard is the
   balance read before and after.

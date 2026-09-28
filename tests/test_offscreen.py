@@ -16,61 +16,110 @@ from playwright.async_api import BrowserType
 from video import offscreen
 
 
+class _Cdp:
+    def __init__(self, log, fail):
+        self.log, self.fail = log, fail
+
+    async def send(self, method, params=None):
+        self.log.append((method, params))
+        if self.fail:
+            raise RuntimeError("the window went away")
+        if method == "Browser.getWindowForTarget":
+            return {"windowId": 7, "bounds": {"left": 0}}
+        if method == "Browser.getWindowBounds":
+            return {"bounds": {"left": -1242}}
+        return {}
+
+    async def detach(self):
+        self.log.append(("detach", None))
+
+
+class _Context:
+    def __init__(self, log, fail=False, pages=("page",)):
+        self.log, self.fail, self.pages = log, fail, list(pages)
+
+    async def new_cdp_session(self, page):
+        return _Cdp(self.log, self.fail)
+
+
 @pytest.fixture
 def launch(monkeypatch):
-    """Playwright's launch, replaced by a recorder, with the module's install state reset around each test."""
-    seen = []
+    """Playwright's launch, replaced by one returning a recording context, with the install state reset per test."""
+    log = []
+    made = {"fail": False, "pages": ("page",)}
 
     async def original(self, user_data_dir, **kwargs):
-        seen.append(kwargs)
-        return "context"
+        log.append(("launch", kwargs))
+        return _Context(log, made["fail"], made["pages"])
 
     monkeypatch.setattr(BrowserType, "launch_persistent_context", original)
     monkeypatch.setattr(offscreen, "_installed", False)
     monkeypatch.delenv(offscreen.ENV, raising=False)
-    return seen
+    return log, made
 
 
 def _launch(**kwargs):
     return asyncio.run(BrowserType.launch_persistent_context(object(), "/tmp/profile", **kwargs))
 
 
-def test_a_headed_launch_gets_exactly_one_window_position(launch):
+def _moves(log):
+    return [params for method, params in log if method == "Browser.setWindowBounds"]
+
+
+def test_a_headed_launch_is_moved_off_the_left_edge_after_it_opens(launch):
+    """Measured 2026-09-28: a --window-position flag is pulled back on screen at launch, a move sent after it is not."""
+    log, _ = launch
     offscreen.install()
 
-    _launch(headless=False, args=["--password-store=basic", "--window-position=10,10"])
+    _launch(headless=False, args=["--password-store=basic"])
 
-    args = launch[0]["args"]
-    assert args.count(offscreen.FLAG) == 1 and "--password-store=basic" in args, args
-    assert [a for a in args if a.startswith("--window-position")] == [offscreen.FLAG], args
+    assert log[0][0] == "launch" and log[0][1]["args"] == ["--password-store=basic"], (
+        "launch flags are gflow's own"
+    )
+    assert _moves(log) == [{"windowId": 7, "bounds": {"left": offscreen.LEFT, "windowState": "normal"}}], log
+    assert offscreen.LEFT < 0
 
 
 def test_a_headless_launch_is_left_alone(launch):
+    log, _ = launch
     offscreen.install()
 
-    _launch(headless=True, args=["--password-store=basic"])
+    _launch(headless=True)
 
-    assert launch[0]["args"] == ["--password-store=basic"]
+    assert _moves(log) == []
 
 
 def test_the_owner_can_switch_it_off(launch, monkeypatch):
+    log, _ = launch
     monkeypatch.setenv(offscreen.ENV, "0")
     offscreen.install()
 
-    _launch(headless=False, args=[])
+    _launch(headless=False)
 
-    assert launch[0]["args"] == []
+    assert _moves(log) == []
+
+
+def test_a_window_that_cannot_be_moved_never_breaks_the_call(launch):
+    """Hiding a window is cosmetic; the launch it follows may be the start of a paid run."""
+    _, made = launch
+    made["fail"] = True
+    offscreen.install()
+
+    context = _launch(headless=False)
+
+    assert isinstance(context, _Context), "the caller must still get its browser"
 
 
 def test_a_long_running_server_installs_the_wrapper_once_however_many_sessions_it_opens(launch):
     """Every FlowSession calls install(); a wrapper added per call would nest one layer per tool call and, a thousand
     calls into a long-running MCP server, overflow the stack on the next launch."""
+    log, _ = launch
     for _ in range(3000):
         offscreen.install()
 
-    _launch(headless=False, args=[])
+    _launch(headless=False)
 
-    assert launch[0]["args"] == [offscreen.FLAG]
+    assert len(_moves(log)) == 1, log
 
 
 @pytest.mark.parametrize(
@@ -134,3 +183,12 @@ def test_the_repos_own_browser_session_installs_it_before_it_launches(monkeypatc
         asyncio.run(session.__aenter__())
 
     assert order[:2] == ["install", "factory"], order
+
+
+def test_the_move_says_where_the_window_ended_up(launch, capsys):
+    """The gflow child runs out of sight of the repo, so the move reports where macOS actually left the window."""
+    offscreen.install()
+
+    _launch(headless=False)
+
+    assert "[video] browser window moved aside (left=-1242)" in capsys.readouterr().err

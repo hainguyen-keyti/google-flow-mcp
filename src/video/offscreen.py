@@ -1,25 +1,46 @@
-"""Open the tool's Chrome off to the side of the screen instead of in front of the owner.
+"""Move the tool's Chrome off to the side of the screen instead of in front of the owner.
 
 Headless is not an option: reCAPTCHA Enterprise answers headless Chromium with a 403 (gflow
-_docs/AUTHENTICATION.md:490), so the window stays real and headed and is only placed off screen. macOS keeps a strip of
-about 40 px on screen whatever is asked (measured 2026-09-28: left=-4000 came back as -1242 for a 1282-wide window), and
-a page placed there still renders (visibilityState stayed "visible"), unlike a minimized one.
+_docs/AUTHENTICATION.md:490), so the window stays real and headed and is only moved off screen. Measured 2026-09-28:
+a `--window-position` flag is pulled back on screen by Chrome at launch (it came up at left=0), while the DevTools call
+`Browser.setWindowBounds` sent after launch moves it (left=-4000 came back as -1242 for a 1282-wide window: macOS keeps
+about 40 px on screen), and a page there still renders (visibilityState stayed "visible"), unlike a minimized one.
 
-gflow hard-codes its launch flags (gflow_cli/api/client.py:516-520) and opens every browser with
-`launch_persistent_context`, so the flag is added by wrapping that one Playwright call in the processes this repo runs,
-never by editing gflow. Set VIDEO_BROWSER_OFFSCREEN=0 to see the windows again.
+gflow opens every browser with `launch_persistent_context` and hard-codes its flags (gflow_cli/api/client.py:516-520),
+so that one Playwright call is wrapped in the processes this repo runs, never by editing gflow. Set
+VIDEO_BROWSER_OFFSCREEN=0 to see the windows again.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any
 
 from playwright.async_api import BrowserType
 
 ENV = "VIDEO_BROWSER_OFFSCREEN"
-FLAG = "--window-position=-4000,60"
+LEFT = -4000
 _installed = False
+
+
+async def push_aside(context: Any) -> None:
+    """Move the context's window off the left edge; never raises, since hiding a window must not break a paid call."""
+    try:
+        pages = list(getattr(context, "pages", []) or [])
+        if not pages:
+            return
+        cdp = await context.new_cdp_session(pages[0])
+        window = await cdp.send("Browser.getWindowForTarget")
+        await cdp.send(
+            "Browser.setWindowBounds",
+            {"windowId": window["windowId"], "bounds": {"left": LEFT, "windowState": "normal"}},
+        )
+        moved = await cdp.send("Browser.getWindowBounds", {"windowId": window["windowId"]})
+        sys.stderr.write(f"[video] browser window moved aside (left={moved.get('bounds', {}).get('left')})\n")
+        await cdp.detach()
+    except Exception:  # noqa: BLE001
+        return
 
 
 def install() -> None:
@@ -30,10 +51,10 @@ def install() -> None:
     original = BrowserType.launch_persistent_context
 
     async def launch(self: Any, user_data_dir: Any, **kwargs: Any) -> Any:
+        context = await original(self, user_data_dir, **kwargs)
         if not kwargs.get("headless"):
-            args = [arg for arg in (kwargs.get("args") or []) if not str(arg).startswith("--window-position")]
-            kwargs["args"] = [*args, FLAG]
-        return await original(self, user_data_dir, **kwargs)
+            await push_aside(context)
+        return context
 
     BrowserType.launch_persistent_context = launch  # type: ignore[method-assign]
     _installed = True
