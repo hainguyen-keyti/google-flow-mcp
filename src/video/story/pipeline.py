@@ -170,7 +170,7 @@ async def _generate_with_product(
         aspect=shots2.ASPECT,
         refs=[product.check_image()],
     )
-    result = await gen.run_job(job, out_dir, read_credits=lambda: gen.read_credits_live("default"))
+    result = await gen.run_job(job, out_dir, profile="default")
     outputs = result.get("outputs") or []
     return {
         "job_id": job_id,

@@ -653,9 +653,7 @@ def _run_gen(kind: str, prompt: str, opts: dict, **extra) -> None:
     )
 
     async def run():
-        return await gen_mod.run_job(
-            job, Path(opts["out_dir"]), read_credits=lambda: gen_mod.read_credits_live(opts["profile"])
-        )
+        return await gen_mod.run_job(job, Path(opts["out_dir"]), profile=opts["profile"])
 
     click.echo(json.dumps(asyncio.run(run()), indent=2))
 

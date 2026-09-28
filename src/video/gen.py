@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import os
 import re
 import subprocess
 import sys
@@ -207,7 +208,9 @@ class Ledger:
         return any(r.get("status") in ("submitted", "done", "failed") for r in self.rows(job_id))
 
 
-async def run_gflow(argv: list[str]) -> tuple[int, str, str]:
+async def run_gflow(argv: list[str], profile: str = "default") -> tuple[int, str, str]:
+    # gflow's generation commands take no --profile flag and, with two profiles on the machine, refuse to guess
+    # (measured 2026-09-28), so the account that spends is named here, the same one the balance is read on.
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
@@ -215,6 +218,7 @@ async def run_gflow(argv: list[str]) -> tuple[int, str, str]:
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, "GFLOW_CLI_PROFILE": profile},
     )
     out, err = await proc.communicate()
     return proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
@@ -235,10 +239,12 @@ async def run_job(
     ledger: Ledger | None = None,
     runner: Runner | None = None,
     read_credits: CreditsReader | None = None,
+    profile: str = "default",
 ) -> dict[str, Any]:
     ledger = ledger or Ledger(out_dir / "ledger.jsonl")
-    runner = runner or run_gflow
-    read_credits = read_credits or read_credits_live
+    # One profile for the spend and for the balance on both sides of it, or the ledger brackets the wrong account.
+    runner = runner or functools.partial(run_gflow, profile=profile)
+    read_credits = read_credits or functools.partial(read_credits_live, profile)
     if ledger.has_submitted(job.job_id):
         raise AlreadySubmitted(f"job {job.job_id} already has a submitted row; use a new job id")
     argv = build_argv(job, out_dir)
@@ -248,6 +254,10 @@ async def run_job(
     if code != 0:
         after = await read_credits()
         problem = gflow_problem(stderr)
+        # Some refusals are printed on stdout with nothing on stderr (measured 2026-09-28: "Cannot pick a default
+        # profile"), and an empty reason is how a paid failure gets retried blind.
+        if "error_class" not in problem and stdout.strip():
+            problem["stdout_tail"] = stdout.strip()[-300:]
         ledger.append(
             job.job_id,
             "failed",
@@ -256,7 +266,9 @@ async def run_job(
             credits_after=after,
             **problem,
         )
-        summary = problem.get("detail") or problem.get("title") or stderr.strip()[-300:]
+        summary = (
+            problem.get("detail") or problem.get("title") or stderr.strip()[-300:] or stdout.strip()[-300:]
+        )
         # gflow gives WafRejectionError exit 10 (gflow_cli/errors.py) and wrongly advises re-authenticating.
         if code == 10 or problem.get("error_class") == "WafRejectionError":
             raise RuntimeError(

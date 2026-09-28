@@ -2436,3 +2436,24 @@ def test_the_measured_price_a_bill_is_judged_against_is_the_one_the_tool_promise
         assert re.search(rf"(?<!\d){price} credits?\b", description), (
             f"{tool_of[kind]} never states the measured {price}: {description[:160]}"
         )
+
+
+def test_the_mcp_generate_path_spends_on_the_profile_it_reads_the_balance_on(monkeypatch, tmp_path):
+    """The tool has one profile (`Backend.profile`); the job it hands over must carry it, so gflow's spend and the
+    balance reads bracketing it land on the same account (plan R, 2026-09-28)."""
+    handed = {}
+
+    async def fake_run_job(job, out_dir, **kwargs):
+        handed.update(kwargs)
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(profile="acc2", out_dir=tmp_path))
+
+    async def fn(session):
+        return await session.call_tool("gen_t2i", {"prompt": "a boat", "project": "P", "job_id": "job-r2"})
+
+    with_client(fn)
+
+    assert handed.get("profile") == "acc2", handed
+    assert "read_credits" not in handed, "a second, separate profile for the reads is how the two drift apart"

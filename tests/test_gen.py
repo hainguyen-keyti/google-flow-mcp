@@ -442,3 +442,121 @@ def test_the_code_marker_reads_git_once_per_process(monkeypatch):
         gen.code_version()
 
     assert len(runs) == 2, runs
+
+
+def test_the_gflow_process_is_told_which_profile_to_spend_on(monkeypatch):
+    """Measured 2026-09-28: with two gflow profiles on the machine, gflow refused to guess ("Cannot pick a default
+    profile") and every gen_* died at exit 2. Its generation commands take no --profile flag; GFLOW_CLI_PROFILE is
+    the one way to say it (gflow_cli/profile_store.py:12), and the rest of the environment must still reach it."""
+    seen = {}
+
+    class _Proc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"{}", b""
+
+    async def fake_exec(*args, **kwargs):
+        seen["args"], seen["env"] = args, kwargs.get("env")
+        return _Proc()
+
+    monkeypatch.setenv("PATH_CANARY", "still-here")
+    monkeypatch.setattr(gen.asyncio, "create_subprocess_exec", fake_exec)
+
+    asyncio.run(gen.run_gflow(["image", "t2i", "a boat"], profile="acc2"))
+
+    assert seen["env"]["GFLOW_CLI_PROFILE"] == "acc2", seen["env"] and seen["env"].get("GFLOW_CLI_PROFILE")
+    assert seen["env"]["PATH_CANARY"] == "still-here"
+
+
+def test_run_job_spends_and_reads_the_balance_on_one_and_the_same_profile(monkeypatch, tmp_path):
+    """The balance was read on the profile the repo named while gflow spent on the one gflow guessed; they agreed
+    only because this machine used to hold one profile. Point gflow's default at another account and the ledger
+    brackets account A while account B pays, so `spent`, `balance_moved` and the once-only job_id all lie."""
+    used = {"spend": [], "read": []}
+
+    async def fake_gflow(argv, profile="default"):
+        used["spend"].append(profile)
+        image = {"media_name": "m1", "local_path": "x.jpg", "dimensions": {"width": 1376, "height": 768}}
+        return 0, json.dumps({"status": "ok", "images": [image]}), ""
+
+    async def fake_read(profile="default"):
+        used["read"].append(profile)
+        return 100
+
+    monkeypatch.setattr(gen, "run_gflow", fake_gflow)
+    monkeypatch.setattr(gen, "read_credits_live", fake_read)
+
+    asyncio.run(gen.run_job(job(kind="t2i", job_id="job-acc2"), tmp_path, profile="acc2"))
+
+    assert used["spend"] == ["acc2"], used
+    assert used["read"] and set(used["read"]) == {"acc2"}, used
+
+
+def test_a_gflow_error_printed_on_stdout_is_not_lost(tmp_path):
+    """Measured 2026-09-28: gflow printed "Cannot pick a default profile..." on STDOUT with an empty stderr, and the
+    agent was told only `gflow t2i exit 2 (?):` while the ledger kept `stderr_tail: ""`."""
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    said = "Cannot pick a default profile.\nAvailable: default, old-account\n"
+
+    async def runner(argv):
+        return 2, said, ""
+
+    async def read_credits():
+        return 1050
+
+    with pytest.raises(RuntimeError, match="Cannot pick a default profile"):
+        asyncio.run(
+            gen.run_job(
+                job(kind="t2i", job_id="job-out"),
+                tmp_path,
+                ledger=ledger,
+                runner=runner,
+                read_credits=read_credits,
+            )
+        )
+
+    failed = ledger.rows("job-out")[-1]
+    assert "Cannot pick a default profile" in json.dumps(failed), failed
+
+
+def test_the_cli_spends_on_the_profile_it_was_given(monkeypatch, tmp_path):
+    """`video gen ... --profile` named the account for the balance reads only; gflow still guessed its own."""
+    from click.testing import CliRunner
+
+    from video import cli
+
+    handed = {}
+
+    async def fake_run_job(job, out_dir, **kwargs):
+        handed.update(kwargs)
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(gen, "run_job", fake_run_job)
+
+    result = CliRunner().invoke(
+        cli.main, ["gen", "t2i", "a boat", "--project", "P", "--profile", "acc2", "--out", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert handed == {"profile": "acc2"}, handed
+
+
+def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
+    """The mechanical form of plan R's invariant: every run_job call in src/ hands over ONE profile and lets run_job
+    derive both the spend and the reads from it. A `read_credits=` beside it is exactly how the two drift apart.
+    Read from the source, so a new caller is covered the day it is written."""
+    src = Path(__file__).resolve().parents[1] / "src"
+    offenders = []
+    for path in src.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"run_job\((?:[^()]|\([^()]*\))*\)", text):
+            call = match.group(0)
+            if (
+                call.startswith("run_job(\n    job: Job")
+                or "def run_job" in text[max(0, match.start() - 10) : match.start()]
+            ):
+                continue
+            if "read_credits=" in call:
+                offenders.append(f"{path.relative_to(src)}: {call[:80]}")
+    assert offenders == [], offenders

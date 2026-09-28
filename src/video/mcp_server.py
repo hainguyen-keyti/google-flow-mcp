@@ -576,9 +576,7 @@ class Backend:
         return await self._spend_once(
             job_id,
             target,
-            lambda: gen_mod.run_job(
-                job, target, read_credits=lambda: gen_mod.read_credits_live(self.profile)
-            ),
+            lambda: gen_mod.run_job(job, target, profile=self.profile),
         )
 
 
