@@ -245,3 +245,17 @@ def test_a_launch_that_names_no_headless_is_headless_as_playwright_defaults_it()
     assert offscreen.headed({}) is False
     assert offscreen.headed({"headless": True}) is False
     assert offscreen.headed({"headless": False}) is True
+
+
+def test_a_test_that_installs_the_real_wrapper(monkeypatch):
+    """First half of a pair: installs the real wrapper with no fixture undoing it, as the FlowSession tests do."""
+    monkeypatch.delenv(offscreen.ENV, raising=False)
+    offscreen.install()
+    assert offscreen._installed
+
+
+def test_the_next_test_sees_playwrights_own_launch_again():
+    """Plan W. The FlowSession tests call the real install(), which used to leave Playwright's launch wrapped for the
+    rest of the pytest run; tests/conftest.py puts the original back after every test."""
+    assert BrowserType.launch_persistent_context.__qualname__ == "BrowserType.launch_persistent_context"
+    assert offscreen._installed is False

@@ -636,6 +636,11 @@ server = TellingServer(
     ),
 )
 
+_BALANCE_MOVED = (
+    "When the balance moved by anything other than the measured price, the answer carries balance_moved "
+    "{kind, measured, moved, note}, or, when the call ends in an error, the job's ledger row does: read it before "
+    "assuming the price in this description still holds."
+)
 _JOB_ID_RULE = (
     " job_id is required: use a new one for each new job, and keep the SAME one when calling again after an "
     "error or a timeout. Any job_id already in a ledger under the out folder is refused before a browser opens, so a "
@@ -1113,9 +1118,10 @@ async def agent_mode(project_id: str, enabled: bool) -> str:
 @server.tool(
     name="agent_send",
     description=(
-        "Send a message to Flow's agent in a project. It may spend credits: 0 credits in 3 measured sends where "
+        "Send a message to Flow's agent in a project. It may spend credits: 0 credits in every measured send where "
         "the agent generated nothing, but a message that makes it generate media costs that generation's "
-        "price. The send itself took 69-80 s in those runs, plus a balance read before and after."
+        "price. The send itself took 69-80 s in those runs, plus a balance read before and after. "
+        + _BALANCE_MOVED
         + _JOB_ID_RULE
     ),
 )
@@ -1196,7 +1202,7 @@ async def flow_uploads(project_id: str) -> str:
     description=(
         "Extend a clip with Veo 3.1 Lite. It spends credits and is ledgered: 10 credits per extend (measured). "
         "Takes about 2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out "
-        "folder." + _JOB_ID_RULE
+        "folder. " + _BALANCE_MOVED + _JOB_ID_RULE
     ),
 )
 async def clip_extend(
@@ -1218,7 +1224,8 @@ async def clip_extend(
         "40 and expect 20. This tool does not read the live price line before it clicks, so what stands between a "
         "changed price and a surprise bill is the balance read before and after, answered as credits_before and "
         "credits_after (the ledger row holds their difference as `spent`). Takes about "
-        "2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out folder."
+        "2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out folder. "
+        + _BALANCE_MOVED
         + _JOB_ID_RULE
     ),
 )

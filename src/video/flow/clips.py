@@ -164,7 +164,8 @@ async def _select_version(
 
     `_open` lands on the pre-edit version and MUST keep doing so: `_generate_from_editor` relies on every
     Omni edit starting from the same base, so fixing this in `_open` would make each edit stack on the
-    previous one. The fix belongs here instead, after the page is already open.
+    previous one. So this reads the listing first, since that leaves the project grid on screen, then opens the
+    editor itself and picks the version there (plan W, 2026-09-28).
 
     Measured 2026-09-13: the history panel renders one `.container` per version, and the tail of a
     record's listing url appears inside that container's thumbnail src. Matching is not guaranteed for
@@ -182,6 +183,8 @@ async def _select_version(
             raise ValueError(f"version {workflow_id} of media {media_id} has no url in the listing")
     else:
         wanted = download_mod.latest_version(records, media_id)
+    # Reading the listing leaves the page on the project grid (plan W, 2026-09-28), so the editor opens after it.
+    await _open(session, project_id, media_id)
     tail = str(wanted["url"])[-24:]
     entry = session.page.locator(f'.container:has(img[src*="{tail}"])')
     if await entry.count() == 0:
@@ -204,7 +207,6 @@ async def download_rendition(
 ) -> Path:
     label = RENDITIONS[quality.lower()]
     page = session.page
-    await _open(session, project_id, media_id)
     await _select_version(session, project_id, media_id, workflow_id)
     item = await _menu_item(session, "Download media", label)
     async with page.expect_download(timeout=600_000) as download_info:

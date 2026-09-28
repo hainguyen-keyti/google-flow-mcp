@@ -2558,3 +2558,20 @@ def test_gen_character_refuses_a_length_its_model_does_not_offer(monkeypatch, tm
     is_error, text = with_client(fn)
     assert is_error and "duration must be one of" in text and "veo-lite" in text, text
     assert "unknown argument" not in text, "refused as an undeclared argument, not by the length rule"
+
+
+def test_every_tool_that_checks_its_bill_against_a_measured_price_says_what_balance_moved_means():
+    """Plan W. clips.MEASURED_PRICE decides which tools answer `balance_moved`; an agent reading only the
+    description never learned that key exists, so it could not tell a price change from a normal answer."""
+    from video.flow import clips
+
+    tools = served_tool_objects()
+    checked = {name for kind in clips.MEASURED_PRICE for name in SPENDING_TOOLS if kind in name.split("_")}
+    assert checked == {"clip_extend", "clip_edit", "agent_send"}, checked
+    assert [name for name in sorted(checked) if "balance_moved" not in (tools[name].description or "")] == []
+
+
+def test_agent_send_does_not_pin_a_count_of_measured_sends_that_goes_stale():
+    # The description said "3 measured sends" while the ledgers held 5 (2026-09-28); a count typed into prose
+    # drifts the day the next send is measured.
+    assert not re.search(r"\b\d+ measured sends\b", served_tool_objects()["agent_send"].description or "")

@@ -2370,3 +2370,37 @@ def test_a_broken_price_table_never_costs_the_outcome_row(monkeypatch, tmp_path)
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
     assert last["status"] == "done" and last["spent"] == 25, last
     assert "balance_moved" not in last and "balance_moved" not in answer, last
+
+
+def test_download_rendition_reads_the_listing_before_it_opens_the_editor(monkeypatch, tmp_path):
+    """Plan W, measured 2026-09-28: reading the listing navigates to the project page, so reading it after the editor
+    opened left the history lookup on the grid. There the versions 3 and 4 of b59ab4e8 matched nothing while the
+    base matched a grid tile; with the editor open all four matched."""
+    records = [
+        {"id": "m", "workflow_id": "w-base", "created": 1, "url": "https://lh3/xxxxxxxxxxxxxxxxxxxxbase"},
+        {"id": "m", "workflow_id": "w-edit", "created": 2, "url": "https://lh3/yyyyyyyyyyyyyyyyyyyyedit"},
+    ]
+    where = {"page": "blank"}
+    looked = []
+
+    async def fake_snapshot(session, project_id):
+        where["page"] = "project"
+        return (records, set())
+
+    async def fake_open(session, project_id, media_id):
+        where["page"] = "editor"
+
+    class _Watched(_VersionPage):
+        def locator(self, selector):
+            if "img[src*=" in selector:
+                looked.append(where["page"])
+            return super().locator(selector)
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", _clickable_menu_item)
+
+    session = type("_S", (), {"page": _Watched()})()
+    asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path, workflow_id="w-edit"))
+
+    assert looked == ["editor"], looked
