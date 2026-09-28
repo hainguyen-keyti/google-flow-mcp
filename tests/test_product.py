@@ -3,10 +3,15 @@ import pytest
 from video.story import product
 
 
-def test_the_product_image_is_in_the_repo():
-    assert product.IMAGE.is_file(), product.IMAGE
-    assert product.IMAGE.suffix == ".png"
-    assert product.IMAGE.stat().st_size > 100_000
+def test_the_product_image_is_looked_for_in_the_local_assets_folder():
+    # The product photos stay on this machine and out of the public repo (DECISIONS 2026-09-28).
+    assert product.IMAGE.parent == product.ASSETS and product.IMAGE.suffix == ".png", product.IMAGE
+
+
+def test_a_missing_product_image_is_named_before_anything_is_uploaded(monkeypatch, tmp_path):
+    monkeypatch.setattr(product, "IMAGE", tmp_path / "pink_floral_set.png")
+    with pytest.raises(FileNotFoundError, match="product image missing"):
+        product.check_image()
 
 
 def test_find_matches_an_upload_by_its_filename():

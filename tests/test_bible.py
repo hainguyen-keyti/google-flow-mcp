@@ -5,12 +5,12 @@ import pytest
 from video.story import bible
 
 
-def test_reference_images_are_present_in_the_repo():
+def test_reference_images_are_looked_for_in_the_local_assets_folder():
+    # The owner's reference photos stay on this machine and out of the public repo (DECISIONS 2026-09-28).
     paths = bible.reference_images()
     assert set(paths) == {"portrait", "angles", "wardrobe"}
     for name, path in paths.items():
-        assert path.exists(), f"{name} missing: {path}"
-        assert path.stat().st_size > 100_000, f"{name} is suspiciously small"
+        assert path.parent == bible.ASSETS and path.suffix == ".png", (name, path)
 
 
 def test_load_reads_the_owner_bible():

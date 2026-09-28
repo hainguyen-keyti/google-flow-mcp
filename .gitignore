@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .venv/
 out/
+
+# Reference photos stay on the owner's machine, never in the public repo.
+assets/**/*.png
+assets/**/*.webp
