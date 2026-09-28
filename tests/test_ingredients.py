@@ -2597,7 +2597,9 @@ def _edit_record(status, *, workflow=JOB_WORKFLOW, media=JOB_MEDIA):
 
 
 def _edit_submit(*records):
-    """jIps6 as it answered the paid edit: null, the balance after the charge, the source clip, then the new records."""
+    """jIps6 as it answered ONE paid edit (price2-edit): null, the balance after the charge, the source clip, then a list
+    whose first record was the job's. The trail was cut at 1,200 characters, so whether that list can also carry the
+    clip's earlier edits is unmeasured, which is why the reader never trusts it alone to end a wait."""
     return _FlowReply(
         "jIps6",
         [
@@ -2645,7 +2647,8 @@ def test_two_edit_records_on_the_source_clip_name_no_job():
 
 
 def test_an_edit_record_in_a_status_reply_counts_for_the_workflow_the_listing_named():
-    """Named by the listing, an edit still had no status, because its records are "CAI" in the status replies too."""
+    """A boundary, not a measurement (review of plan T: no status reply has yet been seen carrying an edit's record):
+    if one does, an edit named by the listing reads its status from it, as a generation reads its "CAE" record."""
     flow = _judged([_FlowReply("as29s", [None, 1, [_edit_record(3)]])], about=JOB_WORKFLOW, editor=True)
 
     assert flow["workflow_id"] == JOB_WORKFLOW and flow["statuses"] == [3], flow
@@ -2660,3 +2663,96 @@ def test_the_gen_reader_never_counts_an_edit_record_as_its_jobs():
     flow = _judged([SUBMIT_REPLY, _status_reply(2), edit_status])
 
     assert flow["statuses"] == [6, 2], flow
+
+
+EARLIER_EDIT = "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b"
+
+
+def test_a_listing_and_an_edit_record_that_disagree_name_no_job():
+    """Review of plan T, F1: the one edit record in jIps6 silently beat the workflow the listing named, so an earlier
+    failed edit of the same clip could lend its status 4 to the paid job and end its wait. When the two disagree the
+    reader names neither and says so."""
+    flow = _judged(
+        [
+            _edit_submit(_edit_record(4, workflow=EARLIER_EDIT)),
+            _FlowReply("as29s", [None, 1, [_edit_record(2)]]),
+        ],
+        about=JOB_WORKFLOW,
+        editor=True,
+        source_media=JOB_MEDIA,
+    )
+
+    assert flow["workflow_id"] is None, flow
+    assert flow["identity_conflict"] == sorted([EARLIER_EDIT, JOB_WORKFLOW]), flow
+    # Neither source may be reported as the one that named the job, since neither was adopted.
+    assert flow["named_by_caller"] is False and flow["named_by_editor_submit"] is False, flow
+
+
+def test_an_edit_record_alone_never_ends_the_wait():
+    """Named only by an edit record nobody has confirmed, a status 4 may be an earlier edit's: the ledger records it,
+    but the wait for a paid job does not end on it."""
+
+    async def run():
+        replies = composer.FlowReplies(editor=True, source_media=JOB_MEDIA)
+        replies.on_response(_edit_submit(_edit_record(4)))
+        await replies.report()
+        return replies.reported_failed(), await replies.report()
+
+    stopped, flow = asyncio.run(run())
+
+    assert flow["workflow_id"] == JOB_WORKFLOW and flow["statuses"] == [4], flow
+    assert stopped is False, "an unconfirmed name ended the wait on a paid job"
+
+
+def test_an_edit_record_the_listing_confirms_may_end_the_wait():
+    """The counter-case: both sources name the same workflow, so Flow's status 4 is this job's."""
+
+    async def run():
+        replies = composer.FlowReplies(editor=True, source_media=JOB_MEDIA)
+        replies.on_response(_edit_submit(_edit_record(4)))
+        replies.about(JOB_WORKFLOW)
+        await replies.report()
+        return replies.reported_failed(), await replies.report()
+
+    stopped, flow = asyncio.run(run())
+
+    assert stopped is True, flow
+    assert flow["named_by_caller"] is True and flow["named_by_editor_submit"] is True, flow
+
+
+def test_only_the_editors_submit_reply_can_name_an_edit_job():
+    """Review of plan T, M1: an edit record under any other rpc (a status reply, extend's submit) names nothing."""
+    flow = _judged([_FlowReply("as29s", [None, 1, [_edit_record(2)]])], editor=True, source_media=JOB_MEDIA)
+
+    assert flow["workflow_id"] is None, flow
+
+
+def test_a_generation_record_under_the_editors_submit_rpc_is_not_an_edit_record():
+    """Review of plan T, M3: the name comes from a record typed "CAI" only."""
+    flow = _judged([_edit_submit(_flow_record(6))], editor=True, source_media=JOB_MEDIA)
+
+    assert flow["workflow_id"] is None, flow
+
+
+def test_flows_own_submit_reply_outranks_an_edit_record():
+    """Review of plan T, M11: gflow's submit reply is the measured source and wins over everything."""
+    flow = _judged(
+        [SUBMIT_REPLY, _edit_submit(_edit_record(6, workflow=EARLIER_EDIT))],
+        editor=True,
+        source_media=JOB_MEDIA,
+    )
+
+    assert flow["workflow_id"] == JOB_WORKFLOW, flow
+    assert flow["named_by_editor_submit"] is False and flow["named_by_caller"] is False, flow
+
+
+def test_the_ledger_lists_every_edit_record_the_submit_reply_carried():
+    """The next paid edit measures what one truncated sample could not: whether jIps6 carries the clip's earlier edits,
+    and which status an edit record really holds at submit."""
+    flow = _judged(
+        [_edit_submit(_edit_record(6), _edit_record(3, workflow=EARLIER_EDIT, media=OTHER_MEDIA))],
+        editor=True,
+        source_media=JOB_MEDIA,
+    )
+
+    assert flow["edit_records"] == sorted([f"{JOB_WORKFLOW}:6:source", f"{EARLIER_EDIT}:3:other"]), flow
