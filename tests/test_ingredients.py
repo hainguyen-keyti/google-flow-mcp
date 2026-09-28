@@ -105,9 +105,9 @@ def test_resolve_refuses_more_references_than_the_model_takes():
     assert len(ingredients.resolve(characters, [_image()], [_record()], ids, [MEDIA], "omni-flash")) == 4
 
 
-def test_resolve_refuses_no_character_and_a_repeated_id():
-    with pytest.raises(ValueError, match="at least one character"):
-        ingredients.resolve([_character()], [_image()], [_record()], [], [MEDIA], "omni-flash")
+def test_resolve_refuses_no_reference_at_all_and_a_repeated_id():
+    with pytest.raises(ValueError, match="at least one character or image"):
+        ingredients.resolve([_character()], [_image()], [_record()], [], [], "omni-flash")
     with pytest.raises(ValueError, match="named once"):
         ingredients.resolve([_character()], [], [], [ENTITY, ENTITY], [], "omni-flash")
 
@@ -3041,3 +3041,36 @@ def test_a_dry_run_is_never_failed_by_the_body_check(monkeypatch, tmp_path):
         )
     )
     assert result["dry_run"] is True
+
+
+def test_resolve_takes_images_alone():
+    """Plan X: a reference run from project images only, the one way to a 10 s reference video on this host."""
+    references = ingredients.resolve([_character()], [_image()], [_record()], [], [MEDIA], "omni-flash")
+    assert [(r.kind, r.id) for r in references] == [("media", MEDIA)]
+    assert references[0].mention_ids == frozenset({WORKFLOW})
+
+
+def test_generate_from_images_alone_still_submits_in_ingredients_mode_under_the_body_check(
+    monkeypatch, tmp_path
+):
+    """Plan X, review: gflow picks Ingredients only for a request carrying characters, so an images-only run relies on
+    the composer being told the mode. Sent under Frames instead it would be a plain t2v at the same 15 credits at 10 s,
+    which the price check cannot tell apart, and only the body check would catch it after the money is gone."""
+    log = []
+    captured = _generate_world(monkeypatch, log)
+    asyncio.run(
+        ingredients.generate(
+            object(),
+            "p-1",
+            prompt=PROMPT,
+            characters=[],
+            media_ids=[MEDIA],
+            model="omni-flash",
+            duration=10,
+            job_id="job-1",
+            out_dir=tmp_path,
+        )
+    )
+    assert captured["mode"] == "Ingredients" and captured["kind"] == "character"
+    assert captured["expected_credits"] == 15
+    assert [r.id for r in captured["watch"].references] == [MEDIA]

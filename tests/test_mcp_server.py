@@ -1427,7 +1427,8 @@ def test_gen_character_dry_run_quotes_without_a_job_id_while_a_real_run_still_ch
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        ({"characters": []}, "characters is required"),
+        ({"characters": []}, "at least one character or image"),
+        ({"characters": [], "media_ids": []}, "at least one character or image"),
         ({"characters": ["E", "E"]}, "named once"),
         ({"media_ids": ["E"]}, "named once"),
         ({"characters": [" "]}, "must not be blank"),
@@ -2575,3 +2576,19 @@ def test_agent_send_does_not_pin_a_count_of_measured_sends_that_goes_stale():
     # The description said "3 measured sends" while the ledgers held 5 (2026-09-28); a count typed into prose
     # drifts the day the next send is measured.
     assert not re.search(r"\b\d+ measured sends\b", served_tool_objects()["agent_send"].description or "")
+
+
+def test_gen_character_takes_project_images_alone_for_the_one_ten_second_reference_run(monkeypatch, tmp_path):
+    """Plan X. gflow refuses r2v at any length but 8 s, so this driver is the only way to 10 s, and it demanded a
+    character even when the agent only had images."""
+    _spending_backend(monkeypatch, tmp_path)
+    arguments = {key: value for key, value in SPEND_CALLS["gen_character"].items() if key != "characters"}
+    arguments |= {"media_ids": ["M"], "duration": 10}
+
+    async def fn(s):
+        return await s.call_tool("gen_character", arguments)
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])
+    forwarded = json.loads(_texts([result])[0])
+    assert forwarded["characters"] == [] and forwarded["media_ids"] == ["M"], forwarded

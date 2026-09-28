@@ -122,8 +122,8 @@ def resolve(
 ) -> list[Reference]:
     """Name every requested character and image from one listing, refusing anything the picker cannot single out."""
     wanted = [*characters, *media_ids]
-    if not characters:
-        raise ValueError("at least one character entity id is required")
+    if not wanted:
+        raise ValueError("at least one character or image is required")
     if len(set(wanted)) != len(wanted):
         raise ValueError(f"each character and image may be named once, got {wanted}")
     cap = reference_cap_for(VideoModel.from_cli(model))
@@ -319,9 +319,10 @@ async def apply_settings(page: Any, model: str, aspect: str, references: list[Re
     composer's `_open_settings` already retries once. Opening the pane spends nothing, so that one failure gets one
     more open.
 
-    The request is t2v carrying the characters, not r2v: gflow still selects Ingredients for a request with
-    characters (migrated_composer.py:947), while its r2v duration pin raised on veo-lite in L2 run 2, having counted
-    the Omni 8s radio just before the model switch removed that row. pin_duration sets the length instead.
+    The request is t2v carrying the characters, not r2v: its r2v duration pin raised on veo-lite in L2 run 2, having
+    counted the Omni 8s radio just before the model switch removed that row, so pin_duration sets the length instead.
+    gflow selects Ingredients only for a request with characters; a run from images alone gets it from the composer's
+    own mode argument, set by generate and read back at the confirm step (plan X, 2026-09-28).
     """
     entities = [reference for reference in references if reference.kind == "entity"]
     request = GenerateVideoRequest(

@@ -1336,7 +1336,8 @@ async def gen_i2v(
     description=(
         "Reference images (ingredients) to video via gflow. It spends credits and is ledgered: omni-flash x1 = 12 "
         "credits (the default when model is omitted, measured 2026-09-15) and veo-lite x1 = 10 credits "
-        "(measured). It always runs 8 s, the only length this host offers references, so leave duration out. "
+        "(measured). It always runs 8 s through gflow, so leave duration out; for 10 s, put the images in the project "
+        "with flow_upload and pass their media ids to gen_character. "
         "omni-flash takes up to 7 reference images, veo-lite, veo-fast and veo-lite-lp up to 3, veo-quality none; "
         "more is refused before anything is spent. "
         "Allow 2-5 min: that omni-flash run took 292 s end to end." + _JOB_ID_RULE
@@ -1376,8 +1377,9 @@ def _longer_lengths() -> str:
 @server.tool(
     name="gen_character",
     description=(
-        "Video starring the project's characters (entity ids from flow_characters), optionally with images already "
-        "in the project (media ids from flow_media, images only). Each goes into the prompt as a Flow @ mention, and "
+        "Video starring the project's characters (entity ids from flow_characters), with or without images already "
+        "in the project (media ids from flow_media, images only), or from those images alone, which is the way to a "
+        "10 s reference video since gen_r2v runs 8 s only. Each goes into the prompt as a Flow @ mention, and "
         "every chip is checked against its id before anything is spent. It spends credits and is ledgered, at x1: "
         "8 s by default, omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 "
         "credits by Flow's own price table, unmeasured. "
@@ -1400,7 +1402,7 @@ def _longer_lengths() -> str:
 async def gen_character(
     project: str,
     prompt: str,
-    characters: list[str],
+    characters: list[str] | None = None,
     job_id: str | None = None,
     media_ids: list[str] | None = None,
     model: str = VIDEO_DEFAULT_MODEL,
@@ -1411,9 +1413,12 @@ async def gen_character(
 ) -> str:
     _require(project, "project")
     _require(prompt, "prompt")
-    if not characters:
-        raise ValueError("characters is required: one or more entity ids from flow_characters")
+    characters = characters or []
     wanted = [*characters, *(media_ids or [])]
+    if not wanted:
+        raise ValueError(
+            "at least one character or image is required: entity ids from flow_characters, media ids from flow_media"
+        )
     if any(not value or not value.strip() for value in wanted):
         raise ValueError("character and media ids must not be blank")
     if len(set(wanted)) != len(wanted):
