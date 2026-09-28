@@ -323,7 +323,7 @@ async def _generate_from_editor(
     # the gen path 2026-09-13). report() and reported_failed() never raise, by design: they run after a click
     # that already spent money, where an exception would cost the outcome row.
     # The module, not the name: composer imports clips too, and a name import turns that into a cycle.
-    replies = composer_mod.FlowReplies(editor=True)
+    replies = composer_mod.FlowReplies(editor=True, source_media=media_id)
     session.page.on("response", replies.on_response)
     try:
         frames = await _await_submit(session, lambda: start.click(timeout=8_000))

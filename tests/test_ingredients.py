@@ -1702,11 +1702,15 @@ def test_submit_keeps_no_signed_url_from_a_failed_reply(monkeypatch, tmp_path):
     assert JOB_WORKFLOW in head and "Signature=" not in head and "Expires=" not in head
 
 
-def _judged(responses, about=None, editor=False):
+def _judged(responses, about=None, editor=False, source_media=None):
     """Feed replies straight to a FlowReplies and return its report."""
 
     async def run():
-        replies = composer.FlowReplies(editor=editor)
+        replies = (
+            composer.FlowReplies(editor=editor, source_media=source_media)
+            if source_media
+            else composer.FlowReplies(editor=editor)
+        )
         replies.about(about)
         for response in responses:
             replies.on_response(response)
@@ -2579,3 +2583,80 @@ def test_a_name_two_characters_share_is_not_answered_with_ids_that_would_be_refu
 
     with pytest.raises(LookupError, match="rename one"):
         ingredients.resolve(twins, [], [], ["Thu"], [], "omni-flash")
+
+
+OTHER_MEDIA = "7c3b2a19-5d4e-4f60-8a71-b2c3d4e5f6a7"
+
+
+def _edit_record(status, *, workflow=JOB_WORKFLOW, media=JOB_MEDIA):
+    """An Omni edit's record, measured 2026-09-28 in the jIps6 reply of job price2-edit: the generation-record shape
+    with "CAI" where a generation carries "CAE", the edit's workflow first and the SOURCE clip's media id third."""
+    record = _flow_record(status, workflow=workflow)
+    record[2], record[3] = media, "CAI"
+    return record
+
+
+def _edit_submit(*records):
+    """jIps6 as it answered the paid edit: null, the balance after the charge, the source clip, then the new records."""
+    return _FlowReply(
+        "jIps6",
+        [
+            None,
+            941,
+            [[JOB_MEDIA, None, None, ["Wooden sailboat model on desk"], FLOW_PROJECT]],
+            list(records),
+        ],
+    )
+
+
+def test_the_editor_names_its_job_from_the_one_edit_record_its_submit_reply_carries():
+    """Measured 2026-09-28 (job price2-edit, 20 credits): the editor's submit reply held the job's own record, typed
+    "CAI", and the reader, which accepted only "CAE", heard nothing for four paid edits in a row. Named at submit, the
+    job is known before any listing shows it, which is the only way to hear why Flow drops one that never appears."""
+    flow = _judged([_edit_submit(_edit_record(6)), _status_reply(2)], editor=True, source_media=JOB_MEDIA)
+
+    assert flow["workflow_id"] == JOB_WORKFLOW, flow
+    assert flow["named_by_editor_submit"] is True and flow["named_by_caller"] is False, flow
+    assert flow["statuses"] == [6, 2], flow
+
+
+def test_the_gen_reader_learns_nothing_from_an_edit_submit_reply():
+    """The gen path's replies are the measured ones; an edit's record type must not change what it hears."""
+    flow = _judged([_edit_submit(_edit_record(6)), _status_reply(2)])
+
+    assert flow["workflow_id"] is None and flow["statuses"] == [], flow
+
+
+def test_an_edit_record_on_another_clip_does_not_name_the_job():
+    """An edit keeps its SOURCE clip's media id (measured on 26f0e503 and b59ab4e8), so a record on another clip is
+    another job's, whatever rpc it arrives under."""
+    flow = _judged([_edit_submit(_edit_record(6, media=OTHER_MEDIA))], editor=True, source_media=JOB_MEDIA)
+
+    assert flow["workflow_id"] is None, flow
+
+
+def test_two_edit_records_on_the_source_clip_name_no_job():
+    """Two candidates is a guess, and a guessed identity puts another job's status and reasons in this job's row."""
+    both = _edit_submit(_edit_record(6), _edit_record(6, workflow=OTHER_WORKFLOW))
+
+    flow = _judged([both], editor=True, source_media=JOB_MEDIA)
+
+    assert flow["workflow_id"] is None, flow
+
+
+def test_an_edit_record_in_a_status_reply_counts_for_the_workflow_the_listing_named():
+    """Named by the listing, an edit still had no status, because its records are "CAI" in the status replies too."""
+    flow = _judged([_FlowReply("as29s", [None, 1, [_edit_record(3)]])], about=JOB_WORKFLOW, editor=True)
+
+    assert flow["workflow_id"] == JOB_WORKFLOW and flow["statuses"] == [3], flow
+
+
+def test_the_gen_reader_never_counts_an_edit_record_as_its_jobs():
+    """Pins the boundary plan T promised rather than a measured event: the gen path hears only "CAE" records, so an
+    edit record carrying the gen job's own workflow id adds nothing to its statuses. Without this, a reader that
+    parsed "CAI" everywhere passed every other test (mutant T-M2, 2026-09-28)."""
+    edit_status = _FlowReply("as29s", [None, 1, [_edit_record(4)]])
+
+    flow = _judged([SUBMIT_REPLY, _status_reply(2), edit_status])
+
+    assert flow["statuses"] == [6, 2], flow

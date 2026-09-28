@@ -1980,9 +1980,10 @@ class _SaidFailed:
         "reasons": ["PUBLIC_ERROR_SOMETHING"],
     }
 
-    def __init__(self, *, editor=False):
+    def __init__(self, *, editor=False, source_media=None):
         self.attached = 0
         self.editor = editor
+        self.source_media = source_media
 
     def on_response(self, response):
         self.attached += 1
@@ -2143,6 +2144,8 @@ def test_an_editor_job_tells_the_reader_which_workflow_the_listing_named(monkeyp
     assert told == ["wf-9"], f"the reader was never told which workflow is the job: {told}"
     # The editor's own submit rpc is unmeasured, so only the editor's reader listens for it.
     assert [r.editor for r in made] == [True], "the editor reader was built as if it were the gen path's"
+    # The edit keeps its source clip's media id, which is how the reader tells the job's record from any other.
+    assert [r.source_media for r in made] == ["src"], [r.source_media for r in made]
 
 
 def test_an_editor_job_names_no_workflow_when_the_listing_holds_two_candidates(monkeypatch, tmp_path):
@@ -2201,7 +2204,7 @@ def test_the_editor_path_hears_flow_through_the_same_reader_as_the_gen_path():
     for name in ("on_response", "reported_failed", "report", "about"):
         assert hasattr(composer.FlowReplies, name), name
     # By name only, a stub keeps passing after the real signature moves; the stubs above call both of these.
-    assert list(inspect.signature(composer.FlowReplies).parameters) == ["editor"]
+    assert list(inspect.signature(composer.FlowReplies).parameters) == ["editor", "source_media"]
     assert list(inspect.signature(composer.FlowReplies.about).parameters) == ["self", "workflow_id"]
 
 

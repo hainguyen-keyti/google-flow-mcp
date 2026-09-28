@@ -105,18 +105,19 @@ _SIGNED_KEY_RE = re.compile(r"signature=|x-goog-signature=|x-goog-credential=|ex
 _WORD_RE = re.compile(r"\S+")
 
 
-def _records_in(node: Any) -> list[list[Any]]:
+def _records_in(node: Any, types: tuple[str, ...] = ("CAE",)) -> list[list[Any]]:
     """Every generation record in a reply, shaped [workflow_id, project_id, media_id, "CAE", ...] (gflow
-    batchexecute.py), where gflow's own parser returns only the first."""
+    batchexecute.py), where gflow's own parser returns only the first. An Omni edit's record is the same shape typed
+    "CAI" (measured 2026-09-28 in jIps6; the listing parser reads both, parsers.records)."""
     if not isinstance(node, list):
         return []
     if (
         len(node) >= 6
-        and node[3] == "CAE"
+        and node[3] in types
         and all(isinstance(node[i], str) and _UUID_RE.match(node[i]) for i in (0, 1, 2))
     ):
         return [node]
-    return [record for child in node for record in _records_in(child)]
+    return [record for child in node for record in _records_in(child, types)]
 
 
 def _status_of(record: list[Any]) -> int | None:
@@ -179,12 +180,14 @@ class FlowReplies:
     inside its own record or in a reply naming it and no other workflow; every other code heard is listed apart.
     """
 
-    def __init__(self, *, editor: bool = False) -> None:
+    def __init__(self, *, editor: bool = False, source_media: str | None = None) -> None:
         self.heard: set[str] = set()
         self.workflow: str | None = None
-        # Only the editor reader hears the editor's submit rpc: on the gen path, whose replies are the measured ones,
-        # an unmeasured rpc must not be able to change a status, a reason or the wait (review F3, 2026-09-28).
+        # Only the editor reader hears the editor's submit rpc and edit records: on the gen path, whose replies are the
+        # measured ones, neither may change a status, a reason or the wait (review F3, 2026-09-28).
         self.job_rpcs: tuple[str, ...] = (*GFLOW_RPCS, EDITOR_SUBMIT) if editor else GFLOW_RPCS
+        self.record_types: tuple[str, ...] = ("CAE", "CAI") if editor else ("CAE",)
+        self.source_media = source_media
         self._reads: list[asyncio.Future[tuple[str, str]]] = []
 
     def about(self, workflow_id: str | None) -> None:
@@ -256,13 +259,23 @@ class FlowReplies:
             for rpcids, text in bodies
             if _about_the_job(rpcids, self.job_rpcs)
             for rpcid, payload in parse_frames(text)
-            for record in _records_in(payload)
+            for record in _records_in(payload, self.record_types)
         ]
         submitted = next((record for rpcid, record in replies if rpcid in mc.SUBMIT_RPCS), None)
+        # The edit's own record in its submit reply, trusted only when it is the one edit record on the source clip.
+        edits = {
+            record[0]
+            for rpcid, record in replies
+            if rpcid == EDITOR_SUBMIT
+            and record[3] == "CAI"
+            and self.source_media
+            and record[2] == self.source_media
+        }
+        edit_named = next(iter(edits)) if len(edits) == 1 else None
         told = self.workflow if any(record[0] == self.workflow for _, record in replies) else None
         # No media id from a name: the editor's output keeps the SOURCE clip's media id (measured 2026-09-28, the
         # paid edit's source and output are both 26f0e503), so adopting it would count the source's codes as ours.
-        workflow = submitted[0] if submitted else told
+        workflow = submitted[0] if submitted else edit_named or told
         media = submitted[2] if submitted else None
         job = {ident for ident in (workflow, media) if ident}
         # The job's own records name its project and references too (the failed L4 record held its character and image).
@@ -298,7 +311,8 @@ class FlowReplies:
         heard = {code for _, text in bodies for code in _REASON_RE.findall(text)}
         return {
             "workflow_id": workflow,
-            "named_by_caller": bool(told and not submitted),
+            "named_by_caller": bool(told and not submitted and not edit_named),
+            "named_by_editor_submit": bool(edit_named and not submitted),
             "told_unmatched": self._no_reply_about(replies, bodies) if self.workflow and not told else None,
             "media_id": media,
             "statuses": statuses,
