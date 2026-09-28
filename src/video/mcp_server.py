@@ -517,6 +517,7 @@ class Backend:
         dry_run: bool = False,
         job_id: str | None = None,
         out_dir: str | None = None,
+        duration: int = ingredients_mod.SECONDS,
     ) -> dict[str, Any]:
         # A dry run spends nothing but still opens a browser for a minute or two, so a folder that could not hold
         # the clip or its ledger is refused here rather than after the wait.
@@ -535,6 +536,7 @@ class Backend:
                     job_id=job_id,
                     out_dir=target,
                     dry_run=dry_run,
+                    duration=duration,
                 )
             )
 
@@ -1361,9 +1363,10 @@ async def gen_r2v(
     description=(
         "Video starring the project's characters (entity ids from flow_characters), optionally with images already "
         "in the project (media ids from flow_media, images only). Each goes into the prompt as a Flow @ mention, and "
-        "every chip is checked against its id before anything is spent. It spends credits and is ledgered: always "
-        "8 s at x1; omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 credits "
-        "by Flow's own price table, unmeasured. The live price line is read first and a different price is refused "
+        "every chip is checked against its id before anything is spent. It spends credits and is ledgered, at x1: "
+        "8 s by default, omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 "
+        "credits by Flow's own price table, unmeasured. duration=10 is offered on omni-flash only, at 15 credits (the "
+        "composer's own quote, 2026-09-28); other models show no length choice here. The live price line is read first and a different price is refused "
         "before the click. dry_run=true returns the quote and the chips, clicks nothing, writes no ledger row, leaves "
         "the composer empty and needs no job_id (each chip's id is the character's entity id or the image's workflow "
         "id). out_dir puts the clip and its ledger in a folder of your own, which keeps one film's takes together; "
@@ -1388,6 +1391,7 @@ async def gen_character(
     aspect: str = "9:16",
     dry_run: bool = False,
     out_dir: str | None = None,
+    duration: int = ingredients_mod.SECONDS,
 ) -> str:
     _require(project, "project")
     _require(prompt, "prompt")
@@ -1402,11 +1406,15 @@ async def gen_character(
         raise ValueError(f"model must be one of {sorted(ingredients_mod.PRICES)}, got {model!r}")
     if aspect not in ingredients_mod.ASPECTS:
         raise ValueError(f"aspect must be one of {sorted(ingredients_mod.ASPECTS)}, got {aspect!r}")
+    if duration not in ingredients_mod.LENGTHS[model]:
+        raise ValueError(
+            f"duration must be one of {list(ingredients_mod.LENGTHS[model])} for {model}, got {duration}"
+        )
     if not dry_run:
         _require(job_id or "", "job_id")
     return _json(
         await backend.gen_character(
-            project, prompt, characters, media_ids, model, aspect, dry_run, job_id, out_dir
+            project, prompt, characters, media_ids, model, aspect, dry_run, job_id, out_dir, duration
         )
     )
 

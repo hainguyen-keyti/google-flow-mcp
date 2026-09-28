@@ -2235,8 +2235,9 @@ def test_generate_setup_sets_the_model_pins_8s_and_attaches_every_reference_in_o
     async def apply_settings(page, model, aspect, references):
         log.append(f"settings {model} {aspect} {[r.id for r in references]}")
 
-    async def pin_duration(page):
+    async def pin_duration(page, seconds=None):
         log.append("pin")
+        assert seconds == ingredients.SECONDS, f"the default run pinned {seconds}s, not 8s"
         return "pinned"
 
     async def attach(page, reference):
@@ -2804,3 +2805,88 @@ def test_the_gen_reader_still_hears_only_first_versions():
     flow = _judged([SUBMIT_REPLY, _status_reply(2), later])
 
     assert flow["statuses"] == [6, 2], flow
+
+
+# ten seconds (plan U)
+
+
+class _PickyRadios(_Radios):
+    """Records which length the pin asked for, instead of assuming 8 s."""
+
+    def filter(self, has_text):
+        self.page.asked.append(has_text)
+        return _Radio(self.page)
+
+
+class _PickyRadioPage(_RadioPage):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.asked = []
+
+    def locator(self, selector):
+        assert selector == ingredients.RADIO
+        return _PickyRadios(self)
+
+
+def test_pin_duration_checks_the_length_it_is_asked_for(no_settings_pane):
+    """Measured 2026-09-28: the Ingredients composer offers 4s 6s 8s 10s for Omni 1.1 Flash on this account."""
+    page = _PickyRadioPage()
+
+    assert asyncio.run(ingredients.pin_duration(page, 10)) == "pinned"
+
+    pattern = page.asked[0]
+    assert pattern.search("10s") and not pattern.search("8s") and not pattern.search("110s"), pattern.pattern
+
+
+class _NoBrowser:
+    """A session that must never be touched: every refusal here has to come before a browser opens."""
+
+    def __getattr__(self, name):
+        raise AssertionError(f"a browser was reached ({name}) for a call that should have been refused")
+
+
+def test_ten_seconds_on_a_model_that_offers_no_length_is_refused_before_a_browser_opens():
+    """Measured 2026-09-28: with Veo 3.1 Lite chosen the composer shows no duration group at all."""
+    # Refused by the length rule itself, not by the price rule that would also stop it (mutant U-M1, 2026-09-28).
+    with pytest.raises(ValueError, match="duration must be one of"):
+        asyncio.run(
+            ingredients.generate(
+                _NoBrowser(), "P", prompt="p", characters=[ENTITY], model="veo-lite", duration=10, job_id="j"
+            )
+        )
+
+
+def test_a_length_whose_price_was_never_measured_is_quoted_but_never_run(monkeypatch):
+    """The repo refuses rather than guesses a price: an unmeasured length may be read with dry_run, which clicks
+    nothing, and is refused for a real run before any browser opens."""
+    monkeypatch.setattr(ingredients, "LONGER_PRICES", {})
+
+    with pytest.raises(ValueError, match="no measured price"):
+        asyncio.run(
+            ingredients.generate(
+                _NoBrowser(),
+                "P",
+                prompt="p",
+                characters=[ENTITY],
+                model="omni-flash",
+                duration=10,
+                job_id="j",
+            )
+        )
+
+
+def test_every_gen_character_price_is_the_one_the_tool_promises():
+    """Both sides read, never a copy typed into the test: every (model, length) the driver charges against must be
+    stated in the description the server is serving."""
+    import re as _re
+
+    from video import mcp_server
+
+    tools = asyncio.run(mcp_server.server.list_tools())
+    description = next(tool.description for tool in tools if tool.name == "gen_character")
+    priced = {(model, ingredients.SECONDS): price for model, price in ingredients.PRICES.items()}
+    priced.update(ingredients.LONGER_PRICES)
+    for (model, seconds), price in priced.items():
+        assert _re.search(rf"(?<!\d){price} credits?\b", description), (
+            f"{model} {seconds}s at {price} is not stated"
+        )

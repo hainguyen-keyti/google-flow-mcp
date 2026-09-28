@@ -145,7 +145,13 @@ TOOL_CALLS: dict[str, dict] = {
     "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"},
     "gen_t2i": {"prompt": "a boat", "project": "P"},
     "gen_i2i": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P"},
-    "gen_character": {"prompt": "a boat", "project": "P", "characters": ["E"], "job_id": "job-character"},
+    "gen_character": {
+        "prompt": "a boat",
+        "project": "P",
+        "characters": ["E"],
+        "job_id": "job-character",
+        "duration": 10,
+    },
 }
 
 
@@ -1466,6 +1472,7 @@ def test_gen_character_forwards_every_option_to_the_driver(monkeypatch, tmp_path
         "job_id": "job-character",
         "out_dir": str(tmp_path),
         "dry_run": False,
+        "duration": 8,
     }
 
 
@@ -2517,3 +2524,31 @@ def test_a_mistyped_argument_set_to_null_is_refused_too(monkeypatch):
     bad = sorted(n for n, (err, text) in answers.items() if not (err and "aspect_ratio_typo" in text))
     assert bad == [], bad
     assert touched == [], touched
+
+
+def test_gen_character_refuses_a_length_its_model_does_not_offer(monkeypatch, tmp_path):
+    """Refused at the tool, before a browser: veo-lite shows no duration group in this composer (2026-09-28)."""
+
+    class _Untouchable:
+        def __getattr__(self, name):
+            raise AssertionError(f"the backend ran ({name})")
+
+    monkeypatch.setattr(mcp_server, "backend", _Untouchable())
+
+    async def fn(session):
+        result = await session.call_tool(
+            "gen_character",
+            {
+                "project": "P",
+                "prompt": "p",
+                "characters": ["E"],
+                "model": "veo-lite",
+                "duration": 10,
+                "job_id": "j",
+            },
+        )
+        return result.is_error, "".join(getattr(c, "text", "") for c in result.content)
+
+    is_error, text = with_client(fn)
+    assert is_error and "duration must be one of" in text and "veo-lite" in text, text
+    assert "unknown argument" not in text, "refused as an undeclared argument, not by the length rule"

@@ -34,6 +34,19 @@ from video.session import PROJECT_READY, FlowSession
 
 SECONDS = 8
 PRICES = {"omni-flash": 12, "veo-lite": 10, "veo-fast": 20}
+# Lengths the Ingredients composer offers per model (measured 2026-09-28: 4s 6s 8s 10s under Omni 1.1 Flash, no length
+# group at all under Veo 3.1 Lite), limited to the ones this tool takes.
+LENGTHS = {"omni-flash": (8, 10), "veo-lite": (8,), "veo-fast": (8,)}
+# A longer length's price, entered only once measured: until then dry_run quotes it and a real run is refused.
+# omni-flash 10 s: quoted 15 by the composer's price line on a dry run (2026-09-28, plan U), the same 15 the owner's
+# own abra_r2v_10s cost that day.
+LONGER_PRICES: dict[tuple[str, int], int] = {("omni-flash", 10): 15}
+
+
+def price_for(model: str, seconds: int) -> int | None:
+    return PRICES.get(model) if seconds == SECONDS else LONGER_PRICES.get((model, seconds))
+
+
 ASPECTS = {"9:16": Aspect.PORTRAIT, "16:9": Aspect.LANDSCAPE}
 LABELS = {"entity": "Character", "media": "Image"}
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
@@ -328,11 +341,11 @@ async def apply_settings(page: Any, model: str, aspect: str, references: list[Re
         await settings.apply_video_settings(page, request)
 
 
-async def pin_duration(page: Any) -> str:
-    """Check the 8 s radio once it renders; a model whose pane shows no duration row answers 'absent'."""
+async def pin_duration(page: Any, seconds: int = SECONDS) -> str:
+    """Check the radio for `seconds` once it renders; a model whose pane shows no duration row answers 'absent'."""
     await composer._open_settings(page, "duration")
     try:
-        radio = page.locator(RADIO).filter(has_text=re.compile(rf"^\s*{SECONDS}s\s*$"))
+        radio = page.locator(RADIO).filter(has_text=re.compile(rf"^\s*{seconds}s\s*$"))
         waited = 0
         while await radio.count() == 0 and waited < RADIO_WAIT_MS:
             await page.wait_for_timeout(500)
@@ -341,12 +354,12 @@ async def pin_duration(page: Any) -> str:
         if count == 0:
             return "absent"
         if count > 1:
-            raise LookupError(f"{count} duration radios read {SECONDS}s; not guessing")
+            raise LookupError(f"{count} duration radios read {seconds}s; not guessing")
         if await radio.first.get_attribute("aria-checked") != "true":
             await radio.first.click(timeout=4_000)
             await page.wait_for_timeout(1_200)
         if await radio.first.get_attribute("aria-checked") != "true":
-            raise LookupError(f"the {SECONDS}s duration radio did not stay checked")
+            raise LookupError(f"the {seconds}s duration radio did not stay checked")
         return "pinned"
     finally:
         await page.keyboard.press("Escape")
@@ -411,12 +424,21 @@ async def generate(
     out_dir: Path = Path("out"),
     dry_run: bool = False,
     wait: float = 360.0,
+    duration: int = SECONDS,
 ) -> dict[str, Any]:
-    """One 8 s video from characters and project images, or with dry_run the quote and the chips, never a click."""
+    """One video from characters and project images, or with dry_run the quote and the chips, never a click."""
     if model not in PRICES:
         raise ValueError(f"model must be one of {sorted(PRICES)}, got {model!r}")
     if aspect not in ASPECTS:
         raise ValueError(f"aspect must be one of {sorted(ASPECTS)}, got {aspect!r}")
+    if duration not in LENGTHS[model]:
+        raise ValueError(f"duration must be one of {list(LENGTHS[model])} for {model}, got {duration}")
+    expected = price_for(model, duration)
+    if expected is None and not dry_run:
+        raise ValueError(
+            f"no measured price for {model} at {duration}s: read it with dry_run first, a real run is refused "
+            "rather than priced by guess"
+        )
     if not dry_run and not job_id:
         raise ValueError("job_id is required unless dry_run")
     listing = await _listing(session, project_id)
@@ -434,7 +456,7 @@ async def generate(
     async def setup(active: FlowSession) -> dict[str, Any]:
         page = active.page
         await apply_settings(page, model, aspect, references)
-        duration = await pin_duration(page)
+        duration_row = await pin_duration(page, duration)
         await page.locator(BOX).first.click(timeout=8_000)
         attached[:] = [await attach(page, reference) for reference in references]
         on_page = await chips_on(page)
@@ -448,8 +470,8 @@ async def generate(
         return {
             "model": model,
             "aspect": aspect,
-            "seconds": SECONDS,
-            "duration_row": duration,
+            "seconds": duration,
+            "duration_row": duration_row,
             "chips": attached,
         }
 
@@ -488,7 +510,8 @@ async def generate(
             setup=setup,
             kind="character",
             job_id=job_id,
-            expected_credits=PRICES[model],
+            # Unknown only on a dry run, which reports price_ok False next to the quote it read.
+            expected_credits=expected if expected is not None else 0,
             out_dir=out_dir,
             aspect=aspect,
             mode="Ingredients",
