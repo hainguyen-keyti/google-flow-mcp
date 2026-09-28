@@ -2570,3 +2570,12 @@ def test_resolve_says_so_when_it_is_given_a_character_name_instead_of_its_entity
     said = str(caught.value)
     assert "name" in said and ENTITY in said, said
     assert "is not a character of this project" not in said, said
+
+
+def test_a_name_two_characters_share_is_not_answered_with_ids_that_would_be_refused():
+    """Review of plan S: "pass A or B" led to a second refusal, since the picker cannot tell two same-named
+    characters apart whichever id is passed."""
+    twins = [_character(), _character(entity=OTHER, name=" THU ")]
+
+    with pytest.raises(LookupError, match="rename one"):
+        ingredients.resolve(twins, [], [], ["Thu"], [], "omni-flash")

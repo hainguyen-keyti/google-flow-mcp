@@ -2459,29 +2459,61 @@ def test_the_mcp_generate_path_spends_on_the_profile_it_reads_the_balance_on(mon
     assert "read_credits" not in handed, "a second, separate profile for the reads is how the two drift apart"
 
 
-def test_every_served_tool_refuses_an_argument_it_does_not_declare(monkeypatch, tmp_path):
-    """Measured 2026-09-28 (plan R, job plan-r-t2i-2): gen_t2i took an `out_dir` it does not declare, succeeded, and
-    wrote its row somewhere else; every tool swallowed unknown arguments. On a paying tool a mistyped `aspect_ratio`
-    silently pays for the default aspect. Generated from the tools actually served, so a new tool is covered the
-    day it is added, and no backend may run for a refused call."""
+def _dummy_value(prop):
+    kind = prop.get("type") or next(
+        (option.get("type") for option in prop.get("anyOf", []) if option.get("type") != "null"), "string"
+    )
+    if "enum" in prop:
+        return prop["enum"][0]
+    return {"string": "x", "integer": 1, "number": 1, "boolean": False, "array": ["x"]}.get(kind, "x")
 
-    class _Untouchable:
+
+def _call_every_tool_with(monkeypatch, typo):
+    """Every served tool, called with its required arguments filled from its own served schema plus one typo, with
+    every backend access recorded (not raised, which a swallowed exception would hide)."""
+    touched = []
+
+    class _Recorder:
         def __getattr__(self, name):
-            raise AssertionError(f"the backend ran ({name}) for a call that should have been refused")
+            touched.append(name)
+            raise AssertionError(name)
 
-    monkeypatch.setattr(mcp_server, "backend", _Untouchable())
-    names = sorted(served_tool_objects())
-    assert len(names) >= 40, names
+    monkeypatch.setattr(mcp_server, "backend", _Recorder())
+    tools = served_tool_objects()
+    assert len(tools) >= 40, sorted(tools)
 
     async def fn(session):
         answers = {}
-        for name in names:
-            result = await session.call_tool(name, {"not_a_real_argument": 1})
+        for name, tool in sorted(tools.items()):
+            schema = tool.input_schema or {}
+            args = {key: _dummy_value(schema["properties"][key]) for key in schema.get("required", [])}
+            args.update(typo)
+            result = await session.call_tool(name, args)
             answers[name] = (result.is_error, "".join(getattr(c, "text", "") for c in result.content))
         return answers
 
-    answers = with_client(fn)
+    return with_client(fn), touched
 
-    for name, (is_error, text) in answers.items():
-        assert is_error, f"{name} accepted an undeclared argument: {text[:200]}"
-        assert "not_a_real_argument" in text and "unknown argument" in text, f"{name}: {text[:300]}"
+
+def test_a_valid_call_with_one_mistyped_argument_is_refused_before_any_backend_runs(monkeypatch):
+    """Measured 2026-09-28 (plan R, job plan-r-t2i-2): gen_t2i took an `out_dir` it does not declare, succeeded, and
+    wrote its row elsewhere; every tool swallowed unknown arguments. The case that costs money is a CORRECT call with
+    one typo beside it (`aspect_ratio` for `aspect` pays for the default 9:16), so that is what is sent here, to all
+    43 tools served, generated from their own schemas (review of plan S: a typo sent alone never reached a tool that
+    has required arguments, so a check that refused only all-unknown calls stayed green)."""
+    answers, touched = _call_every_tool_with(monkeypatch, {"aspect_ratio_typo": "16:9"})
+
+    bad = {n: text[:160] for n, (err, text) in answers.items() if not (err and "aspect_ratio_typo" in text)}
+    assert bad == {}, bad
+    assert all("unknown argument" in text for _, text in answers.values())
+    assert touched == [], f"a refused call still reached the backend: {touched}"
+
+
+def test_a_mistyped_argument_set_to_null_is_refused_too(monkeypatch):
+    """A null typo changes nothing today, but a check that skips null values would pass a typo the day its value is
+    filled in by a caller's default."""
+    answers, touched = _call_every_tool_with(monkeypatch, {"aspect_ratio_typo": None})
+
+    bad = sorted(n for n, (err, text) in answers.items() if not (err and "aspect_ratio_typo" in text))
+    assert bad == [], bad
+    assert touched == [], touched

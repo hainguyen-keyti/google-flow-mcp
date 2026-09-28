@@ -127,9 +127,14 @@ def resolve(
             named = [
                 each["entity_id"] for each in listed_characters if _norm(each.get("name")) == _norm(entity)
             ]
+            if len(named) > 1:
+                raise LookupError(
+                    f"{entity!r} is the name of {len(named)} characters, which the picker cannot tell apart; rename "
+                    f"one, then pass its entity id ({' or '.join(named)})"
+                )
             if named:
                 raise LookupError(
-                    f"{entity!r} is a character's name, not its entity id; pass {' or '.join(named)} "
+                    f"{entity!r} is a character's name, not its entity id; pass {named[0]} "
                     "(flow_characters lists both)"
                 )
             raise LookupError(f"{entity} is not a character of this project; flow_characters lists them")
