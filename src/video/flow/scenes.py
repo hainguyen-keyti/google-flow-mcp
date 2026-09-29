@@ -54,6 +54,8 @@ ZOOM_OUT_MAX = 4
 # far longer than that because two adds of the same run passed 90 s with no reply at all, one of them having landed.
 SEND_WAIT_MS = 15_000
 REPLY_WAIT_MS = 180_000
+LISTING_LAG_MS = 60_000
+LISTING_POLL_MS = 5_000
 # Add clip's menu offers Extend (Veo 3.1 - Lite), 10 credits, right next to the item this driver wants, and the same
 # page carries Start generation. "generation" is listed on its own because "generate" is not a substring of it, which
 # left the one certain spender on that page unguarded (review 2026-09-16).
@@ -612,6 +614,15 @@ async def add_clip(session: FlowSession, project_id: str, scene_id: str, media_i
             )
         added = fresh[0]["clip_id"]
     position = next((clip["position"] for clip in after["clips"] if clip["clip_id"] == added), None)
+    # Flow answers the add before its listing holds the clip (measured 2026-09-29: all four adds of one film), so an
+    # answered clip is looked for again for a while before its absence is believed.
+    waited = 0
+    while position is None and heard and waited < LISTING_LAG_MS:
+        await session.page.wait_for_timeout(LISTING_POLL_MS)
+        waited += LISTING_POLL_MS
+        after = timeline_from_listing(await _listing(session, project_id), scene_id)
+        titles = [clip["title"] for clip in after["clips"]]
+        position = next((clip["position"] for clip in after["clips"] if clip["clip_id"] == added), None)
     if position is None:
         raise RuntimeError(
             f"Flow answered the add with clip {added} but the listing reads {titles} without it; read scene_clips "

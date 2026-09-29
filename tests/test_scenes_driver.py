@@ -1442,6 +1442,9 @@ class _Editor:
         self.answers = True
         self.sends = True
         self.stores = True
+        # Listing reads that still miss a clip Flow already answered for (measured 2026-09-29: all four adds of a film).
+        self.stale_listings = 0
+        self.lagging = None
         self.selects_on_click = True
         self.row_click_selects = None
         self.insert_at = None
@@ -1515,7 +1518,10 @@ class _Editor:
                 [index or None, [8], [], [clip["seconds"]], [1]],
             ]
             for index, clip in enumerate(self.server)
+            if not (self.lagging == clip["clip_id"] and self.stale_listings > 0)
         ]
+        if self.lagging and self.stale_listings > 0:
+            self.stale_listings -= 1
         # Flow lists clips in no particular order; reversed here so a reader that trusts listing order is caught.
         return [None, descriptors, [], [], [scene], [], list(reversed(entries)), []]
 
@@ -1860,6 +1866,8 @@ class _Editor:
         def reply():
             if self.stores:
                 self.server.insert(index, clip)
+                if self.stale_listings:
+                    self.lagging = clip["clip_id"]
             if self.shuffles:
                 self.server[0], self.server[1] = self.server[1], self.server[0]
             if not self.answers:
@@ -3134,3 +3142,16 @@ def test_save_clip_to_project_refuses_a_clip_id_that_is_not_on_the_timeline(monk
     with pytest.raises(LookupError, match="not on scene"):
         asyncio.run(scenes.save_clip_to_project(session, PROJECT, EDITOR_SCENE, "no-such-clip"))
     assert page.clicked == []
+
+
+def test_add_clip_reads_the_listing_again_while_it_still_misses_the_clip_flow_answered_for(monkeypatch):
+    """Measured 2026-09-29 (film LeeLyLy review 01): all four adds were answered by Flow, the listing read right after
+    missed the clip, and the tool raised although every clip was on the timeline a moment later."""
+    page = _Editor([CAFE, WALKING], clips=[CAFE])
+    page.stale_listings = 2
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.add_clip(session, PROJECT, EDITOR_SCENE, WALKING[0]))
+
+    assert result["answered"] is True and result["position"] == 1
+    assert session.urls.count("listing") >= 3
