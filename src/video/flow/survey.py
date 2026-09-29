@@ -397,9 +397,11 @@ class Walker:
 
     async def walk_settings(self) -> dict[str, Any]:
         await composer._open_settings(self.page, "survey")
-        await self.record("composer settings", _PANE)
+        # The panel opens on the tab the last run left: Image after gen_i2i, which hides Frames and Ingredients.
         await self.radio("Video")
+        await self.record("composer settings", _PANE)
         video: dict[str, Any] = {"aspects": [], "modes": {}}
+        first_model = None
         groups = (await self.pane())["groups"]
         modes = [_plain(o["t"]) for o in groups[1]]
         for mode in modes:
@@ -409,6 +411,7 @@ class Walker:
             await self.page.wait_for_timeout(600)
             await self.pane()
             video["modes"][mode] = {}
+            first_model = first_model or (names[0] if names else None)
             for name in names:
                 await self.pick_model(name)
                 state = await self.pane()
@@ -436,6 +439,11 @@ class Walker:
             "price_x1": state["price"],
         }
         await self.radio("Video")
+        # The last cell priced (x4 of the dearest model) can outrun the balance and put Flow's insufficient-credits
+        # warning where Start generation stands in the composer pages recorded next (survey 2026-09-30).
+        if first_model:
+            await self.pick_model(first_model)
+        await self.radio("x1")
         await self.page.keyboard.press("Escape")
         return {"measured": datetime.now().astimezone().strftime("%Y-%m-%d"), "video": video, "image": image}
 

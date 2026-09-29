@@ -2,6 +2,7 @@
 with the baselines in the repo, so a Flow update is found by a machine instead of by a failed paid run."""
 
 import ast
+import asyncio
 import json
 from pathlib import Path
 
@@ -293,3 +294,78 @@ def test_a_route_name_read_off_the_page_goes_through_the_same_privacy_filter():
     assert (
         survey.route_name("clip editor menu", "Download media", set(), 0) == "clip editor menu Download media"
     )
+
+
+class _Keys:
+    async def press(self, key):
+        return None
+
+
+class _SettingsPage:
+    keyboard = _Keys()
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+class _SettingsWalker(survey.Walker):
+    """The settings walk with Flow's panel faked: it opens on whatever tab the last run left, Image after gen_i2i."""
+
+    def __init__(self, tmp_path):
+        super().__init__(type("S", (), {"page": _SettingsPage()})(), "P", tmp_path)
+        self.log, self.tab, self.model, self.count = [], "Image", "Veo 3.1 - Quality", "x4"
+
+    async def record(self, route, scope=None):
+        self.log.append(("record", route, self.tab))
+
+    async def radio(self, text):
+        self.log.append(("radio", text))
+        if text in ("Image", "Video"):
+            self.tab = text
+        elif text.startswith("x"):
+            self.count = text
+        return True
+
+    async def pane(self):
+        tabs = [
+            {"t": "image Image", "on": self.tab == "Image"},
+            {"t": "videocam Video", "on": self.tab == "Video"},
+        ]
+        aspects = [{"t": "crop_9_16 9:16", "on": True}]
+        counts = [{"t": c, "on": c == self.count} for c in ("x1", "x4")]
+        if self.tab == "Image":
+            return {"groups": [tabs, aspects, counts], "price": 0}
+        return {"groups": [tabs, [{"t": "crop_free Frames", "on": True}], aspects, counts], "price": 12}
+
+    async def model_names(self):
+        return None, (["Nano Banana 2"] if self.tab == "Image" else ["Omni 1.1 Flash", "Veo 3.1 - Quality"])
+
+    async def pick_model(self, name):
+        self.log.append(("model", name))
+        self.model = name
+
+
+def _walk_settings(monkeypatch, tmp_path):
+    async def opened(page, label="settings"):
+        return ""
+
+    monkeypatch.setattr(survey.composer, "_open_settings", opened)
+    walker = _SettingsWalker(tmp_path)
+    asyncio.run(walker.walk_settings())
+    return walker
+
+
+def test_the_settings_panel_is_recorded_on_the_video_tab_whatever_tab_it_opened_on(monkeypatch, tmp_path):
+    """Survey 2026-09-30 reported Frames and Ingredients gone and three new ratios: the panel had opened on Image."""
+    walker = _walk_settings(monkeypatch, tmp_path)
+
+    recorded = [entry for entry in walker.log if entry[0] == "record"]
+    assert recorded == [("record", "composer settings", "Video")], walker.log
+
+
+def test_the_walk_leaves_the_composer_on_the_first_model_at_x1(monkeypatch, tmp_path):
+    """The last priced cell (x4 of the dearest model) outran the balance, so the composer pages that follow were
+    recorded with Flow's insufficient-credits warning in place of Start generation."""
+    walker = _walk_settings(monkeypatch, tmp_path)
+
+    assert (walker.tab, walker.model, walker.count) == ("Video", "Omni 1.1 Flash", "x1"), walker.log
