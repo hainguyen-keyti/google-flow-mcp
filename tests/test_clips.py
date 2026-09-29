@@ -2416,3 +2416,35 @@ def test_a_greyed_out_4k_is_refused_without_blaming_the_clip_model():
     assert "4K" in str(refused.value)
     assert "extend" not in str(refused.value).lower() and "veo" not in str(refused.value).lower()
     assert "item" not in page.clicked
+
+
+def test_download_rendition_refuses_a_clip_that_lives_only_inside_a_scene_before_opening_the_editor(
+    monkeypatch, tmp_path
+):
+    """Plan AA, measured 2026-09-29: an extension is listed with `listed: false` (it lives only in its scene), the
+    clip editor never opens for it, and clip_download waited 60 s for nothing. scene_download fetched it."""
+    records = [
+        {
+            "id": "m",
+            "workflow_id": "w",
+            "created": 1,
+            "url": "https://lh3/xxxxxxxxxxxxxxxxxxxxxxxx",
+            "listed": False,
+        }
+    ]
+    opened = []
+
+    async def fake_snapshot(session, project_id):
+        return (records, set())
+
+    async def fake_open(session, project_id, media_id):
+        opened.append(media_id)
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", _clickable_menu_item)
+
+    session = type("_S", (), {"page": _VersionPage()})()
+    with pytest.raises(LookupError, match="scene_download"):
+        asyncio.run(clips.download_rendition(session, "p", "m", "1080p", tmp_path))
+    assert opened == []

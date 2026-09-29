@@ -140,6 +140,9 @@ These are not suggestions; they are enforced in code and pinned by tests.
   `VIDEO_BROWSER_OFFSCREEN=0` to see the windows. Signing in (`gflow auth login`) always opens a visible window.
 - `clip_edit` does not read the live price line before clicking, unlike `gen_character`: the only guard is the
   balance read before and after.
+- Flow's Agent mode (the "Agent" chip in the prompt bar) blocks generation while on. The five gflow MCP tools and
+  `gen_character` turn it off first and back on after (about 19 s, or 35 s when it was on); the CLI and the editor
+  tools (`clip_extend`, `clip_edit`) do not, so turn it off with `agent_mode` before using them.
 - Trimming a clip's head or tail inside a scene is not implemented.
 - Deliberately out of scope: collections, media rename, media trash, project zip export, the Tools gallery,
   Flow's own agent mode beyond an on/off switch, Omni 360p and upscale, project settings, GIF export, share

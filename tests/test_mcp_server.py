@@ -11,6 +11,7 @@ from gflow_cli.api.transports.migrated_composer import R2V_DURATION_S
 from mcp.client.session import ClientSession
 from mcp.shared.exceptions import MCPError
 from mcp.shared.memory import create_client_server_memory_streams
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import cli, gen, mcp_server
 from video import session as session_mod
@@ -2606,3 +2607,133 @@ def test_clip_extend_tells_the_agent_to_fetch_the_new_clip_through_its_scene():
     # clip_download waited 60 s for an editor that never opened, and scene_download fetched the film.
     extend = served_tool_objects()["clip_extend"].description
     assert "scene_download" in extend and "HTTP 400" in extend, extend
+
+
+REAL_AGENT = {
+    name: mcp_server.Backend.__dict__[name]
+    for name in ("_agent_off", "_agent_restore")
+    if name in mcp_server.Backend.__dict__
+}
+
+
+def _agent_world(monkeypatch, tmp_path, *, chip_states, run_fails=False, chip_missing=False):
+    """The real Agent step over a fake set_mode: chip_states is what each set_mode call leaves the chip at."""
+    log = []
+    states = iter(chip_states)
+
+    async def fake_with(self, fn):
+        return await fn(object())
+
+    async def fake_set_mode(session, project_id, enabled):
+        if chip_missing:
+            raise PlaywrightTimeoutError(chip_missing)
+        was, now = next(states)
+        log.append(("set_mode", enabled, was, now))
+        return {"enabled": now, "was": was, "panel_closed": False, "rpcids": []}
+
+    async def fake_run_job(job, out_dir, **kwargs):
+        log.append(("run_job", job.kind))
+        if run_fails:
+            raise RuntimeError("gflow broke")
+        return {"job_id": job.job_id, "outputs": []}
+
+    for name, fn in REAL_AGENT.items():
+        monkeypatch.setattr(mcp_server.Backend, name, fn)
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.agent_mod, "set_mode", fake_set_mode)
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    return log
+
+
+def _call(name, arguments):
+    async def fn(s):
+        return await s.call_tool(name, arguments)
+
+    return with_client(fn)
+
+
+def test_a_gflow_generation_turns_agent_mode_off_first_and_back_on_after(monkeypatch, tmp_path):
+    """Plan AA. gflow dies with exit 25 while Flow's Agent chip is on (measured 2026-09-28), and a new user whose
+    project has it on could not generate at all. The chip sits in the prompt bar next to "+"."""
+    log = _agent_world(monkeypatch, tmp_path, chip_states=[(True, False), (False, True)])
+
+    result = _call("gen_t2i", {"prompt": "a cup", "project": "P"})
+
+    assert not result.is_error, _texts([result])
+    assert log == [("set_mode", False, True, False), ("run_job", "t2i"), ("set_mode", True, False, True)], log
+
+
+def test_agent_mode_that_was_off_is_left_off(monkeypatch, tmp_path):
+    log = _agent_world(monkeypatch, tmp_path, chip_states=[(False, False)])
+
+    result = _call("gen_t2v", {"prompt": "a cup", "project": "P", "job_id": "agent-off-1"})
+
+    assert not result.is_error, _texts([result])
+    assert log == [("set_mode", False, False, False), ("run_job", "t2v")], log
+
+
+def test_agent_mode_that_stays_on_stops_the_call_before_gflow_runs(monkeypatch, tmp_path):
+    log = _agent_world(monkeypatch, tmp_path, chip_states=[(True, True)])
+
+    result = _call("gen_t2v", {"prompt": "a cup", "project": "P", "job_id": "agent-stuck-1"})
+
+    assert result.is_error and "Agent" in _texts([result])[0], _texts([result])
+    assert ("run_job", "t2v") not in log
+    assert not (tmp_path / "ledger.jsonl").exists()
+
+
+def test_agent_mode_is_put_back_even_when_gflow_fails(monkeypatch, tmp_path):
+    log = _agent_world(monkeypatch, tmp_path, chip_states=[(True, False), (False, True)], run_fails=True)
+
+    result = _call("gen_t2i", {"prompt": "a cup", "project": "P"})
+
+    assert result.is_error and "gflow broke" in _texts([result])[0], _texts([result])
+    assert log[-1] == ("set_mode", True, False, True), log
+
+
+def test_a_missing_agent_chip_says_where_the_chip_lives(monkeypatch, tmp_path):
+    log = _agent_world(
+        monkeypatch,
+        tmp_path,
+        chip_states=[(False, False)],
+        chip_missing='Locator.wait_for: Timeout 15000ms exceeded. waiting for locator("button.agent-mode-chip, '
+        'flow-agent-mode-toggle-chip button").first to be visible',
+    )
+
+    result = _call("gen_t2v", {"prompt": "a cup", "project": "P", "job_id": "agent-missing-1"})
+
+    text = _texts([result])[0]
+    assert result.is_error and "prompt bar" in text and "nothing was spent" in text.lower(), text
+    assert log == []
+
+
+def test_every_tool_that_runs_gflow_says_agent_mode_is_turned_off_for_it():
+    # Plan AA: the set is every tool whose call reaches Backend.generate, read from the tool functions' own source.
+    import inspect
+
+    runs_gflow = {
+        name
+        for name, tool in mcp_server.server._tool_manager._tools.items()
+        if "_gen(" in inspect.getsource(tool.fn)
+    }
+    assert runs_gflow == {"gen_t2v", "gen_i2v", "gen_r2v", "gen_t2i", "gen_i2i"}, runs_gflow
+    tools = served_tool_objects()
+    assert [
+        name for name in sorted(runs_gflow) if "Agent mode is turned off" not in tools[name].description
+    ] == []
+
+
+def test_a_project_page_that_never_loads_is_not_blamed_on_the_agent_chip(monkeypatch, tmp_path):
+    """Review of plan AA, e1: a wrong project id times out on the project page, not on the chip."""
+    _agent_world(
+        monkeypatch,
+        tmp_path,
+        chip_states=[(False, False)],
+        chip_missing='Locator.wait_for: Timeout 60000ms exceeded. waiting for locator("flow-project-page")',
+    )
+
+    result = _call("gen_t2v", {"prompt": "a cup", "project": "P", "job_id": "agent-no-page-1"})
+
+    text = _texts([result])[0]
+    assert result.is_error and "flow-project-page" in text and "prompt bar" not in text, text

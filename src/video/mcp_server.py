@@ -18,6 +18,7 @@ from gflow_cli.api.video import VideoModel, reference_cap_for, validate_duration
 from gflow_cli.data.redaction import redact_error_detail
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen as gen_mod
 from video.flow import agent as agent_mod
@@ -575,11 +576,49 @@ class Backend:
             refs=[Path(r) for r in refs or []],
         )
         target = Path(out_dir) if out_dir else self.out_dir
-        return await self._spend_once(
-            job_id,
-            target,
-            lambda: gen_mod.run_job(job, target, profile=self.profile),
-        )
+
+        async def run() -> dict[str, Any]:
+            was_on = await self._agent_off(project)
+            try:
+                result = await gen_mod.run_job(job, target, profile=self.profile)
+            except BaseException:
+                if was_on:
+                    await self._agent_restore(project)
+                raise
+            if was_on:
+                result["agent_mode_restored"] = await self._agent_restore(project)
+            return result
+
+        return await self._spend_once(job_id, target, run)
+
+    async def _agent_off(self, project: str) -> bool:
+        """gflow dies with exit 25 while Flow's Agent chip is on (measured 2026-09-28), so it goes off first; returns
+        whether it was on. Anything short of off stops the call here, before gflow or the ledger is touched."""
+        try:
+            state = await self._with(lambda s: agent_mod.set_mode(s, project, False))
+        except PlaywrightTimeoutError as exc:
+            # Only the chip's own wait: a project page that never loads (a wrong id) keeps its own error (review, e1).
+            if "agent-mode-chip" not in str(exc):
+                raise
+            raise LookupError(
+                "Flow's Agent chip never showed in this project, so Agent mode could not be checked; it is the "
+                "'Agent' button in the prompt bar at the bottom of the project page, right of the '+' button, and "
+                "gflow cannot generate while it is on. Nothing was run and nothing was spent."
+            ) from exc
+        if state.get("enabled"):
+            raise RuntimeError(
+                "Flow's Agent mode stayed on after the chip was clicked, and gflow cannot generate while it is on. "
+                "Nothing was run and nothing was spent."
+            )
+        return bool(state.get("was"))
+
+    async def _agent_restore(self, project: str) -> bool:
+        """Put Agent mode back on after the run; never raises, since it follows a call that may have spent."""
+        try:
+            state = await self._with(lambda s: agent_mod.set_mode(s, project, True))
+            return bool(state.get("enabled"))
+        except Exception:  # noqa: BLE001
+            return False
 
 
 class TellingServer(MCPServer):
@@ -636,6 +675,11 @@ server = TellingServer(
     ),
 )
 
+_AGENT_NOTE = (
+    " Flow's Agent mode is turned off in the project before gflow runs, since gflow cannot generate while it is on, "
+    "and turned back on afterwards if it was on; measured 2026-09-29, this adds about 19 s, or about 35 s when it "
+    "was on."
+)
 _BALANCE_MOVED = (
     "When the balance moved by anything other than the measured price, the answer carries balance_moved "
     "{kind, measured, moved, note}, or, when the call ends in an error, the job's ledger row does: read it before "
@@ -1259,7 +1303,7 @@ async def _gen(kind: str, **kwargs: Any) -> str:
         "Text to video via gflow. It spends credits and is ledgered, measured on the PRO plan: omni-flash 10 s "
         "x1 = 15 credits (the default when model is omitted), veo-lite 8 s x1 = 10 credits, and count "
         "multiplies it (veo-lite x2 = 20 credits). Allow 2-5 min: the gflow job took 74-85 s, plus a balance "
-        "read before and after." + _JOB_ID_RULE
+        "read before and after." + _JOB_ID_RULE + _AGENT_NOTE
     ),
 )
 async def gen_t2v(
@@ -1300,6 +1344,7 @@ async def gen_t2v(
         "to your images: leaving it out means 9:16, gflow's own default, and Flow CROPS a frame of another shape "
         "to fit, which pushed the subject of a 16:9 photo half out of the left edge. Allow 2-5 min."
         + _JOB_ID_RULE
+        + _AGENT_NOTE
     ),
 )
 async def gen_i2v(
@@ -1345,7 +1390,7 @@ async def gen_i2v(
         "with flow_upload and pass their media ids to gen_character. "
         "omni-flash takes up to 7 reference images, veo-lite, veo-fast and veo-lite-lp up to 3, veo-quality none; "
         "more is refused before anything is spent. "
-        "Allow 2-5 min: that omni-flash run took 292 s end to end." + _JOB_ID_RULE
+        "Allow 2-5 min: that omni-flash run took 292 s end to end." + _JOB_ID_RULE + _AGENT_NOTE
     ),
 )
 async def gen_r2v(
@@ -1447,7 +1492,10 @@ async def gen_character(
 
 @server.tool(
     name="gen_t2i",
-    description="Text to image via gflow: 0 credits with the default nano2 model, but it draws on a daily image quota.",
+    description=(
+        "Text to image via gflow: 0 credits with the default nano2 model, but it draws on a daily image quota."
+        + _AGENT_NOTE
+    ),
 )
 async def gen_t2i(
     prompt: str,
@@ -1466,7 +1514,7 @@ async def gen_t2i(
     name="gen_i2i",
     description=(
         "Reference images to image via gflow: 0 credits with the default nano2 model, but it draws on a daily "
-        "image quota."
+        "image quota." + _AGENT_NOTE
     ),
 )
 async def gen_i2i(

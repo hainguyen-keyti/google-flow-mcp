@@ -183,6 +183,11 @@ async def _select_version(
             raise ValueError(f"version {workflow_id} of media {media_id} has no url in the listing")
     else:
         wanted = download_mod.latest_version(records, media_id)
+    if wanted.get("listed") is False:
+        raise LookupError(
+            f"media {media_id} lives only inside a scene (an extension does), and the clip editor cannot open it; "
+            "fetch it with scene_download on that scene (scene_list, then scene_clips to find it). Nothing was spent."
+        )
     # Reading the listing leaves the page on the project grid (plan W, 2026-09-28), so the editor opens after it.
     await _open(session, project_id, media_id)
     tail = str(wanted["url"])[-24:]
