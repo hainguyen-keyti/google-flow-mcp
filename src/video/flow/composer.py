@@ -449,8 +449,12 @@ async def _open_settings(page: Any, label: str = "settings") -> str:
 
 
 _VIDEO_TAB = re.compile(r"^\W*[a-z_0-9]*\s*Video\s*$")
-_VIDEO_CHECKED_JS = """() => [...document.querySelectorAll('.cdk-overlay-pane [role=radio]')]
-  .some(o => /(^|\\s)Video\\s*$/.test((o.textContent || '').trim()) && o.getAttribute('aria-checked') === 'true')"""
+# One pattern for the click and the page-side check: the radio's textContent glues its icon name on ("videocamVideo").
+_VIDEO_CHECKED_JS = (
+    "() => [...document.querySelectorAll('.cdk-overlay-pane [role=radio]')].some(o => new RegExp("
+    + json.dumps(_VIDEO_TAB.pattern)
+    + ").test((o.textContent || '').trim()) && o.getAttribute('aria-checked') === 'true')"
+)
 
 
 async def _select_video(page: Any) -> bool:

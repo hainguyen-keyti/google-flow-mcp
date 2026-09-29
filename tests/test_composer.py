@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 
 import pytest
@@ -305,3 +306,13 @@ def test_an_error_that_is_not_a_404_is_not_hidden_behind_the_editor(monkeypatch,
     with pytest.raises(RuntimeError, match="403"):
         asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "M1_ab", project_id="P"))
     assert editor == []
+
+
+def test_the_video_check_in_the_page_uses_the_pattern_that_matches_flows_radio_text():
+    """Live dry run 2026-09-30: the Video click took, yet the check read False. The radio's textContent is the icon
+    name glued to the label ('videocamVideo'), and the page-side regex wanted a space the fake never questioned."""
+    assert json.dumps(composer._VIDEO_TAB.pattern) in composer._VIDEO_CHECKED_JS
+    for text in ("videocamVideo", "videocam Video", "Video"):
+        assert composer._VIDEO_TAB.search(text), text
+    for text in ("imageImage", "Video generation off", "chrome_extensionIngredients"):
+        assert not composer._VIDEO_TAB.search(text), text
