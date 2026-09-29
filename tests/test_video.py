@@ -562,3 +562,43 @@ def test_the_driver_asks_the_body_check_for_the_resolution_it_pinned(monkeypatch
 
     _run(model="veo-lite")
     assert calls["submit"]["watch"].resolution is None
+
+
+class _LatePickerPage(_PickerPage):
+    """A picker whose search results show the just-uploaded image only after a few looks (measured 2026-09-29)."""
+
+    def __init__(self, tiles, after, looks_before):
+        super().__init__(tiles, after)
+        self.looks_before = looks_before
+
+    def locator(self, selector):
+        if "img" in selector:
+            self.looks_before -= 1
+            if self.looks_before >= 0:
+                return _Loc(self, [{"src": "https://x/other-tile-000000000000000000", "what": "tile other"}])
+        return super().locator(selector)
+
+
+def test_a_frame_just_uploaded_is_waited_for_in_the_picker():
+    """Measured 2026-09-29: the picker did not list v4_s3_last.png right after flow_upload; the same call a moment later
+    found it."""
+    ref = video.frame_references([TEAPOT, CUP], RECORDS, "m-teapot", None)[0]
+    page = _LatePickerPage(["https://x/" + RECORDS[0]["url"][-40:]], [], looks_before=3)
+
+    asyncio.run(video.pin_frame(page, "Start", ref))
+
+    assert page.clicked[-1] == "tile " + RECORDS[0]["url"][-6:], page.clicked
+
+
+def test_a_frame_the_picker_never_shows_is_still_refused_without_a_click():
+    ref = video.frame_references([TEAPOT, CUP], RECORDS, "m-teapot", None)[0]
+    page = _LatePickerPage(["https://x/" + RECORDS[0]["url"][-40:]], [], looks_before=10_000)
+
+    with pytest.raises(LookupError, match="no tile"):
+        asyncio.run(video.pin_frame(page, "Start", ref))
+    assert not any(str(c).startswith("tile") and "other" not in str(c) for c in page.clicked)
+
+
+def test_two_images_with_one_title_are_refused_with_the_way_out():
+    with pytest.raises(LookupError, match="rename the file"):
+        video.frame_references([TEAPOT, CUP | {"title": TEAPOT["title"]}], RECORDS, "m-teapot", None)

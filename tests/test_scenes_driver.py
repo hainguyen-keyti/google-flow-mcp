@@ -1445,6 +1445,7 @@ class _Editor:
         # Listing reads that still miss a clip Flow already answered for (measured 2026-09-29: all four adds of a film).
         self.stale_listings = 0
         self.lagging = None
+        self.old_aspect = None
         self.selects_on_click = True
         self.row_click_selects = None
         self.insert_at = None
@@ -1504,7 +1505,11 @@ class _Editor:
             [media_id, None, None, [title, [1789600000, 0], None, None, f"wf-{media_id[:8]}"], PROJECT]
             for media_id, title in self.media()
         ]
-        scene = [EDITOR_SCENE, "pe-scene", None, [1789637131, 0], [1789637141, 0], self.aspect, None, []]
+        listed_aspect = self.aspect
+        if self.old_aspect is not None and self.stale_listings > 0:
+            listed_aspect = self.old_aspect
+            self.stale_listings -= 1
+        scene = [EDITOR_SCENE, "pe-scene", None, [1789637131, 0], [1789637141, 0], listed_aspect, None, []]
         entries = [
             [
                 [
@@ -1924,6 +1929,8 @@ class _Editor:
 
         def reply():
             if self.stores:
+                if self.stale_listings:
+                    self.old_aspect = self.aspect
                 self.aspect = wanted
             self._emit(
                 "response", _Answer(call, "BpMsoe", [[EDITOR_SCENE, "pe-scene", None, None, None, wanted]])
@@ -3155,3 +3162,16 @@ def test_add_clip_reads_the_listing_again_while_it_still_misses_the_clip_flow_an
 
     assert result["answered"] is True and result["position"] == 1
     assert session.urls.count("listing") >= 3
+
+
+def test_set_aspect_reads_the_listing_again_while_it_still_shows_the_old_ratio(monkeypatch):
+    """Measured 2026-09-29 (film Toi nay mac gi): the scene was 9:16 a moment later, yet the tool reported the listing
+    still read 16:9, the same lag scene_add_clip had."""
+    page = _Editor([WALKING], clips=[WALKING], aspect=2)
+    page.stale_listings = 2
+    session = _editor(monkeypatch, page)
+
+    result = asyncio.run(scenes.set_aspect(session, PROJECT, EDITOR_SCENE, "9:16"))
+
+    assert result["aspect"] == "9:16" and result["changed"] is True
+    assert page.clicked == ["Toggle aspect ratio"]

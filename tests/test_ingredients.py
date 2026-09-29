@@ -3074,3 +3074,10 @@ def test_generate_from_images_alone_still_submits_in_ingredients_mode_under_the_
     assert captured["mode"] == "Ingredients" and captured["kind"] == "character"
     assert captured["expected_credits"] == 15
     assert [r.id for r in captured["watch"].references] == [MEDIA]
+
+
+def test_two_images_with_one_title_are_refused_with_the_way_out():
+    """Plan AE: the refusal named the problem but not the fix, and the fix is a rename before flow_upload."""
+    twin = _image(media="m-twin")
+    with pytest.raises(LookupError, match="rename the file"):
+        ingredients.resolve([_character()], [_image(), twin], [_record()], [], [MEDIA], "omni-flash")

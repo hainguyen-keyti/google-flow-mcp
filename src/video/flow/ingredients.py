@@ -174,7 +174,8 @@ def resolve(
             raise LookupError(f"image {media_id} has no title to mention")
         if titles.count(_norm(title)) > 1:
             raise LookupError(
-                f"{titles.count(_norm(title))} images are titled {title!r}, which the picker cannot tell apart"
+                f"{titles.count(_norm(title))} images are titled {title!r}, which the picker cannot tell apart: "
+                "rename the file (a unique name) and flow_upload it again, then pass the new media id"
             )
         workflows = frozenset(
             each["workflow_id"] for each in records if each.get("id") == media_id and each.get("workflow_id")

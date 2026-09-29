@@ -112,6 +112,8 @@ SWAP = "Swap first and last frames"
 FILLED = "image ingredient"
 TAIL = 24
 SLOT_WAIT_MS = 20_000
+PICK_WAIT_MS = 30_000
+PICK_POLL_MS = 2_000
 
 
 @dataclass(frozen=True)
@@ -146,7 +148,8 @@ def frame_references(
             raise LookupError(f"image {media_id} has no title for the frame picker's search")
         if titles.count(title.casefold()) > 1:
             raise LookupError(
-                f"{titles.count(title.casefold())} images are titled {title!r}; the picker cannot tell them apart"
+                f"{titles.count(title.casefold())} images are titled {title!r}; the picker cannot tell them apart: "
+                "rename the file (a unique name) and flow_upload it again, then pass the new media id"
             )
         mine = [r for r in records if r.get("id") == media_id]
         urls = [str(r.get("url") or "") for r in mine if r.get("url")]
@@ -194,13 +197,20 @@ async def pin_frame(page: Any, slot: str, ref: FrameRef) -> None:
         await search.click(timeout=8_000)
         await page.keyboard.insert_text(ref.title)
         await page.wait_for_timeout(3_000)
-    tiles = page.locator(".cdk-overlay-pane img, [role=dialog] img")
-    for index in range(await tiles.count()):
-        tile = tiles.nth(index)
-        if (await tile.get_attribute("src") or "").endswith(ref.tail):
-            await tile.click(timeout=8_000)
-            await page.wait_for_timeout(3_000)
-            return
+    # An image uploaded a moment ago reaches the picker's results late (measured 2026-09-29), so look again for a while.
+    waited = 0
+    while True:
+        tiles = page.locator(".cdk-overlay-pane img, [role=dialog] img")
+        for index in range(await tiles.count()):
+            tile = tiles.nth(index)
+            if (await tile.get_attribute("src") or "").endswith(ref.tail):
+                await tile.click(timeout=8_000)
+                await page.wait_for_timeout(3_000)
+                return
+        if waited >= PICK_WAIT_MS:
+            break
+        await page.wait_for_timeout(PICK_POLL_MS)
+        waited += PICK_POLL_MS
     raise LookupError(f"the {slot} picker showed no tile of {ref.title!r} ({ref.id}); nothing was pinned")
 
 

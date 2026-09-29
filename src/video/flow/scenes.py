@@ -313,6 +313,12 @@ async def set_aspect(session: FlowSession, project_id: str, scene_id: str, aspec
             "read scene_clips before trying again"
         )
     after = await timeline(session, project_id, scene_id)
+    # The listing lags Flow's answer, as it does for an added clip (measured 2026-09-29: the scene was 9:16 a moment later).
+    waited = 0
+    while after["aspect"] != aspect and waited < LISTING_LAG_MS:
+        await session.page.wait_for_timeout(LISTING_POLL_MS)
+        waited += LISTING_POLL_MS
+        after = await timeline(session, project_id, scene_id)
     if after["aspect"] != aspect:
         raise RuntimeError(
             f"clicked Toggle aspect ratio once; the listing still reads {after['aspect']} for scene {scene_id}"
