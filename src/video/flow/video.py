@@ -207,6 +207,14 @@ async def pin_frame(page: Any, slot: str, ref: FrameRef) -> None:
 KEY_LENGTH = re.compile(r"_(\d+)s(?:_|$)")
 
 
+def _resolution_matches(resolution: str | None, keys: list[str]) -> bool:
+    """Measured 2026-09-29 (jobs ab-1, ab-4): a 360p submit's key ends in _360p and a 720p one names no resolution."""
+    if resolution is None:
+        return True
+    low = any(key.endswith("_360p") for key in keys)
+    return low if resolution == "360p" else not low
+
+
 OTHER_MODES = ("_i2v", "_r2v", "interpolation", "extension")
 
 
@@ -225,8 +233,10 @@ class VideoBodyCheck:
     """The submit request as it leaves: its model key must name the mode asked (t2v, i2v, r2v) and, when the key
     carries a length, that length; every reference's id must ride in the body."""
 
-    def __init__(self, kind: str, references: list[Any], duration: int | None) -> None:
-        self.kind, self.references, self.duration = kind, references, duration
+    def __init__(
+        self, kind: str, references: list[Any], duration: int | None, resolution: str | None = None
+    ) -> None:
+        self.kind, self.references, self.duration, self.resolution = kind, references, duration, resolution
         self.seen: dict[str, Any] | None = None
 
     def on_request(self, request: Any) -> None:
@@ -255,7 +265,8 @@ class VideoBodyCheck:
             "ok": bool(body)
             and _mode_matches(self.kind, keys)
             and not missing
-            and (self.duration is None or not lengths or lengths == [self.duration]),
+            and (self.duration is None or not lengths or lengths == [self.duration])
+            and _resolution_matches(self.resolution, keys),
         }
 
     def report(self) -> dict[str, Any]:
@@ -316,7 +327,9 @@ async def generate(
             resolution=resolution if offers_length else None,
             max_credits=max_credits if max_credits is not None else table,
             table_credits=table or 0,
-            body_check_for=lambda references: VideoBodyCheck("r2v", references, length),
+            body_check_for=lambda references: VideoBodyCheck(
+                "r2v", references, length, resolution if offers_length else None
+            ),
         )
         return {"mode": mode, "table_credits": table, **result}
 
@@ -364,7 +377,7 @@ async def generate(
             )
         return {"slots": filled, "prompt_text": text}
 
-    check = VideoBodyCheck(kind, refs, length)
+    check = VideoBodyCheck(kind, refs, length, resolution if offers_length else None)
     was = (await agent.set_mode(session, project_id, False)).get("was")
     try:
         result = await composer._submit(

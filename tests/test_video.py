@@ -530,3 +530,35 @@ def test_x2_keeps_waiting_while_only_one_clip_is_listed(monkeypatch, tmp_path):
     )
 
     assert sorted(o["media_id"] for o in result["outputs"]) == ["m-w-a", "m-w-b"]
+
+
+@pytest.mark.parametrize(
+    ("key", "resolution", "ok"),
+    [
+        # Measured 2026-09-29 (plan AB, jobs ab-1 and ab-4): a 360p submit's key ends in _360p, a 720p one carries none.
+        ("abra_t2v_4s_360p", "360p", True),
+        ("abra_t2v_4s", "720p", True),
+        ("abra_t2v_4s", "360p", False),
+        ("abra_t2v_4s_360p", "720p", False),
+        ("veo_3_1_t2v_lite", None, True),
+    ],
+)
+def test_the_body_check_holds_the_submit_to_the_resolution_asked(key, resolution, ok):
+    check = video.VideoBodyCheck("t2v", [], None, resolution)
+
+    class _Request:
+        url = "https://flow.google.com/_/x/data/batchexecute?rpcids=YhhmEf"
+        post_data = f"f.req=%5B%22{key}%22%5D"
+
+    check.on_request(_Request())
+    assert check.report()["ok"] is ok, check.report()
+
+
+def test_the_driver_asks_the_body_check_for_the_resolution_it_pinned(monkeypatch):
+    calls = _driver_world(monkeypatch)
+
+    _run(model="omni-flash", resolution="360p", duration=4)
+    assert calls["submit"]["watch"].resolution == "360p"
+
+    _run(model="veo-lite")
+    assert calls["submit"]["watch"].resolution is None
