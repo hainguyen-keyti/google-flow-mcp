@@ -31,6 +31,7 @@ from video.flow import projects as projects_mod
 from video.flow import reader
 from video.flow import scenes as scenes_mod
 from video.flow import uploads as uploads_mod
+from video.flow import video as video_mod
 from video.session import FlowSession
 
 # Left empty, gflow lets Flow reuse the composer's last model (cli_video.py:185-196), so the price was unknowable.
@@ -544,6 +545,20 @@ class Backend:
         # A dry run clicks nothing and writes no row, so there is no job to guard.
         return await run() if dry_run else await self._spend_once(job_id, target, run)
 
+    async def gen_video(self, project: str, prompt: str, **options: Any) -> dict[str, Any]:
+        out_dir = options.pop("out_dir", None)
+        job_id = options.get("job_id")
+        dry_run = options.get("dry_run", False)
+        target = self._editor_out_dir(out_dir)
+
+        def run() -> Awaitable[Any]:
+            return self._with(
+                lambda s: video_mod.generate(s, project, prompt=prompt, out_dir=target, **options)
+            )
+
+        # A dry run clicks nothing and writes no row, so there is no job to guard.
+        return await run() if dry_run else await self._spend_once(job_id, target, run)
+
     async def generate(
         self,
         *,
@@ -655,8 +670,10 @@ server = TellingServer(
     "video",
     instructions=(
         "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
-        "recorded in the ledger (out/ledger.jsonl by default): gen_t2v, gen_i2v, gen_r2v, gen_character, "
-        "clip_extend, clip_edit, and agent_send (may spend). clip_download at 4k is a Flow upscale its price "
+        "recorded in the ledger (out/ledger.jsonl by default): gen_video, gen_t2v, gen_i2v, gen_r2v, "
+        "gen_character, clip_extend, clip_edit, and agent_send (may spend). gen_video covers every video option "
+        "Flow's composer offers (every model, 360p/720p, 4-10 s, x1-x4, first and last frame, ingredients) and "
+        "needs max_credits for a real run. clip_download at 4k is a Flow upscale its price "
         "table offers only from the Ultra plan, at 50 credits; on this Pro account Flow greys it out, so it is "
         "refused before any click. gen_t2i and gen_i2i are credit-free but draw on a daily image quota. Check a tool's description "
         "for its cost before calling it: each carries what was MEASURED here and, where Flow's published table "
@@ -1486,6 +1503,100 @@ async def gen_character(
     return _json(
         await backend.gen_character(
             project, prompt, characters, media_ids, model, aspect, dry_run, job_id, out_dir, duration
+        )
+    )
+
+
+def _video_options() -> str:
+    """The models, settings and surveyed prices, written from flow_options.json so the description never drifts."""
+    video = video_mod.VIDEO
+    parts = []
+    for name, entry in video["models"].items():
+        prices = entry["price_x1"]
+        if entry["durations"]:
+            cells = ", ".join(
+                f"{r} " + "/".join(f"{d}s {prices[f'{r} {d}s']}" for d in entry["durations"])
+                for r in entry["resolutions"]
+            )
+            parts.append(f"{name} ({entry['label']}): {cells}")
+        else:
+            parts.append(f"{name} ({entry['label']}): {prices['']} credits, 8 s, 720p")
+    return (
+        f"Models and x1 prices from Flow's price line on {video_mod.OPTIONS['measured']}: "
+        + "; ".join(parts)
+        + f". count {video['counts'][0]}-{video['counts'][-1]} multiplies the price; aspect one of {video['aspects']}."
+    )
+
+
+@server.tool(
+    name="gen_video",
+    description=(
+        "One video from Flow's composer with any option it offers; it spends credits and is ledgered. Text alone "
+        "runs Frames; start_frame (and end_frame) are project image media ids for the first and last frame; "
+        "characters (entity ids) and media_ids (project images) run Ingredients. Frames and ingredients do not mix. "
+        + _video_options()
+        + " resolution and duration apply to omni-flash only (defaults 720p and 8 s). The money guard is Flow's own "
+        "price line, read right before the single click: a real run needs max_credits and is refused when the live "
+        "price is over it; dry_run=true reads that price and the settings for free, clicks nothing and needs no job_id "
+        "or max_credits. Every setting is read back before the click, and the submit request is checked afterwards "
+        "for the mode and length asked: a mismatch is reported as an error even though it was paid. x2-x4 return "
+        "every clip in outputs. Flow's Agent mode is turned off for the run and put back after. out_dir must be "
+        "inside out/. Allow 3-8 min for a real run, 1-2 min for a dry run." + _BALANCE_MOVED + _JOB_ID_RULE
+    ),
+)
+async def gen_video(
+    project: str,
+    prompt: str,
+    job_id: str | None = None,
+    max_credits: int | None = None,
+    model: str = VIDEO_DEFAULT_MODEL,
+    aspect: str = "9:16",
+    resolution: str | None = None,
+    duration: int | None = None,
+    count: int = 1,
+    start_frame: str | None = None,
+    end_frame: str | None = None,
+    characters: list[str] | None = None,
+    media_ids: list[str] | None = None,
+    dry_run: bool = False,
+    out_dir: str | None = None,
+) -> str:
+    _require(project, "project")
+    _require(prompt, "prompt")
+    _one_line(prompt, "prompt")
+    wanted = [*(characters or []), *(media_ids or []), *(x for x in (start_frame, end_frame) if x)]
+    if any(not value or not value.strip() for value in wanted):
+        raise ValueError("frame, character and media ids must not be blank")
+    filled_resolution, filled_duration = video_mod.defaults(model, resolution, duration)
+    video_mod.check_settings(
+        model=model, resolution=filled_resolution, duration=filled_duration, count=count, aspect=aspect
+    )
+    video_mod.mode_for(
+        start_frame=start_frame, end_frame=end_frame, characters=characters or [], media_ids=media_ids or []
+    )
+    if not dry_run:
+        _require(job_id or "", "job_id")
+        if max_credits is None:
+            raise ValueError("max_credits is required for a real run: the most credits this call may spend")
+        if max_credits < 1:
+            raise ValueError(f"max_credits must be at least 1, got {max_credits}")
+    return _json(
+        await backend.gen_video(
+            project,
+            prompt,
+            job_id=job_id,
+            max_credits=max_credits,
+            model=model,
+            aspect=aspect,
+            resolution=resolution,
+            duration=duration,
+            count=count,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            characters=characters or [],
+            media_ids=media_ids or [],
+            dry_run=dry_run,
+            out_dir=out_dir,
         )
     )
 

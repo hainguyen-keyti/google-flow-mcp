@@ -1,4 +1,4 @@
-# Manual test of the `video` MCP server: 43 tools, with prices and guard rails
+# Manual test of the `video` MCP server: 44 tools, with prices and guard rails
 
 A pass to run by hand, or to hand to another agent that calls the tools over MCP. Every result shape below was
 **measured on a real account** between 2026-09-14 and 2026-09-29, not inferred from the code. For the generated
@@ -44,7 +44,7 @@ If tier 0 is red, stop: the fault is below anything you would test by hand.
 **`project_delete` permanently deletes clips, ingredients and prompts.** Read the id twice before calling it. Never
 paste a real project's id into this tool.
 
-## 3. The 43 tools
+## 3. The 44 tools
 
 Prices were measured on the Pro plan. Groups A and B are safe on any project; group C belongs in the scratch project.
 
@@ -99,7 +99,7 @@ Prices were measured on the Pro plan. Groups A and B are safe on any project; gr
 
 ### D. Spends credits, run only on purpose
 
-All 7 spending tools **require a `job_id`** (except `gen_character` with `dry_run=true`, which clicks nothing). A
+All 8 spending tools **require a `job_id`** (except `gen_character` and `gen_video` with `dry_run=true`, which click nothing). A
 `job_id` that already has any row in any `ledger.jsonl` under `out/` (any letter case in the file name) is refused
 before a browser opens; a `job_id` that looks like a session secret (a cookie name or an `Authorization` header) is
 refused; a `job_id` running in another call is refused, and then you wait and call again with the SAME `job_id`, never
@@ -112,6 +112,7 @@ moved by anything other than the measured price; when the call ends in an error,
 
 | Tool | Measured price | Notes |
 |---|---|---|
+| `gen_video` | Flow's live price line, which must not exceed the `max_credits` you pass. Surveyed 2026-09-29: Omni 1.1 Flash 720p 4/6/8/10 s = 7/10/12/15, 360p = 4/5/6/7; Veo 3.1 Lite 10, Fast 20, Quality 100 (8 s, 720p); x2-x4 multiply | every video option in one tool. Text alone runs Frames; `start_frame` and `end_frame` (project image media ids) fill Frames' Start and End, the picker tile chosen by the image's listing url; `characters` and `media_ids` run Ingredients. `model`, `aspect`, `resolution` and `duration` (omni-flash only), `count` 1-4. **Call `dry_run=true` first**: $0, returns the live quote and the settings. A real run needs `job_id` and `max_credits`; the settings are read back before the click and the submit body is checked afterwards for the mode and length asked |
 | `gen_t2i`, `gen_i2i` | **0 credits** (nano2) | counts against a daily image quota, not credits |
 | `gen_t2v` | **15** with no model (omni-flash 10 s, count 1); **10** with `model="veo-lite"` (8 s) | `count` multiplies the price (veo-lite `count=2` is 20); `count` is 1-4, `aspect` only `9:16` or `16:9` |
 | `gen_r2v` | **12** with no model (omni-flash, always 8 s, measured 2026-09-15); **10** with `model="veo-lite"` | through gflow r2v runs 8 s only: leave `duration` out. For 10 s from images, upload them and use `gen_character` with `media_ids`. Images: omni-flash up to 7, veo-lite and veo-fast up to 3, veo-quality none; more is refused before any spend. Flow refuses images of people in underwear |

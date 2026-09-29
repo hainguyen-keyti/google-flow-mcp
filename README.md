@@ -13,7 +13,7 @@ not been measured, it says so.
 
 ## What it is, and what it is not
 
-**It is** a control layer: 43 MCP tools plus a CLI, with a spend ledger, a double-charge guard, and prices in
+**It is** a control layer: 44 MCP tools plus a CLI, with a spend ledger, a double-charge guard, and prices in
 every tool description.
 
 **It is not** a video maker. The script, the shot list, the camera angles and the quality of the result are the
@@ -76,7 +76,7 @@ cp .mcp.json.example .mcp.json
 ```
 
 Edit the copy if `uv` is not on your PATH, then open the folder with an MCP client (Claude Code reads
-`.mcp.json` from the project root). The server serves **43 tools**; every description carries its price.
+`.mcp.json` from the project root). The server serves **44 tools**; every description carries its price.
 
 A server that is already running does **not** pick up new code, and an open session keeps the old tool
 descriptions: after changing anything here, start a new session.
@@ -91,6 +91,7 @@ guess about; the tool says so too.
 
 | Action | Credits |
 |---|---|
+| `gen_video`: any option Flow's composer offers, guarded by Flow's live price line and your `max_credits` | Omni 1.1 Flash 720p 4/6/8/10 s: 7/10/12/15; 360p: 4/5/6/7; Veo 3.1 Lite 10, Fast 20, Quality 100 (8 s); x2-x4 multiply (Flow's price line, 2026-09-29) |
 | `gen_t2v` / `gen_r2v`, veo-lite, 8 s | 10 |
 | `gen_t2v` / `gen_i2v`, omni-flash, 10 s | 15 |
 | `gen_r2v`, omni-flash, 8 s (the only length gflow offers it) | 12 |

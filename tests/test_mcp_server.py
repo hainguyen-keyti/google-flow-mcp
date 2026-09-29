@@ -68,6 +68,8 @@ EXPECTED_TOOLS = {
     "clip_extend",
     "clip_edit",
     "clip_reconcile",
+    # Plan AB: one tool that covers every video option Flow's composer offers, 43 to 44 on purpose.
+    "gen_video",
     "flow_uploads",
 }
 
@@ -146,6 +148,7 @@ TOOL_CALLS: dict[str, dict] = {
     "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"},
     "gen_t2i": {"prompt": "a boat", "project": "P"},
     "gen_i2i": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P"},
+    "gen_video": {"prompt": "a boat", "project": "P", "job_id": "job-video", "max_credits": 20},
     "gen_character": {
         "prompt": "a boat",
         "project": "P",
@@ -536,10 +539,19 @@ def test_the_instructions_do_not_tell_an_agent_it_cannot_create_projects():
 
 
 # The owner's roster of tools that move money (DECISIONS 2026-09-15). gen_t2i and gen_i2i are credit-free.
-SPENDING_TOOLS = {"gen_t2v", "gen_i2v", "gen_r2v", "clip_extend", "clip_edit", "agent_send", "gen_character"}
+SPENDING_TOOLS = {
+    "gen_t2v",
+    "gen_i2v",
+    "gen_r2v",
+    "clip_extend",
+    "clip_edit",
+    "agent_send",
+    "gen_character",
+    "gen_video",
+}
 # A tool whose dry_run quotes for free needs no job_id to quote (plan character-generation, DECISIONS 2026-09-16); its
 # real run is held to the job_id rule by test_gen_character_refuses_a_real_run_without_a_job_id_before_a_browser_opens.
-DRY_RUN_QUOTES = {"gen_character"}
+DRY_RUN_QUOTES = {"gen_character", "gen_video"}
 
 
 def served_tool_objects():
@@ -769,7 +781,7 @@ def test_an_explicit_duration_is_sent_as_given(monkeypatch, tmp_path):
 # Every served tool that takes an out_dir must appear in one of these two sets, and the test below reads the
 # served schemas so neither can drift the way a hand-typed list did: clip_download sat outside the audit for a
 # week while a commit called flow_download "the last tool" without a guard (review 2026-09-18).
-EDITOR_OUT_DIR_TOOLS = {"clip_extend", "clip_edit", "gen_character"}
+EDITOR_OUT_DIR_TOOLS = {"clip_extend", "clip_edit", "gen_character", "gen_video"}
 FILE_OUT_DIR_TOOLS = {"flow_download", "clip_download", "clip_reconcile", "scene_download"}
 
 SPEND_CALLS = {
@@ -780,6 +792,7 @@ SPEND_CALLS = {
     "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt", "job_id": "job-edit"},
     "agent_send": {"project_id": "P", "message": "hello", "job_id": "job-agent"},
     "gen_character": {"prompt": "a boat", "project": "P", "characters": ["E"], "job_id": "job-character"},
+    "gen_video": {"prompt": "a boat", "project": "P", "job_id": "job-video", "max_credits": 20},
 }
 
 
@@ -810,6 +823,12 @@ def _spending_backend(monkeypatch, tmp_path):
     async def fake_character(session, project_id, **kwargs):
         reached.append(("gen_character", kwargs.get("job_id")))
         return {"project": project_id, **kwargs}
+
+    async def fake_video(session, project_id, **kwargs):
+        reached.append(("gen_video", kwargs.get("job_id")))
+        return {"project": project_id, **{k: str(v) if isinstance(v, Path) else v for k, v in kwargs.items()}}
+
+    monkeypatch.setattr(mcp_server.video_mod, "generate", fake_video)
 
     monkeypatch.setattr(ingredients, "generate", fake_character)
     monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
@@ -2514,7 +2533,7 @@ def test_a_valid_call_with_one_mistyped_argument_is_refused_before_any_backend_r
     """Measured 2026-09-28 (plan R, job plan-r-t2i-2): gen_t2i took an `out_dir` it does not declare, succeeded, and
     wrote its row elsewhere; every tool swallowed unknown arguments. The case that costs money is a CORRECT call with
     one typo beside it (`aspect_ratio` for `aspect` pays for the default 9:16), so that is what is sent here, to all
-    43 tools served, generated from their own schemas (review of plan S: a typo sent alone never reached a tool that
+    44 tools served, generated from their own schemas (review of plan S: a typo sent alone never reached a tool that
     has required arguments, so a check that refused only all-unknown calls stayed green)."""
     answers, touched = _call_every_tool_with(monkeypatch, {"aspect_ratio_typo": "16:9"})
 
@@ -2737,3 +2756,80 @@ def test_a_project_page_that_never_loads_is_not_blamed_on_the_agent_chip(monkeyp
 
     text = _texts([result])[0]
     assert result.is_error and "flow-project-page" in text and "prompt bar" not in text, text
+
+
+def test_gen_video_describes_every_model_in_the_surveyed_options_file():
+    # Plan AB: the description is written from flow_options.json, so a model the survey adds shows up by itself.
+    from video.flow import video
+
+    description = served_tool_objects()["gen_video"].description
+    missing = [
+        name
+        for name, entry in video.VIDEO["models"].items()
+        if name not in description or entry["label"] not in description
+    ]
+    assert missing == [], missing
+    assert "max_credits" in description and "dry_run" in description
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"max_credits": None}, "max_credits is required"),
+        ({"max_credits": 0}, "max_credits must be at least 1"),
+        ({"model": "veo-lite", "duration": 10}, "no length choice"),
+        ({"resolution": "1080p"}, "resolution must be one of"),
+        ({"count": 5}, "count must be one of"),
+        ({"start_frame": "S", "media_ids": ["M"]}, "either frames or ingredients"),
+        ({"end_frame": "E"}, "end_frame needs a start_frame"),
+        ({"media_ids": [" "]}, "must not be blank"),
+    ],
+)
+def test_gen_video_refuses_what_it_cannot_run_before_a_browser_opens(monkeypatch, tmp_path, change, message):
+    reached = _spending_backend(monkeypatch, tmp_path)
+    arguments = {k: v for k, v in (SPEND_CALLS["gen_video"] | change).items() if v is not None}
+
+    result = _call("gen_video", arguments)
+
+    text = _texts([result])[0]
+    assert result.is_error and message in text, text
+    assert reached == []
+
+
+def test_gen_video_dry_run_needs_neither_a_job_id_nor_a_cap(monkeypatch, tmp_path):
+    reached = _spending_backend(monkeypatch, tmp_path)
+
+    result = _call("gen_video", {"prompt": "a boat", "project": "P", "dry_run": True})
+
+    assert not result.is_error, _texts([result])
+    assert reached == ["browser", ("gen_video", None)]
+
+
+def test_gen_video_forwards_every_option_to_the_driver(monkeypatch, tmp_path):
+    _spending_backend(monkeypatch, tmp_path)
+    arguments = SPEND_CALLS["gen_video"] | {
+        "model": "omni-flash",
+        "aspect": "16:9",
+        "resolution": "360p",
+        "duration": 6,
+        "count": 3,
+        "start_frame": "S",
+        "end_frame": "E",
+    }
+
+    result = _call("gen_video", arguments)
+
+    assert not result.is_error, _texts([result])
+    got = json.loads(_texts([result])[0])
+    assert {
+        k: got[k] for k in ("model", "aspect", "resolution", "duration", "count", "start_frame", "end_frame")
+    } == {
+        "model": "omni-flash",
+        "aspect": "16:9",
+        "resolution": "360p",
+        "duration": 6,
+        "count": 3,
+        "start_frame": "S",
+        "end_frame": "E",
+    }
+    assert got["max_credits"] == 20 and got["job_id"] == "job-video" and got["out_dir"] == str(tmp_path)

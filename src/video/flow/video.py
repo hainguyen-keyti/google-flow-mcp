@@ -44,6 +44,13 @@ def _cell(resolution: str | None, duration: int | None) -> str:
     return "" if resolution is None and duration is None else f"{resolution} {duration}s"
 
 
+def defaults(model: str, resolution: str | None, duration: int | None) -> tuple[str | None, int | None]:
+    """A model with a length row takes 720p and 8 s when none is named; the others keep what was passed."""
+    if _model(model)["durations"]:
+        return resolution or FIXED["resolution"], duration or FIXED["duration"]
+    return resolution, duration
+
+
 def check_settings(
     *, model: str, resolution: str | None, duration: int | None, count: int, aspect: str
 ) -> None:
@@ -263,9 +270,7 @@ async def generate(
 ) -> dict[str, Any]:
     """One gen_video run: every check that needs no browser first, then one of the two composer modes."""
     offers_length = bool(_model(model)["durations"])
-    if offers_length:
-        resolution = resolution or FIXED["resolution"]
-        duration = duration or FIXED["duration"]
+    resolution, duration = defaults(model, resolution, duration)
     check_settings(model=model, resolution=resolution, duration=duration, count=count, aspect=aspect)
     mode = mode_for(
         start_frame=start_frame, end_frame=end_frame, characters=list(characters), media_ids=list(media_ids)

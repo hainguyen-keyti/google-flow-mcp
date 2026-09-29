@@ -2,7 +2,9 @@
 
 Generated from the running server by `scripts/gen_tool_docs.py`; do not edit by hand. Prices are the ones measured on the account this was built for, and they are part of each tool's own description, which is what an agent reads before spending.
 
-**43 tools.**
+**44 tools.**
+
+> These tools are served but not grouped yet, so they are listed last: `gen_video`
 
 ## Read, free
 
@@ -277,3 +279,11 @@ Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledg
 **Arguments**: `project_id`, `message`, `job_id`, `wait` (optional)
 
 Send a message to Flow's agent in a project. It may spend credits: 0 credits in every measured send where the agent generated nothing, but a message that makes it generate media costs that generation's price. The send itself took 69-80 s in those runs, plus a balance read before and after. When the balance moved by anything other than the measured price, the answer carries balance_moved {kind, measured, moved, note}, or, when the call ends in an error, the job's ledger row does: read it before assuming the price in this description still holds. job_id is required: use a new one for each new job, and keep the SAME one when calling again after an error or a timeout. Any job_id already in a ledger under the out folder is refused before a browser opens, so a retry never pays twice; that refusal means the job may already have spent credits, so check flow_media and flow_credits before starting it under a new one. A job_id still running in another call is refused too: wait for that call to finish and call again with the SAME job_id, never a new one.
+
+## Ungrouped
+
+### `gen_video`
+
+**Arguments**: `project`, `prompt`, `job_id` (optional), `max_credits` (optional), `model` (optional), `aspect` (optional), `resolution` (optional), `duration` (optional), `count` (optional), `start_frame` (optional), `end_frame` (optional), `characters` (optional), `media_ids` (optional), `dry_run` (optional), `out_dir` (optional)
+
+One video from Flow's composer with any option it offers; it spends credits and is ledgered. Text alone runs Frames; start_frame (and end_frame) are project image media ids for the first and last frame; characters (entity ids) and media_ids (project images) run Ingredients. Frames and ingredients do not mix. Models and x1 prices from Flow's price line on 2026-09-29: omni-flash (Omni 1.1 Flash): 360p 4s 4/6s 5/8s 6/10s 7, 720p 4s 7/6s 10/8s 12/10s 15; veo-lite (Veo 3.1 - Lite): 10 credits, 8 s, 720p; veo-fast (Veo 3.1 - Fast): 20 credits, 8 s, 720p; veo-quality (Veo 3.1 - Quality): 100 credits, 8 s, 720p. count 1-4 multiplies the price; aspect one of ['16:9', '9:16']. resolution and duration apply to omni-flash only (defaults 720p and 8 s). The money guard is Flow's own price line, read right before the single click: a real run needs max_credits and is refused when the live price is over it; dry_run=true reads that price and the settings for free, clicks nothing and needs no job_id or max_credits. Every setting is read back before the click, and the submit request is checked afterwards for the mode and length asked: a mismatch is reported as an error even though it was paid. x2-x4 return every clip in outputs. Flow's Agent mode is turned off for the run and put back after. out_dir must be inside out/. Allow 3-8 min for a real run, 1-2 min for a dry run.When the balance moved by anything other than the measured price, the answer carries balance_moved {kind, measured, moved, note}, or, when the call ends in an error, the job's ledger row does: read it before assuming the price in this description still holds. job_id is required: use a new one for each new job, and keep the SAME one when calling again after an error or a timeout. Any job_id already in a ledger under the out folder is refused before a browser opens, so a retry never pays twice; that refusal means the job may already have spent credits, so check flow_media and flow_credits before starting it under a new one. A job_id still running in another call is refused too: wait for that call to finish and call again with the SAME job_id, never a new one.
