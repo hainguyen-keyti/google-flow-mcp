@@ -149,6 +149,12 @@ These are not suggestions; they are enforced in code and pinned by tests.
   Flow's own agent mode beyond an on/off switch, Omni 360p and upscale, project settings, GIF export, share
   links and publishing to YouTube.
 
+## When Flow changes
+
+Flow changes without notice. `uv run video flow survey --project <id>` walks Flow's pages for $0, screenshots them, and
+compares their buttons, menus, options, prices and the selectors this repo relies on with baselines kept in the repo;
+exit code 1 means something changed. See [docs/flow-updates.md](docs/flow-updates.md).
+
 ## Testing
 
 ```bash
@@ -166,6 +172,7 @@ read-only by default, and say in their own output what they spent.
 | File | What is in it |
 |---|---|
 | [docs/tools.md](docs/tools.md) | Every MCP tool with its price, generated from the running server |
+| [docs/flow-updates.md](docs/flow-updates.md) | When Google changes Flow: the $0 survey that finds what changed, and how to update the MCP |
 | [README.vi.md](README.vi.md) | The original Vietnamese README: the full measured record, including traps paid for in credits |
 | [docs/mcp-manual-test.md](docs/mcp-manual-test.md) | A by-hand test pass over the tools, with a ready prompt for another agent |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to run the gate and the rules that keep the money safe |

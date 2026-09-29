@@ -18,6 +18,36 @@ def flow() -> None:
 
 
 @flow.command()
+@click.option(
+    "--project",
+    "project_id",
+    required=True,
+    help="a project to walk (its composer, clips, scenes, characters)",
+)
+@click.option(
+    "--write", is_flag=True, help="make this survey the new baseline (flow_ui.json, flow_options.json)"
+)
+@click.option("--profile", default="default", show_default=True)
+def survey(project_id: str, write: bool, profile: str) -> None:
+    """Walk Flow's pages and compare them with the repo's baselines; exit 1 on any difference ($0)."""
+    from video.flow import survey as survey_mod
+    from video.session import FlowSession
+
+    try:
+        findings, folder = survey_mod.run_sync(lambda: FlowSession(profile), project_id, write)
+    except survey_mod.SurveyIncomplete as exc:
+        click.echo(f"baselines NOT written: {exc}")
+        raise SystemExit(1) from exc
+    for kind, where, what in findings:
+        click.echo(f"{kind:22} {where:32} {what}")
+    click.echo(f"{len(findings)} difference(s); screenshots and survey.json in {folder}")
+    if write:
+        click.echo("baselines written: src/video/flow/flow_ui.json, src/video/flow/flow_options.json")
+    elif findings:
+        raise SystemExit(1)
+
+
+@flow.command()
 @click.option("--profile", default="default", show_default=True)
 @click.option("--json", "as_json", is_flag=True, help="Emit the full probe result as JSON.")
 def lane(profile: str, as_json: bool) -> None:

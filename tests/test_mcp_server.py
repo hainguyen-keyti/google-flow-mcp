@@ -164,6 +164,8 @@ TOOL_CALLS: dict[str, dict] = {
 EXCLUDED_COMMANDS = {
     "mcp run": "is the MCP server itself; it does not expose itself as a tool",
     "flow character list": "flow_characters already serves it",
+    "flow survey": "a maintenance walk that rewrites the repo's own baselines with --write; run by the owner or an "
+    "agent working on the repo, never by an agent using the tools (plan AC, 2026-09-29)",
 }
 EXCLUDED_GROUPS = {
     "story": "the video-building layer, out of scope since 2026-09-13 (DECISIONS section 1)",
