@@ -591,7 +591,15 @@ async def fetch_720(
         # Download serves the same clip for 0 credits.
         if "404" not in str(exc) or project_id is None:
             raise
-        return await clips.download_rendition(session, project_id, record["id"], "720p", stem.parent)
+        # The editor names every download <media>_720p and refuses to overwrite, so each stem gets its own folder.
+        return await clips.download_rendition(
+            session,
+            project_id,
+            record["id"],
+            "720p",
+            stem.parent / stem.name,
+            workflow_id=record.get("workflow_id"),
+        )
 
 
 _STATE_JS = """() => ({

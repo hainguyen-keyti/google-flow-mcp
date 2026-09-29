@@ -369,3 +369,15 @@ def test_the_walk_leaves_the_composer_on_the_first_model_at_x1(monkeypatch, tmp_
     walker = _walk_settings(monkeypatch, tmp_path)
 
     assert (walker.tab, walker.model, walker.count) == ("Video", "Omni 1.1 Flash", "x1"), walker.log
+
+
+def test_the_first_model_is_picked_back_inside_the_first_mode(monkeypatch, tmp_path):
+    """Review of plan AF: the walk ends inside the last mode, which need not offer the first mode's first model."""
+    walker = _walk_settings(monkeypatch, tmp_path)
+
+    assert walker.log[-4:] == [
+        ("radio", "Video"),
+        ("radio", "Frames"),
+        ("model", "Omni 1.1 Flash"),
+        ("radio", "x1"),
+    ], walker.log

@@ -268,7 +268,7 @@ def _dead_renditions(monkeypatch, tmp_path):
         return None
 
     async def download_rendition(session, project_id, media_id, quality, out_dir, *, workflow_id=None):
-        editor.append((project_id, media_id, quality, out_dir))
+        editor.append((project_id, media_id, quality, out_dir, workflow_id))
         return out_dir / f"{media_id}_{quality}.mp4"
 
     monkeypatch.setattr(composer.download_mod, "fetch_to_file", dead)
@@ -282,6 +282,7 @@ def test_a_paid_clip_whose_renditions_404_is_fetched_from_the_editor(monkeypatch
     editor = _dead_renditions(monkeypatch, tmp_path)
     record = {
         "id": "M1",
+        "workflow_id": "W2",
         "kind": "video",
         "url": "https://flow.google.com/asb/T",
         "model": "omni_flash_i2v_6s_first_last",
@@ -289,8 +290,10 @@ def test_a_paid_clip_whose_renditions_404_is_fetched_from_the_editor(monkeypatch
 
     out = asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "M1_ab", project_id="P"))
 
-    assert editor == [("P", "M1", "720p", tmp_path)], editor
-    assert out == tmp_path / "M1_720p.mp4"
+    # The version handed in, not the newest; and a folder of the stem's own, since the editor names every download
+    # <media>_720p and refuses to overwrite, which a later version of the same clip would hit (review of plan AF).
+    assert editor == [("P", "M1", "720p", tmp_path / "M1_ab", "W2")], editor
+    assert out == tmp_path / "M1_ab" / "M1_720p.mp4"
 
 
 def test_an_error_that_is_not_a_404_is_not_hidden_behind_the_editor(monkeypatch, tmp_path):

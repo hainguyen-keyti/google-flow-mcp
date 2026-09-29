@@ -2889,3 +2889,21 @@ def test_an_image_the_listing_never_shows_gets_no_media_id_rather_than_its_workf
     out = json.loads(_texts([result])[0])["outputs"][0]
     assert out["media_id"] is None and out["workflow_id"] == "WF-1", out
     assert "flow_upload" in out["media_id_note"], out
+
+
+def test_an_image_whose_listing_read_fails_still_answers_its_file(monkeypatch, tmp_path):
+    """Review of plan AF: the listing is read after run_job wrote `done`, and the ledger refuses the job id again, so
+    an error here would lose a finished image's path for good."""
+    _image_world(monkeypatch, tmp_path, lambda n: [])
+
+    async def broken(session, project_id, settle=10.0, *, versions=False):
+        raise RuntimeError("no Zzl0ze frame")
+
+    monkeypatch.setattr(mcp_server.reader, "project", broken)
+
+    result = with_client(lambda session: session.call_tool("gen_i2i", _IMAGE_CALLS["gen_i2i"]))
+
+    assert not result.is_error, _texts([result])
+    out = json.loads(_texts([result])[0])["outputs"][0]
+    assert (out["media_id"], out["workflow_id"], out["path"]) == (None, "WF-1", "out/WF-1_1.jpg"), out
+    assert "Zzl0ze" in out["media_id_note"], out

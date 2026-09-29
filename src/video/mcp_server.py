@@ -618,20 +618,25 @@ class Backend:
             return
         for output in outputs:
             output["workflow_id"], output["media_id"] = output.get("media_id"), None
-        for attempt in range(IMAGE_LISTING_READS):
-            if attempt:
-                await asyncio.sleep(IMAGE_LISTING_POLL_S)
-            media = (await self._with(lambda s: reader.project(s, project)))["media"]
-            by_workflow = {m.get("workflow_id"): m["id"] for m in media if m.get("workflow_id")}
-            for output in outputs:
-                output["media_id"] = by_workflow.get(output["workflow_id"])
-            if all(output["media_id"] for output in outputs):
-                return
+        why = "the project listing never showed it"
+        try:
+            for attempt in range(IMAGE_LISTING_READS):
+                if attempt:
+                    await asyncio.sleep(IMAGE_LISTING_POLL_S)
+                media = (await self._with(lambda s: reader.project(s, project)))["media"]
+                by_workflow = {m.get("workflow_id"): m["id"] for m in media if m.get("workflow_id")}
+                for output in outputs:
+                    output["media_id"] = by_workflow.get(output["workflow_id"])
+                if all(output["media_id"] for output in outputs):
+                    return
+        # The image is made and its ledger row says done, which refuses this job id again: never lose the path here.
+        except Exception as exc:  # noqa: BLE001
+            why = f"the project listing could not be read ({type(exc).__name__}: {str(exc)[:120]})"
         for output in outputs:
             if not output["media_id"]:
                 output["media_id_note"] = (
-                    f"the project listing never showed workflow {output['workflow_id']}, so this image has no media "
-                    "id yet: find it with flow_media (its workflow_id), or flow_upload the file at path"
+                    f"{why}, so this image of workflow {output['workflow_id']} has no media id yet: find it with "
+                    "flow_media (its workflow_id), or flow_upload the file at path"
                 )
 
     async def _agent_off(self, project: str) -> bool:

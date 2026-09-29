@@ -441,6 +441,8 @@ class Walker:
         await self.radio("Video")
         # The last cell priced (x4 of the dearest model) can outrun the balance and put Flow's insufficient-credits
         # warning where Start generation stands in the composer pages recorded next (survey 2026-09-30).
+        if modes:
+            await self.radio(modes[0])
         if first_model:
             await self.pick_model(first_model)
         await self.radio("x1")
