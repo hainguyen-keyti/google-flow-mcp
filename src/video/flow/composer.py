@@ -47,6 +47,16 @@ def price_from(text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def ensure_within(actual: int | None, cap: int) -> None:
+    """gen_video's guard (DECISIONS 2026-09-29): Flow's own price line, read right before the click, against a cap."""
+    if actual is None:
+        raise RuntimeError(f"refusing to submit: could not read the composer price line (max_credits {cap})")
+    if actual > cap:
+        raise RuntimeError(
+            f"refusing to submit: the composer says {actual} credits, over max_credits {cap}; nothing was clicked"
+        )
+
+
 def ensure_price(actual: int | None, expected: int) -> None:
     if actual is None:
         raise RuntimeError(
@@ -677,6 +687,8 @@ async def _submit(
     strict_output: bool = False,
     verify: Any = None,
     click_box: bool = True,
+    count: int = 1,
+    max_credits: int | None = None,
 ) -> dict[str, Any]:
     """The one money path: every mode goes through the same price guard, single click and ledger.
 
@@ -703,7 +715,7 @@ async def _submit(
     await session.page.wait_for_timeout(2_500)
     left_over = await clear_prompt(session)
     try:
-        settings = await configure(session, mode=mode, aspect=aspect, label="pre")
+        settings = await configure(session, mode=mode, aspect=aspect, count=f"x{count}", label="pre")
         extra = await setup(session) or {}
         box = session.page.locator("flow-prompt-box [contenteditable='true']").first
         landed = await _type_prompt(session.page, box, prompt, click=click_box)
@@ -711,7 +723,7 @@ async def _submit(
             raise RuntimeError(
                 f"{job_id}: the prompt never reached the composer box, refusing to submit an empty job"
             )
-        confirm = await configure(session, mode=mode, aspect=aspect, label="confirm")
+        confirm = await configure(session, mode=mode, aspect=aspect, count=f"x{count}", label="confirm")
         checked = await verify(session) if verify is not None else {}
         if dry_run:
             await clear_prompt(session)
@@ -720,12 +732,20 @@ async def _submit(
                 "kind": kind,
                 "quoted_credits": confirm["price"],
                 "expected_credits": expected_credits,
-                "price_ok": confirm["price"] == expected_credits,
+                "price_ok": (
+                    confirm["price"] == expected_credits
+                    if max_credits is None
+                    else confirm["price"] is not None and confirm["price"] <= max_credits
+                ),
+                **({"max_credits": max_credits} if max_credits is not None else {}),
                 "composer_left": await session.page.evaluate(_LEFT_JS),
                 **extra,
                 **checked,
             }
-        ensure_price(confirm["price"], expected_credits)
+        if max_credits is None:
+            ensure_price(confirm["price"], expected_credits)
+        else:
+            ensure_within(confirm["price"], max_credits)
     except Exception:
         # Nothing was clicked: leave the shared composer as empty as this run found it (review F4, 2026-09-16).
         with contextlib.suppress(Exception):
@@ -769,6 +789,19 @@ async def _submit(
         while True:
             rows, _ = await snapshot(session, project_id)
             fresh = clips.new_records(before, rows)
+            if strict_output and count > 1:
+                candidates = matching_outputs(fresh, prompt, checked.get("prompt_text"))
+                output = candidates[0] if candidates else None
+                if len(candidates) > count or (
+                    len(candidates) == count and all(clips.is_done(c) for c in candidates)
+                ):
+                    break
+                if not candidates and replies.reported_failed():
+                    break
+                if asyncio.get_running_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(15)
+                continue
             if strict_output:
                 candidates = matching_outputs(fresh, prompt, checked.get("prompt_text"))
                 output = candidates[0] if len(candidates) == 1 else None
@@ -787,7 +820,19 @@ async def _submit(
 
         credits_after = (await reader.credits(session))["balance"]
         path, fetch_error = None, None
-        if output is not None and clips.is_done(output):
+        outputs: list[dict[str, Any]] = []
+        if count > 1:
+            # x2-x4: done only with exactly `count` clips of this prompt, each finished and fetched; more is unknown.
+            if len(candidates) == count and all(clips.is_done(c) for c in candidates):
+                for clip in candidates:
+                    try:
+                        got = str(await fetch_720(session, clip, out_dir / f"{clip['id']}_{digest[:8]}"))
+                    except Exception as exc:  # noqa: BLE001
+                        got, fetch_error = None, f"{type(exc).__name__}: {str(exc)[:160]}"
+                    outputs.append({"media_id": clip["id"], "path": got})
+                if all(o["path"] for o in outputs):
+                    path = outputs[0]["path"]
+        elif output is not None and clips.is_done(output):
             try:
                 path = str(await fetch_720(session, output, out_dir / f"{output['id']}_{digest[:8]}"))
             except Exception as exc:  # noqa: BLE001
@@ -823,7 +868,7 @@ async def _submit(
 
     spent = credits_before - credits_after
     videos = [r for r in fresh if r.get("kind") == "video"]
-    unclaimed = candidates if len(candidates) > 1 else videos
+    unclaimed = candidates if len(candidates) > max(count, 1) else videos
     watched = {"body_check": watch.report()} if watch is not None else {}
     # Flow's last word on the job was not "failed" (sg-bf-2, 2026-09-17: statuses 6, 2), so it may still finish and bill.
     statuses = flow.get("statuses") or []
@@ -831,6 +876,8 @@ async def _submit(
     page_note = _page_note(page_after_click, project_id)
     if path:
         status = "done"
+    elif count > 1 and len(candidates) > count:
+        status = "unknown"
     elif output is not None:
         status = "pending"
     elif strict_output and (unclaimed or spent or flow_open):
@@ -843,6 +890,11 @@ async def _submit(
         status,
         media_id=output["id"] if output else None,
         path=path,
+        **(
+            {"outputs": outputs or [{"media_id": c["id"], "path": None} for c in candidates]}
+            if count > 1
+            else {}
+        ),
         credits_before=credits_before,
         credits_after=credits_after,
         spent=spent,
@@ -854,6 +906,12 @@ async def _submit(
         flow=flow,
         page_after_click=page_after_click,
     )
+    if status == "pending" and count > 1:
+        why = fetch_error or f"{len(candidates)} of {count} clips listed and finished after {wait:.0f}s"
+        raise RuntimeError(
+            f"do not run this job again: clips {[c['id'] for c in candidates]} exist but not all {count} came back "
+            f"({why}); fetch them with flow_download once finished; spent {spent} credits; job {job_id}"
+        )
     if status == "pending":
         why = fetch_error or f"still rendering after {wait:.0f}s"
         raise RuntimeError(
@@ -896,6 +954,7 @@ async def _submit(
         "kind": kind,
         "media_id": output["id"],
         "path": path,
+        **({"outputs": outputs} if count > 1 else {}),
         "quoted_credits": confirm["price"],
         "credits_before": credits_before,
         "credits_after": credits_after,
