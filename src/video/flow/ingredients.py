@@ -367,6 +367,26 @@ async def pin_duration(page: Any, seconds: int = SECONDS) -> str:
         await page.wait_for_timeout(1_000)
 
 
+RESOLUTION_RADIO = RADIO
+
+
+async def pin_resolution(page: Any, resolution: str) -> None:
+    """Check the resolution radio (its label reads '360p' plus an info icon); refuse when it does not stay checked."""
+    await composer._open_settings(page, "resolution")
+    try:
+        radio = page.locator(RESOLUTION_RADIO).filter(has_text=re.compile(rf"^\s*{re.escape(resolution)}"))
+        if await radio.count() != 1:
+            raise LookupError(f"{await radio.count()} radios read {resolution}; not guessing")
+        if await radio.first.get_attribute("aria-checked") != "true":
+            await radio.first.click(timeout=4_000)
+            await page.wait_for_timeout(1_200)
+        if await radio.first.get_attribute("aria-checked") != "true":
+            raise LookupError(f"the {resolution} radio did not stay checked")
+    finally:
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(1_000)
+
+
 class SubmitBodyCheck:
     """What the submit request carried, read as it leaves: a references model key and every reference's id."""
 
@@ -426,16 +446,26 @@ async def generate(
     dry_run: bool = False,
     wait: float = 360.0,
     duration: int = SECONDS,
+    count: int = 1,
+    resolution: str | None = None,
+    max_credits: int | None = None,
+    body_check_for: Any = None,
 ) -> dict[str, Any]:
-    """One video from characters and project images, or with dry_run the quote and the chips, never a click."""
-    if model not in PRICES:
+    """One video from characters and project images, or with dry_run the quote and the chips, never a click.
+
+    With max_credits (gen_video, plan AB) the caller has checked the settings against the surveyed options, and the
+    live price line is held against that cap instead of this module's own table."""
+    if max_credits is not None:
+        expected = price_for(model, duration) or 0
+    elif model not in PRICES:
         raise ValueError(f"model must be one of {sorted(PRICES)}, got {model!r}")
-    if aspect not in ASPECTS:
+    elif aspect not in ASPECTS:
         raise ValueError(f"aspect must be one of {sorted(ASPECTS)}, got {aspect!r}")
-    if duration not in LENGTHS[model]:
+    elif duration not in LENGTHS[model]:
         raise ValueError(f"duration must be one of {list(LENGTHS[model])} for {model}, got {duration}")
-    expected = price_for(model, duration)
-    if expected is None and not dry_run:
+    else:
+        expected = price_for(model, duration)
+    if max_credits is None and expected is None and not dry_run:
         raise ValueError(
             f"no measured price for {model} at {duration}s: read it with dry_run first, a real run is refused "
             "rather than priced by guess"
@@ -464,6 +494,8 @@ async def generate(
             raise LookupError(
                 f"asked for {duration}s but the composer shows no {duration}s length to pin; refusing"
             )
+        if resolution is not None:
+            await pin_resolution(page, resolution)
         await page.locator(BOX).first.click(timeout=8_000)
         attached[:] = [await attach(page, reference) for reference in references]
         on_page = await chips_on(page)
@@ -479,6 +511,8 @@ async def generate(
             "aspect": aspect,
             "seconds": duration,
             "duration_row": duration_row,
+            **({"resolution": resolution} if resolution is not None else {}),
+            **({"count": count} if count != 1 else {}),
             "chips": attached,
         }
 
@@ -524,7 +558,9 @@ async def generate(
             mode="Ingredients",
             wait=wait,
             dry_run=dry_run,
-            watch=SubmitBodyCheck(references),
+            watch=body_check_for(references) if body_check_for is not None else SubmitBodyCheck(references),
+            count=count,
+            max_credits=max_credits,
             strict_output=True,
             verify=verify,
             click_box=False,

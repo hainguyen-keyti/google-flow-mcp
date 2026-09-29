@@ -1,3 +1,6 @@
+import asyncio
+from pathlib import Path
+
 """gen_video's driver (plan AB): every video option Flow's composer offers, read from the surveyed options file."""
 
 import pytest
@@ -145,3 +148,282 @@ def test_x2_with_one_clip_listed_is_not_done_and_says_do_not_run_again(monkeypat
 
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
     assert last["status"] != "done", last
+
+
+# The driver (plan AB T3).
+TEAPOT = {"id": "m-teapot", "title": "Green teapot on wooden table", "kind": "image"}
+CUP = {"id": "m-cup", "title": "Blue ceramic cup on table", "kind": "image"}
+RECORDS = [
+    {"id": "m-teapot", "workflow_id": "w-teapot", "url": "https://lh3/aaaaaaaaaaaaaaaaaaaaaaaaaaaaTEAPOT"},
+    {"id": "m-cup", "workflow_id": "w-cup", "url": "https://lh3/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbCUP"},
+]
+
+
+def test_frames_are_named_by_media_id_and_must_be_images_with_a_title_nobody_else_has():
+    refs = video.frame_references([TEAPOT, CUP], RECORDS, "m-teapot", "m-cup")
+    assert [(r.id, r.title, r.tail) for r in refs] == [
+        ("m-teapot", "Green teapot on wooden table", RECORDS[0]["url"][-24:]),
+        ("m-cup", "Blue ceramic cup on table", RECORDS[1]["url"][-24:]),
+    ]
+    with pytest.raises(LookupError, match="not a media of this project"):
+        video.frame_references([TEAPOT], RECORDS, "m-nope", None)
+    with pytest.raises(ValueError, match="is a video"):
+        video.frame_references([TEAPOT | {"kind": "video"}], RECORDS, "m-teapot", None)
+    with pytest.raises(LookupError, match="titled"):
+        video.frame_references([TEAPOT, CUP | {"title": TEAPOT["title"]}], RECORDS, "m-teapot", None)
+
+
+class _Loc:
+    def __init__(self, page, items):
+        self.page, self.items = page, items
+
+    @property
+    def first(self):
+        return _Loc(self.page, self.items[:1])
+
+    def nth(self, index):
+        return _Loc(self.page, self.items[index : index + 1])
+
+    async def count(self):
+        return len(self.items)
+
+    async def get_attribute(self, name):
+        return self.items[0].get(name)
+
+    async def click(self, timeout=None):
+        self.page.clicked.append(self.items[0].get("what"))
+
+    async def wait_for(self, state=None, timeout=None):
+        if not self.items:
+            raise video.PlaywrightTimeoutError("nothing")
+
+    def get_by_role(self, role, name=None):
+        return _Loc(self.page, [{"what": f"slot {name.pattern}"}])
+
+
+class _PickerPage:
+    """A composer whose picker offers tiles by src and whose slots read back as the buttons list says."""
+
+    def __init__(self, tiles, after):
+        self.tiles, self.after, self.clicked = tiles, after, []
+        self.keyboard = self
+
+    async def insert_text(self, text):
+        self.clicked.append(f"typed {text}")
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    def locator(self, selector):
+        if "img" in selector:
+            return _Loc(self, [{"src": src, "what": f"tile {src[-6:]}"} for src in self.tiles])
+        if "input" in selector:
+            return _Loc(self, [{"what": "search"}])
+        return _Loc(self, [{"what": "bar"}])
+
+    async def evaluate(self, script, arg=None):
+        return self.after
+
+
+def test_a_frame_is_pinned_by_the_tile_whose_src_ends_like_the_listing_url():
+    ref = video.frame_references([TEAPOT, CUP], RECORDS, "m-teapot", None)[0]
+    page = _PickerPage(
+        ["https://x/other-tile-000000000000000000", "https://x/" + RECORDS[0]["url"][-40:]],
+        [
+            "Image ingredient",
+            "Swap first and last frames",
+            "End",
+            "Agent",
+            "Settings trigger",
+            "Start generation",
+        ],
+    )
+
+    asyncio.run(video.pin_frame(page, "Start", ref))
+
+    assert page.clicked[-1] == "tile " + RECORDS[0]["url"][-6:], page.clicked
+
+
+def test_a_picker_that_offers_no_tile_of_that_image_is_refused_without_a_click():
+    ref = video.frame_references([TEAPOT, CUP], RECORDS, "m-teapot", None)[0]
+    page = _PickerPage(["https://x/other-tile-000000000000000000"], [])
+
+    with pytest.raises(LookupError, match="no tile"):
+        asyncio.run(video.pin_frame(page, "Start", ref))
+    assert not any(str(c).startswith("tile") for c in page.clicked)
+
+
+def test_the_slots_read_back_filled_where_they_were_asked():
+    filled = ["Image ingredient", "Swap first and last frames", "Image ingredient", "Agent"]
+    assert video.slots_filled(filled) == {"Start": True, "End": True}
+    assert video.slots_filled(["Image ingredient", "Swap first and last frames", "End"]) == {
+        "Start": True,
+        "End": False,
+    }
+    assert video.slots_filled(["Start", "Swap first and last frames", "End"]) == {
+        "Start": False,
+        "End": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mode_kind", "key", "duration", "ok"),
+    [
+        ("t2v", "abra_t2v_4s", 4, True),
+        ("t2v", "abra_t2v_10s", 4, False),
+        ("t2v", "veo_3_1_t2v_lite", None, True),
+        ("i2v", "abra_i2v_6s", 6, True),
+        ("i2v", "abra_t2v_6s", 6, False),
+        ("r2v", "abra_r2v_8s", 8, True),
+        ("r2v", "abra_t2v_8s", 8, False),
+    ],
+)
+def test_the_body_check_holds_the_submit_to_the_mode_and_length_asked(mode_kind, key, duration, ok):
+    check = video.VideoBodyCheck(mode_kind, [], duration)
+
+    class _Request:
+        url = "https://flow.google.com/_/x/data/batchexecute?rpcids=MZZa6b"
+        post_data = f"f.req=%5B%22{key}%22%5D"
+
+    check.on_request(_Request())
+    assert check.report()["ok"] is ok, check.report()
+
+
+def _driver_world(monkeypatch, *, submit_result=None):
+    """video.generate over fakes: the listing, the pins and the money path record what they were asked."""
+    calls = {"submit": None, "ingredients": None, "log": []}
+    listing = object()
+
+    async def fake_listing(session, project_id):
+        calls["log"].append("listing")
+        return listing
+
+    monkeypatch.setattr(video.ingredients, "_listing", fake_listing)
+    monkeypatch.setattr(video.parsers, "media", lambda payload: [TEAPOT, CUP])
+    monkeypatch.setattr(video.parsers, "records", lambda payload: RECORDS)
+    monkeypatch.setattr(video.parsers, "characters_from_listing", lambda payload: [])
+
+    async def fake_set_mode(session, project_id, enabled):
+        calls["log"].append(f"agent {enabled}")
+        return {"was": False}
+
+    async def fake_submit(session, project_id, **kwargs):
+        calls["submit"] = kwargs
+        if not kwargs.get("dry_run") and kwargs.get("watch") is not None:
+            kwargs["watch"].seen = {"ok": True}
+        return submit_result or {"job_id": kwargs.get("job_id"), "body_check": {"ok": True}}
+
+    async def fake_ingredients(session, project_id, **kwargs):
+        calls["ingredients"] = kwargs
+        return {"job_id": kwargs.get("job_id")}
+
+    monkeypatch.setattr(video.agent, "set_mode", fake_set_mode)
+    monkeypatch.setattr(video.composer, "_submit", fake_submit)
+    monkeypatch.setattr(video.ingredients, "generate", fake_ingredients)
+    return calls
+
+
+def _run(**kwargs):
+    base = {"prompt": "a teapot", "job_id": "job-v", "max_credits": 20, "out_dir": Path("out/test_video")}
+    return asyncio.run(video.generate(object(), "p-1", **(base | kwargs)))
+
+
+def test_text_to_video_goes_through_frames_with_every_setting_and_the_cap(monkeypatch):
+    calls = _driver_world(monkeypatch)
+
+    _run(model="omni-flash", resolution="360p", duration=4, count=3, aspect="16:9")
+
+    submit = calls["submit"]
+    assert submit["mode"] == "Frames" and submit["count"] == 3 and submit["max_credits"] == 20
+    assert submit["aspect"] == "16:9" and submit["kind"] == "video" and submit["strict_output"] is True
+    assert (
+        submit["expected_credits"] == 12
+    )  # 4 credits x3 from the surveyed table, shown next to the live quote
+    assert submit["watch"].kind == "t2v" and submit["watch"].duration == 4
+
+
+def test_a_start_and_end_frame_make_an_i2v_run_whose_body_must_carry_both_images(monkeypatch):
+    calls = _driver_world(monkeypatch)
+
+    _run(model="veo-lite", start_frame="m-teapot", end_frame="m-cup")
+
+    watch = calls["submit"]["watch"]
+    assert watch.kind == "i2v" and watch.duration is None
+    assert [r.id for r in watch.references] == ["m-teapot", "m-cup"]
+
+
+def test_ingredients_go_through_the_proven_ingredients_driver_with_the_new_settings(monkeypatch):
+    calls = _driver_world(monkeypatch)
+
+    _run(model="omni-flash", resolution="360p", duration=6, count=2, media_ids=["m-teapot"])
+
+    got = calls["ingredients"]
+    assert got["media_ids"] == ["m-teapot"] and got["characters"] == []
+    assert (got["duration"], got["resolution"], got["count"], got["max_credits"]) == (6, "360p", 2, 20)
+    check = got["body_check_for"](["the references ingredients resolved"])
+    assert check.kind == "r2v" and check.duration == 6
+    assert check.references == ["the references ingredients resolved"]
+    assert calls["submit"] is None
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"max_credits": None}, "max_credits is required"),
+        ({"job_id": None}, "job_id is required"),
+        ({"model": "veo-lite", "duration": 10}, "no length choice"),
+        ({"start_frame": "m-teapot", "media_ids": ["m-cup"]}, "either frames or ingredients"),
+    ],
+)
+def test_a_real_run_is_refused_before_the_listing_is_read(monkeypatch, change, message):
+    calls = _driver_world(monkeypatch)
+
+    with pytest.raises(ValueError, match=message):
+        _run(**change)
+    assert calls["log"] == []
+
+
+def test_a_dry_run_needs_no_cap_and_no_job_id(monkeypatch):
+    calls = _driver_world(monkeypatch)
+
+    _run(dry_run=True, max_credits=None, job_id=None)
+
+    assert calls["submit"]["dry_run"] is True
+
+
+def test_a_submit_that_carried_the_wrong_mode_or_length_is_an_error_after_the_run(monkeypatch):
+    calls = _driver_world(monkeypatch, submit_result={"job_id": "job-v", "spent": 15, "path": "out/x.mp4"})
+
+    async def submit_seen_wrong(session, project_id, **kwargs):
+        calls["submit"] = kwargs
+        kwargs["watch"].seen = {"ok": False, "model_keys": ["abra_t2v_10s"], "missing": [], "rpcid": "MZZa6b"}
+        return {"job_id": "job-v", "spent": 15, "path": "out/x.mp4", "body_check": kwargs["watch"].report()}
+
+    monkeypatch.setattr(video.composer, "_submit", submit_seen_wrong)
+    with pytest.raises(RuntimeError, match="15 credits were spent.*abra_t2v_10s"):
+        _run(model="omni-flash", resolution="720p", duration=4)
+
+
+def test_the_ingredients_driver_builds_the_body_check_from_the_references_it_resolved(monkeypatch, tmp_path):
+    from test_ingredients import MEDIA, _generate_world
+
+    log = []
+    captured = _generate_world(monkeypatch, log)
+    asyncio.run(
+        video.ingredients.generate(
+            object(),
+            "p-1",
+            prompt=PROMPT,
+            characters=[],
+            media_ids=[MEDIA],
+            model="omni-flash",
+            duration=6,
+            job_id="job-1",
+            out_dir=tmp_path,
+            max_credits=10,
+            count=2,
+            body_check_for=lambda references: ("built", [r.id for r in references]),
+        )
+    )
+    assert captured["watch"] == ("built", [MEDIA])
+    assert captured["count"] == 2 and captured["max_credits"] == 10
