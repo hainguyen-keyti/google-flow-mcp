@@ -448,6 +448,21 @@ async def _open_settings(page: Any, label: str = "settings") -> str:
     raise RuntimeError(f"composer settings unreachable at step {label!r}")
 
 
+_VIDEO_TAB = re.compile(r"^\W*[a-z_0-9]*\s*Video\s*$")
+_VIDEO_CHECKED_JS = """() => [...document.querySelectorAll('.cdk-overlay-pane [role=radio]')]
+  .some(o => /(^|\\s)Video\\s*$/.test((o.textContent || '').trim()) && o.getAttribute('aria-checked') === 'true')"""
+
+
+async def _select_video(page: Any) -> bool:
+    # gen_i2i leaves the panel on its Image tab, which offers no Frames and no Ingredients (measured 2026-09-30).
+    tab = page.locator(".cdk-overlay-pane button[role=radio]").filter(has_text=_VIDEO_TAB).first
+    if await tab.count() == 0:
+        return False
+    await tab.click(timeout=8_000)
+    await page.wait_for_timeout(900)
+    return True
+
+
 async def configure(
     session: FlowSession,
     *,
@@ -461,19 +476,22 @@ async def configure(
     applied: dict[str, bool] = {}
     for attempt in range(2):
         await _open_settings(page, label)
-        applied = {name: await _click_option(page, name) for name in (mode, aspect, count)}
+        applied = {"Video": await _select_video(page)}
+        applied |= {name: await _click_option(page, name) for name in (mode, aspect, count)}
+        # The Ingredients composer renders the same buttons as the Image one, so only the tab tells them apart.
+        on_video = bool(await page.evaluate(_VIDEO_CHECKED_JS))
         text = await page.evaluate(_OVERLAY_TEXT_JS)
         price = price_from(text)
         await page.keyboard.press("Escape")
         await page.wait_for_timeout(1_500)
-        if await _mode_applied(page, mode):
+        if on_video and await _mode_applied(page, mode):
             return {"applied": applied, "price": price, "settings_text": text[:300]}
         if attempt == 0:
             continue
         buttons = await page.evaluate(_COMPOSER_BUTTONS_JS)
         raise RuntimeError(
-            f"composer did not switch to {mode!r} at step {label!r}; applied={applied}, "
-            f"composer buttons={buttons}"
+            f"composer did not switch to {mode!r} at step {label!r}; Video tab checked={on_video}, "
+            f"applied={applied}, composer buttons={buttons}"
         )
     raise RuntimeError(f"composer unreachable at step {label!r}")
 

@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 import pytest
 
@@ -119,3 +120,136 @@ def test_a_360p_clip_is_not_held_waiting_for_a_720p_file_it_never_gets(monkeypat
 
     assert out == tmp_path / "sd.mp4"
     assert not any(u.endswith("=m22") for u in urls), urls
+
+
+_IMAGE_TAB = [
+    "image Image",
+    "videocam Video",
+    "crop_16_9 16:9",
+    "crop_landscape 4:3",
+    "crop_square 1:1",
+    "crop_portrait 3:4",
+    "crop_9_16 9:16",
+    "x1",
+    "x2",
+    "x3",
+    "x4",
+]
+_VIDEO_TAB = [
+    "image Image",
+    "videocam Video",
+    "crop_free Frames",
+    "chrome_extension Ingredients",
+    "crop_16_9 16:9",
+    "crop_9_16 9:16",
+    "x1",
+    "x2",
+    "x3",
+    "x4",
+]
+# flow_ui.json: the Ingredients composer and the Image composer render the very same buttons.
+_PLAIN = ["Add ingredients to the prompt box", "Agent", "Settings trigger", "Start generation"]
+_FRAMES = ["Agent", "End", "Settings trigger", "Start", "Start generation", "Swap first and last frames"]
+
+
+class _Panel:
+    """Flow's composer settings as measured 2026-09-30: a gen_i2i run leaves the panel on its Image tab, which
+    offers no Frames and no Ingredients until the Video tab is chosen."""
+
+    def __init__(self, tab: str = "Image", video_sticks: bool = True):
+        self.tab, self.mode, self.video_sticks, self.clicks = tab, "Ingredients", video_sticks, []
+
+    def items(self, selector: str) -> list[str]:
+        if selector == composer.SETTINGS:
+            return ["Settings trigger"]
+        return _VIDEO_TAB if self.tab == "Video" else _IMAGE_TAB
+
+    def click(self, text: str) -> None:
+        self.clicks.append(text)
+        if text.endswith("Video"):
+            self.tab = "Video" if self.video_sticks else self.tab
+        elif text.endswith("Image"):
+            self.tab = "Image"
+        elif text.endswith(("Frames", "Ingredients")):
+            self.mode = text.split()[-1]
+
+    def buttons(self) -> list[str]:
+        return _FRAMES if self.tab == "Video" and self.mode == "Frames" else _PLAIN
+
+
+class _PanelLocator:
+    def __init__(self, panel: _Panel, selector: str, pattern=None):
+        self.panel, self.selector, self.pattern = panel, selector, pattern
+
+    def _hits(self) -> list[str]:
+        items = self.panel.items(self.selector)
+        return [t for t in items if self.pattern is None or self.pattern.search(t)]
+
+    def filter(self, has_text=None):
+        pattern = has_text if hasattr(has_text, "search") else re.compile(re.escape(has_text or ""))
+        return _PanelLocator(self.panel, self.selector, pattern)
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self) -> int:
+        return len(self._hits())
+
+    async def wait_for(self, **_):
+        return None
+
+    async def click(self, **_):
+        hits = self._hits()
+        if hits and hits[0] != "Settings trigger":
+            self.panel.click(hits[0])
+
+
+class _PanelKeys:
+    async def press(self, key):
+        return None
+
+
+class _PanelPage:
+    def __init__(self, panel: _Panel):
+        self.panel, self.keyboard = panel, _PanelKeys()
+
+    def locator(self, selector: str):
+        return _PanelLocator(self.panel, selector)
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def wait_for_function(self, js, timeout=None):
+        return None
+
+    async def evaluate(self, js, *args):
+        if js == composer._COMPOSER_BUTTONS_JS:
+            return self.panel.buttons()
+        if "aria-checked" in js:
+            return self.panel.tab == "Video"
+        return " ".join(self.panel.items("pane")) + " Generating will use 12 credits"
+
+
+class _PanelSession:
+    def __init__(self, panel: _Panel):
+        self.page = _PanelPage(panel)
+
+
+@pytest.mark.parametrize("mode", ["Frames", "Ingredients"])
+def test_a_panel_left_on_the_image_tab_is_moved_to_video_before_the_mode_is_chosen(mode):
+    """Measured 2026-09-30: after gen_i2i every gen_video failed 'composer did not switch to Frames'."""
+    panel = _Panel(tab="Image")
+
+    out = asyncio.run(composer.configure(_PanelSession(panel), mode=mode, label="pre"))
+
+    assert panel.tab == "Video" and panel.mode == mode, (panel.tab, panel.mode, panel.clicks)
+    assert out["applied"][mode] is True, out
+
+
+def test_ingredients_is_refused_while_the_panel_stays_on_image_whatever_the_buttons_say():
+    """The Ingredients composer and the Image composer show the same buttons, so only the Video tab can tell."""
+    panel = _Panel(tab="Image", video_sticks=False)
+
+    with pytest.raises(RuntimeError, match="Video"):
+        asyncio.run(composer.configure(_PanelSession(panel), mode="Ingredients", label="pre"))
