@@ -207,6 +207,20 @@ async def pin_frame(page: Any, slot: str, ref: FrameRef) -> None:
 KEY_LENGTH = re.compile(r"_(\d+)s(?:_|$)")
 
 
+OTHER_MODES = ("_i2v", "_r2v", "interpolation", "extension")
+
+
+def _mode_matches(kind: str, keys: list[str]) -> bool:
+    """t2v may send a key with no mode in it (gflow: `veo_3_1_lite_lower_priority`), so text is any key naming no
+    other mode; i2v is an i2v or interpolation key; r2v an r2v key."""
+    if not keys:
+        return False
+    if kind == "t2v":
+        return not any(mode in key for key in keys for mode in OTHER_MODES)
+    wanted = ("_i2v", "interpolation") if kind == "i2v" else (f"_{kind}",)
+    return any(mode in key for key in keys for mode in wanted)
+
+
 class VideoBodyCheck:
     """The submit request as it leaves: its model key must name the mode asked (t2v, i2v, r2v) and, when the key
     carries a length, that length; every reference's id must ride in the body."""
@@ -219,16 +233,18 @@ class VideoBodyCheck:
         url = str(getattr(request, "url", "") or "")
         if self.seen is not None or "batchexecute" not in url:
             return
-        rpcids = parse_qs(urlsplit(url).query).get("rpcids", [""])[0].split(",")
-        submit = [rpcid for rpcid in rpcids if rpcid in mc.SUBMIT_RPCS]
-        if not submit:
-            return
         try:
             body = unquote_plus(request.post_data or "")
         except Exception:  # noqa: BLE001
             body = ""
+        # The start+end submit (nprQif) names itself only inside f.req (review of plan AB, B1).
+        rpcids = parse_qs(urlsplit(url).query).get("rpcids", [""])[0].split(",") + [
+            mc._body_rpcid(body) or ""
+        ]
+        submit = [rpcid for rpcid in rpcids if rpcid in mc.SUBMIT_RPCS]
+        if not submit:
+            return
         keys = sorted(set(mc.MODEL_KEY.findall(body)))
-        kinds = {"i2v": ("_i2v", "interpolation")}.get(self.kind, (f"_{self.kind}",))
         lengths = sorted({int(m) for key in keys for m in KEY_LENGTH.findall(key)})
         missing = [r.id for r in self.references if not any(m in body for m in r.mention_ids)]
         self.seen = {
@@ -237,7 +253,7 @@ class VideoBodyCheck:
             "lengths": lengths,
             "missing": missing,
             "ok": bool(body)
-            and any(k in key for key in keys for k in kinds)
+            and _mode_matches(self.kind, keys)
             and not missing
             and (self.duration is None or not lengths or lengths == [self.duration]),
         }
@@ -299,6 +315,7 @@ async def generate(
             count=count,
             resolution=resolution if offers_length else None,
             max_credits=max_credits if max_credits is not None else table,
+            table_credits=table or 0,
             body_check_for=lambda references: VideoBodyCheck("r2v", references, length),
         )
         return {"mode": mode, "table_credits": table, **result}

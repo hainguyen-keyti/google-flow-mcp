@@ -735,7 +735,9 @@ async def _submit(
                 "price_ok": (
                     confirm["price"] == expected_credits
                     if max_credits is None
-                    else confirm["price"] is not None and confirm["price"] <= max_credits
+                    else confirm["price"] is not None
+                    and confirm["price"] <= max_credits
+                    and (not expected_credits or confirm["price"] == expected_credits)
                 ),
                 **({"max_credits": max_credits} if max_credits is not None else {}),
                 "composer_left": await session.page.evaluate(_LEFT_JS),
@@ -746,6 +748,13 @@ async def _submit(
             ensure_price(confirm["price"], expected_credits)
         else:
             ensure_within(confirm["price"], max_credits)
+            if expected_credits and confirm["price"] != expected_credits:
+                # A cell the survey priced must quote that price: less means a setting slipped (review of plan AB).
+                raise RuntimeError(
+                    f"refusing to submit: the composer says {confirm['price']} credits where the surveyed price for "
+                    f"these settings is {expected_credits}; a setting did not take, or Flow changed its prices (then "
+                    "run the Flow survey to update flow_options.json); nothing was clicked"
+                )
     except Exception:
         # Nothing was clicked: leave the shared composer as empty as this run found it (review F4, 2026-09-16).
         with contextlib.suppress(Exception):

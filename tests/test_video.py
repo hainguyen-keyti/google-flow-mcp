@@ -86,7 +86,9 @@ def test_submit_sets_the_count_at_both_settings_passes(monkeypatch, tmp_path):
     )
     _counted(monkeypatch, log, (24, 24))
 
-    _submit(_SubmitSession(log), tmp_path, log, count=2, max_credits=24, strict_output=True)
+    _submit(
+        _SubmitSession(log), tmp_path, log, count=2, max_credits=24, expected_credits=24, strict_output=True
+    )
 
     assert "configure pre x2" in log and "configure confirm x2" in log, log
 
@@ -131,7 +133,9 @@ def test_x2_is_done_only_with_both_clips_fetched(monkeypatch, tmp_path):
     _install(monkeypatch, tmp_path, log, fresh=fresh, balance_reads=(200, 176, 176))
     _counted(monkeypatch, log, (24, 24))
 
-    result = _submit(_SubmitSession(log), tmp_path, log, count=2, max_credits=24, strict_output=True)
+    result = _submit(
+        _SubmitSession(log), tmp_path, log, count=2, max_credits=24, expected_credits=24, strict_output=True
+    )
 
     assert sorted(o["media_id"] for o in result["outputs"]) == ["m-w-a", "m-w-b"]
     assert len([line for line in log if line.startswith("fetch")]) == 2
@@ -144,7 +148,15 @@ def test_x2_with_one_clip_listed_is_not_done_and_says_do_not_run_again(monkeypat
     _counted(monkeypatch, log, (24, 24))
 
     with pytest.raises(RuntimeError, match="do not run this job again"):
-        _submit(_SubmitSession(log), tmp_path, log, count=2, max_credits=24, strict_output=True)
+        _submit(
+            _SubmitSession(log),
+            tmp_path,
+            log,
+            count=2,
+            max_credits=24,
+            expected_credits=24,
+            strict_output=True,
+        )
 
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
     assert last["status"] != "done", last
@@ -271,7 +283,9 @@ def test_the_slots_read_back_filled_where_they_were_asked():
     [
         ("t2v", "abra_t2v_4s", 4, True),
         ("t2v", "abra_t2v_10s", 4, False),
-        ("t2v", "veo_3_1_t2v_lite", None, True),
+        # gflow's note (migrated_composer.py:182-188): a plain Veo t2v submit sends a key with no mode in it.
+        ("t2v", "veo_3_1_lite_lower_priority", None, True),
+        ("t2v", "veo_3_1_r2v_lite_low_priority", None, False),
         ("i2v", "abra_i2v_6s", 6, True),
         ("i2v", "abra_t2v_6s", 6, False),
         ("r2v", "abra_r2v_8s", 8, True),
@@ -427,3 +441,92 @@ def test_the_ingredients_driver_builds_the_body_check_from_the_references_it_res
     )
     assert captured["watch"] == ("built", [MEDIA])
     assert captured["count"] == 2 and captured["max_credits"] == 10
+
+
+def test_the_start_and_end_submit_is_heard_though_its_rpc_name_rides_in_the_body():
+    """Review of plan AB, B1: nprQif carries no rpcids query (gflow migrated_composer.py:174-178), so a check that
+    read only the URL reported every paid start+end run as an error."""
+    refs = video.frame_references([TEAPOT, CUP], RECORDS, "m-teapot", "m-cup")
+    check = video.VideoBodyCheck("i2v", refs, None)
+
+    class _Request:
+        url = "https://flow.google.com/_/x/data/batchexecute?rt=c"
+        post_data = 'f.req=[[["nprQif","[[\\"w-teapot\\",\\"w-cup\\"],\\"veo_3_1_interpolation_lite\\"]",null,"generic"]]]'
+
+    check.on_request(_Request())
+    report = check.report()
+    assert report["ok"] is True and report["rpcid"] == "nprQif", report
+
+
+def test_a_live_price_that_differs_from_the_surveyed_cell_is_refused_before_the_click(monkeypatch, tmp_path):
+    """Review of plan AB, finding 2: under a cap alone, a pin that slipped to a cheaper cell (asked 720p, got 360p)
+    paid the cheaper price for the wrong clip. A surveyed cell must quote exactly its surveyed price."""
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    _counted(monkeypatch, log, (6, 6))
+
+    with pytest.raises(RuntimeError, match="surveyed.*12"):
+        _submit(_SubmitSession(log), tmp_path, log, expected_credits=12, max_credits=12)
+    assert "click" not in log
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows() == []
+
+
+def test_a_cell_with_no_surveyed_price_runs_on_the_cap_alone(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", PROMPT)], balance_reads=(200, 191, 191))
+    _counted(monkeypatch, log, (9, 9))
+
+    result = _submit(
+        _SubmitSession(log), tmp_path, log, expected_credits=0, max_credits=10, strict_output=True
+    )
+
+    assert result["spent"] == 9
+
+
+def test_ingredients_holds_its_run_to_the_surveyed_price_gen_video_passes(monkeypatch):
+    calls = _driver_world(monkeypatch)
+
+    _run(model="omni-flash", resolution="360p", duration=8, media_ids=["m-teapot"])
+
+    assert calls["ingredients"]["table_credits"] == 6
+
+
+def test_x2_keeps_waiting_while_only_one_clip_is_listed(monkeypatch, tmp_path):
+    """Mutant of plan AB: stopping at the first clip of an x2 run passed every other test, since they list both clips
+    at once. Here the first poll holds one clip and the second both; the run must wait for the second."""
+    log = []
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 176, 176))
+    _counted(monkeypatch, log, (24, 24))
+    before = [_video("w-before", "old")]
+    polls = iter(
+        [
+            before,
+            [*before, _video("w-a", PROMPT)],
+            *([[*before, _video("w-a", PROMPT), _video("w-b", PROMPT)]] * 5),
+        ]
+    )
+
+    async def snapshot(session, project_id, attempts=4):
+        log.append("snapshot")
+        return next(polls), set()
+
+    real_sleep = asyncio.sleep
+
+    async def no_wait(seconds):
+        await real_sleep(0)
+
+    monkeypatch.setattr(composer, "snapshot", snapshot)
+    monkeypatch.setattr(composer.asyncio, "sleep", no_wait)
+
+    result = _submit(
+        _SubmitSession(log),
+        tmp_path,
+        log,
+        count=2,
+        max_credits=24,
+        expected_credits=24,
+        strict_output=True,
+        wait=60.0,
+    )
+
+    assert sorted(o["media_id"] for o in result["outputs"]) == ["m-w-a", "m-w-b"]

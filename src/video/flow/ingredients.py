@@ -450,13 +450,14 @@ async def generate(
     resolution: str | None = None,
     max_credits: int | None = None,
     body_check_for: Any = None,
+    table_credits: int = 0,
 ) -> dict[str, Any]:
     """One video from characters and project images, or with dry_run the quote and the chips, never a click.
 
     With max_credits (gen_video, plan AB) the caller has checked the settings against the surveyed options, and the
     live price line is held against that cap instead of this module's own table."""
     if max_credits is not None:
-        expected = price_for(model, duration) or 0
+        expected = table_credits
     elif model not in PRICES:
         raise ValueError(f"model must be one of {sorted(PRICES)}, got {model!r}")
     elif aspect not in ASPECTS:
