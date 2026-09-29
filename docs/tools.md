@@ -254,13 +254,13 @@ Video starring the project's characters (entity ids from flow_characters), with 
 
 **Arguments**: `prompt`, `project`, `model` (optional), `aspect` (optional), `count` (optional), `job_id` (optional)
 
-Text to image via gflow: 0 credits with the default nano2 model, but it draws on a daily image quota. Flow's Agent mode is turned off in the project before gflow runs, since gflow cannot generate while it is on, and turned back on afterwards if it was on; measured 2026-09-29, this adds about 19 s, or about 35 s when it was on.
+Text to image via gflow: 0 credits with the default nano2 model, but it draws on a daily image quota. Each output's media_id is the project media id that gen_video takes as start_frame, end_frame or media_ids; workflow_id is the id gflow itself reports. The listing can trail a new image, so this call reads it for up to about a minute; when it never shows the image, media_id is null and media_id_note says how to find it. Flow's Agent mode is turned off in the project before gflow runs, since gflow cannot generate while it is on, and turned back on afterwards if it was on; measured 2026-09-29, this adds about 19 s, or about 35 s when it was on.
 
 ### `gen_i2i`
 
 **Arguments**: `refs`, `prompt`, `project`, `model` (optional), `aspect` (optional), `count` (optional), `job_id` (optional)
 
-Reference images to image via gflow: 0 credits with the default nano2 model, but it draws on a daily image quota. Flow's Agent mode is turned off in the project before gflow runs, since gflow cannot generate while it is on, and turned back on afterwards if it was on; measured 2026-09-29, this adds about 19 s, or about 35 s when it was on.
+Reference images to image via gflow: 0 credits with the default nano2 model, but it draws on a daily image quota. Each output's media_id is the project media id that gen_video takes as start_frame, end_frame or media_ids; workflow_id is the id gflow itself reports. The listing can trail a new image, so this call reads it for up to about a minute; when it never shows the image, media_id is null and media_id_note says how to find it. Flow's Agent mode is turned off in the project before gflow runs, since gflow cannot generate while it is on, and turned back on afterwards if it was on; measured 2026-09-29, this adds about 19 s, or about 35 s when it was on.
 
 ### `clip_extend`
 

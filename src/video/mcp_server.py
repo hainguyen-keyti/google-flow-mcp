@@ -44,6 +44,9 @@ END_FRAME_SECONDS = 10
 
 MEDIA_KINDS = ("image", "video")
 BRIEF_PROMPT_CHARS = 120
+# Flow's listing trailed its own answer by up to about 60 s (scenes.LISTING_LAG_MS).
+IMAGE_LISTING_READS = 7
+IMAGE_LISTING_POLL_S = 10
 
 
 def _media_kind(kind: str | None) -> str | None:
@@ -602,9 +605,34 @@ class Backend:
                 raise
             if was_on:
                 result["agent_mode_restored"] = await self._agent_restore(project)
+            if kind in gen_mod.IMAGE_KINDS:
+                await self._image_media_ids(project, result.get("outputs") or [])
             return result
 
         return await self._spend_once(job_id, target, run)
+
+    async def _image_media_ids(self, project: str, outputs: list[dict[str, Any]]) -> None:
+        """gflow names an image by its workflow id (measured 2026-09-30), which gen_video refuses as a frame: the
+        media id is read off the listing, which can trail a fresh image, and the workflow id is kept beside it."""
+        if not outputs:
+            return
+        for output in outputs:
+            output["workflow_id"], output["media_id"] = output.get("media_id"), None
+        for attempt in range(IMAGE_LISTING_READS):
+            if attempt:
+                await asyncio.sleep(IMAGE_LISTING_POLL_S)
+            media = (await self._with(lambda s: reader.project(s, project)))["media"]
+            by_workflow = {m.get("workflow_id"): m["id"] for m in media if m.get("workflow_id")}
+            for output in outputs:
+                output["media_id"] = by_workflow.get(output["workflow_id"])
+            if all(output["media_id"] for output in outputs):
+                return
+        for output in outputs:
+            if not output["media_id"]:
+                output["media_id_note"] = (
+                    f"the project listing never showed workflow {output['workflow_id']}, so this image has no media "
+                    "id yet: find it with flow_media (its workflow_id), or flow_upload the file at path"
+                )
 
     async def _agent_off(self, project: str) -> bool:
         """gflow dies with exit 25 while Flow's Agent chip is on (measured 2026-09-28), so it goes off first; returns
@@ -692,6 +720,11 @@ server = TellingServer(
     ),
 )
 
+_IMAGE_IDS = (
+    " Each output's media_id is the project media id that gen_video takes as start_frame, end_frame or media_ids; "
+    "workflow_id is the id gflow itself reports. The listing can trail a new image, so this call reads it for up to "
+    "about a minute; when it never shows the image, media_id is null and media_id_note says how to find it."
+)
 _AGENT_NOTE = (
     " Flow's Agent mode is turned off in the project before gflow runs, since gflow cannot generate while it is on, "
     "and turned back on afterwards if it was on; measured 2026-09-29, this adds about 19 s, or about 35 s when it "
@@ -1605,6 +1638,7 @@ async def gen_video(
     name="gen_t2i",
     description=(
         "Text to image via gflow: 0 credits with the default nano2 model, but it draws on a daily image quota."
+        + _IMAGE_IDS
         + _AGENT_NOTE
     ),
 )
@@ -1625,7 +1659,7 @@ async def gen_t2i(
     name="gen_i2i",
     description=(
         "Reference images to image via gflow: 0 credits with the default nano2 model, but it draws on a daily "
-        "image quota." + _AGENT_NOTE
+        "image quota." + _IMAGE_IDS + _AGENT_NOTE
     ),
 )
 async def gen_i2i(

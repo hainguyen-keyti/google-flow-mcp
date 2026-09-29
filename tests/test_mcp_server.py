@@ -2835,3 +2835,57 @@ def test_gen_video_forwards_every_option_to_the_driver(monkeypatch, tmp_path):
         "end_frame": "E",
     }
     assert got["max_credits"] == 20 and got["job_id"] == "job-video" and got["out_dir"] == str(tmp_path)
+
+
+def _image_world(monkeypatch, tmp_path, listing):
+    """gflow answers an image's workflow id as its media_name (measured 2026-09-30: gen_i2i said 68211a91..., the
+    listing holds that image as media 9e41c03f... under workflow 68211a91...)."""
+    reads = []
+
+    async def fake_run_job(job, out_dir, **kwargs):
+        return {"job_id": job.job_id, "outputs": [{"media_id": "WF-1", "path": "out/WF-1_1.jpg"}]}
+
+    async def fake_with(self, fn):
+        return await fn(object())
+
+    async def fake_project(session, project_id, settle=10.0, *, versions=False):
+        reads.append(project_id)
+        return {"meta": {}, "models": [], "media": listing(len(reads))}
+
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.reader, "project", fake_project)
+    monkeypatch.setattr(mcp_server, "IMAGE_LISTING_POLL_S", 0, raising=False)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    return reads
+
+
+_IMAGE_CALLS = {
+    "gen_t2i": {"prompt": "a boat", "project": "P", "job_id": "job-t2i"},
+    "gen_i2i": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-i2i"},
+}
+
+
+@pytest.mark.parametrize("tool", sorted(_IMAGE_CALLS))
+def test_an_image_answers_the_media_id_gen_video_takes_not_its_workflow(monkeypatch, tmp_path, tool):
+    image = {"id": "MEDIA-1", "workflow_id": "WF-1", "kind": "image", "title": "Woman posing in bedroom"}
+    # The listing trails a fresh image (scenes: LISTING_LAG_MS), so the first read misses it.
+    reads = _image_world(monkeypatch, tmp_path, lambda n: [image] if n > 1 else [])
+
+    result = with_client(lambda session: session.call_tool(tool, _IMAGE_CALLS[tool]))
+
+    assert not result.is_error, _texts([result])
+    out = json.loads(_texts([result])[0])["outputs"][0]
+    assert (out["media_id"], out["workflow_id"]) == ("MEDIA-1", "WF-1"), out
+    assert reads == ["P", "P"], reads
+
+
+def test_an_image_the_listing_never_shows_gets_no_media_id_rather_than_its_workflow(monkeypatch, tmp_path):
+    _image_world(monkeypatch, tmp_path, lambda n: [])
+
+    result = with_client(lambda session: session.call_tool("gen_i2i", _IMAGE_CALLS["gen_i2i"]))
+
+    assert not result.is_error, _texts([result])
+    out = json.loads(_texts([result])[0])["outputs"][0]
+    assert out["media_id"] is None and out["workflow_id"] == "WF-1", out
+    assert "flow_upload" in out["media_id_note"], out
