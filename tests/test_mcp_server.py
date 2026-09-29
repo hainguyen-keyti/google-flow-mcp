@@ -2592,3 +2592,10 @@ def test_gen_character_takes_project_images_alone_for_the_one_ten_second_referen
     assert not result.is_error, _texts([result])
     forwarded = json.loads(_texts([result])[0])
     assert forwarded["characters"] == [] and forwarded["media_ids"] == ["M"], forwarded
+
+
+def test_clip_download_says_4k_is_greyed_out_on_this_account_and_refused_before_any_click():
+    # Plan Y, probe 2026-09-29: the Download menu renders `4K Upscaled` disabled on this Pro account.
+    download = served_tool_objects()["clip_download"].description
+    assert "greyed out" in download and "refused before" in download, download
+    assert "may spend" not in download, download

@@ -2404,3 +2404,15 @@ def test_download_rendition_reads_the_listing_before_it_opens_the_editor(monkeyp
     asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path, workflow_id="w-edit"))
 
     assert looked == ["editor"], looked
+
+
+def test_a_greyed_out_4k_is_refused_without_blaming_the_clip_model():
+    """Plan Y, probe 2026-09-29: `4K Upscaled` is greyed out on this Pro account for every clip tried, and the refusal
+    said "extend is offered on Veo clips", which is about a different menu."""
+    page = _LateToolbarPage(appears_after_ms=0, item_enabled=False)
+
+    with pytest.raises(LookupError, match="greyed out") as refused:
+        asyncio.run(clips._menu_item(_LateSession(page), "Download media", "4K"))
+    assert "4K" in str(refused.value)
+    assert "extend" not in str(refused.value).lower() and "veo" not in str(refused.value).lower()
+    assert "item" not in page.clicked

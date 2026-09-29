@@ -102,7 +102,7 @@ guess about; the tool says so too.
 | `clip_edit` (Omni 1.1 Flash) | 20 measured, Flow's table says 40 |
 | `gen_t2i` / `gen_i2i` (Nano Banana 2) | 0 credits, but a daily image quota |
 | `clip_download` at 1080p | 0 |
-| `clip_download` at 4k (a Flow upscale) | *unmeasured*, ask before calling |
+| `clip_download` at 4k (a Flow upscale) | not offered on Pro: greyed out, refused before any click (Flow's table: Ultra, 50) |
 | Every read: lane, projects, media, credits, characters, scenes, voices | 0 |
 
 Timing, so a slow call is not mistaken for a broken one: a read takes 15 to 50 s, a change about 50 s, a

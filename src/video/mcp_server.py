@@ -618,8 +618,8 @@ server = TellingServer(
         "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
         "recorded in the ledger (out/ledger.jsonl by default): gen_t2v, gen_i2v, gen_r2v, gen_character, "
         "clip_extend, clip_edit, and agent_send (may spend). clip_download at 4k is a Flow upscale its price "
-        "table offers only from the Ultra plan, at 50 credits, while this account is on Pro: ask the owner "
-        "first. gen_t2i and gen_i2i are credit-free but draw on a daily image quota. Check a tool's description "
+        "table offers only from the Ultra plan, at 50 credits; on this Pro account Flow greys it out, so it is "
+        "refused before any click. gen_t2i and gen_i2i are credit-free but draw on a daily image quota. Check a tool's description "
         "for its cost before calling it: each carries what was MEASURED here and, where Flow's published table "
         "disagrees, that figure too (Omni Flash Edit is listed at 40 and measured 20). Every call drives a real Chrome "
         "session and blocks until Flow answers: a read takes about 15-50 s and a change about 50 s, a generation "
@@ -1140,8 +1140,8 @@ async def agent_send(project_id: str, message: str, job_id: str, wait: float = 6
         "Defaults to the NEWEST finished version of the media; pass workflow_id (from flow_media with "
         "all_versions=true) to fetch one specific version, such as the clip a particular edit produced. "
         "1080p measured 0 credits. 4k is an upscale Flow's price table offers only from the Ultra plan, at 50 "
-        "credits, and this account is on Pro, so its cost here is unmeasured and it may spend credits or simply "
-        "be refused: ask the owner before choosing 4k."
+        "credits; on this Pro account the Download menu shows it greyed out (measured 2026-09-29 on every clip "
+        "tried), so a 4k request is refused before any click and costs nothing."
     ),
 )
 async def clip_download(
@@ -1201,6 +1201,8 @@ async def flow_uploads(project_id: str) -> str:
     name="clip_extend",
     description=(
         "Extend a clip with Veo 3.1 Lite. It spends credits and is ledgered: 10 credits per extend (measured). "
+        "Flow greys Extend out on some clips (measured: on Omni clips, and on a Veo clip after Omni edits and a 1080p "
+        "upscale); the call is then refused before the click, at no cost. "
         "Takes about 2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out "
         "folder. " + _BALANCE_MOVED + _JOB_ID_RULE
     ),

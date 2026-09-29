@@ -146,8 +146,8 @@ async def _menu_item(session: FlowSession, button: str, item: str) -> Any:
             # a clip made by omni-flash, and that is what stopped the first two real clip_extend calls.
             if not await found.is_enabled():
                 raise LookupError(
-                    f"menu {button!r} shows {item!r} greyed out, so Flow does not offer it for this clip; "
-                    "extend is offered on Veo clips, not on every model"
+                    f"menu {button!r} shows {item!r} greyed out, so Flow does not offer it for this clip on this "
+                    "account; nothing was clicked"
                 )
             return found
         except PlaywrightTimeoutError:
