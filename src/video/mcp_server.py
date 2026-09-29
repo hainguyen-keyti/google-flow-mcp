@@ -1202,7 +1202,10 @@ async def flow_uploads(project_id: str) -> str:
     description=(
         "Extend a clip with Veo 3.1 Lite. It spends credits and is ledgered: 10 credits per extend (measured). "
         "Flow greys Extend out on some clips (measured: on Omni clips, and on a Veo clip after Omni edits and a 1080p "
-        "upscale); the call is then refused before the click, at no cost. "
+        "upscale); the call is then refused before the click, at no cost. The extension is a new clip inside a new "
+        "scene (the source is copied in first): its own file answered HTTP 400 and clip_download could not open it "
+        "(measured 2026-09-29), so fetch it with scene_download on the scene_id this tool returns; that film's video "
+        "stream ran 15.0 s for an 8 s source, the extension overlapping the source's last second. "
         "Takes about 2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out "
         "folder. " + _BALANCE_MOVED + _JOB_ID_RULE
     ),

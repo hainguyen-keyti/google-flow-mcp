@@ -2599,3 +2599,10 @@ def test_clip_download_says_4k_is_greyed_out_on_this_account_and_refused_before_
     download = served_tool_objects()["clip_download"].description
     assert "greyed out" in download and "refused before" in download, download
     assert "may spend" not in download, download
+
+
+def test_clip_extend_tells_the_agent_to_fetch_the_new_clip_through_its_scene():
+    # Plan Z, measured 2026-09-29: the extension lives in a new scene; flow_download got HTTP 400 on both renditions,
+    # clip_download waited 60 s for an editor that never opened, and scene_download fetched the film.
+    extend = served_tool_objects()["clip_extend"].description
+    assert "scene_download" in extend and "HTTP 400" in extend, extend
