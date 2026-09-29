@@ -798,7 +798,7 @@ def _install(
     async def notice(page):
         return ""
 
-    async def fetch_720(session, record, stem, attempts=6):
+    async def fetch_720(session, record, stem, attempts=6, *, project_id):
         log.append(f"fetch {record['workflow_id']} into {stem.name}")
         if fetch_error is not None:
             raise fetch_error

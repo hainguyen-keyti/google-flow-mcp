@@ -556,7 +556,14 @@ async def snapshot(session: FlowSession, project_id: str, attempts: int = 4) -> 
     raise last
 
 
-async def fetch_720(session: FlowSession, record: dict[str, Any], stem: Path, attempts: int = 6) -> Path:
+async def fetch_720(
+    session: FlowSession,
+    record: dict[str, Any],
+    stem: Path,
+    attempts: int = 6,
+    *,
+    project_id: str | None = None,
+) -> Path:
     """Insist on the 720p rendition before accepting anything smaller.
 
     `=m22` answers 404 for a while after the record says done; taking `=m18` immediately leaves a
@@ -573,7 +580,14 @@ async def fetch_720(session: FlowSession, record: dict[str, Any], stem: Path, at
         except RuntimeError:
             if attempt < attempts - 1:
                 await asyncio.sleep(15)
-    return await clips._fetch_with_retry(session.page.request, record, stem)
+    try:
+        return await clips._fetch_with_retry(session.page.request, record, stem)
+    except RuntimeError as exc:
+        # Some workflows 404 on every rendition for good (job lly-v5-s1c-reveal, 2026-09-30); the editor's own
+        # Download serves the same clip for 0 credits.
+        if "404" not in str(exc) or project_id is None:
+            raise
+        return await clips.download_rendition(session, project_id, record["id"], "720p", stem.parent)
 
 
 _STATE_JS = """() => ({
@@ -858,7 +872,11 @@ async def _submit(
             if len(candidates) == count and all(clips.is_done(c) for c in candidates):
                 for clip in candidates:
                     try:
-                        got = str(await fetch_720(session, clip, out_dir / f"{clip['id']}_{digest[:8]}"))
+                        got = str(
+                            await fetch_720(
+                                session, clip, out_dir / f"{clip['id']}_{digest[:8]}", project_id=project_id
+                            )
+                        )
                     except Exception as exc:  # noqa: BLE001
                         got, fetch_error = None, f"{type(exc).__name__}: {str(exc)[:160]}"
                     outputs.append({"media_id": clip["id"], "path": got})
@@ -866,7 +884,11 @@ async def _submit(
                     path = outputs[0]["path"]
         elif output is not None and clips.is_done(output):
             try:
-                path = str(await fetch_720(session, output, out_dir / f"{output['id']}_{digest[:8]}"))
+                path = str(
+                    await fetch_720(
+                        session, output, out_dir / f"{output['id']}_{digest[:8]}", project_id=project_id
+                    )
+                )
             except Exception as exc:  # noqa: BLE001
                 fetch_error = f"{type(exc).__name__}: {str(exc)[:160]}"
     except Exception as exc:

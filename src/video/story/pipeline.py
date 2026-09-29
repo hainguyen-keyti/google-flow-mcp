@@ -247,7 +247,7 @@ async def _refetch_720(session, project_id: str, media_id: str, stem: Path) -> P
     from video.flow import reader
 
     record = download_mod.latest_version(await reader.records(session, project_id), media_id)
-    return await composer.fetch_720(session, record, stem)
+    return await composer.fetch_720(session, record, stem, project_id=project_id)
 
 
 def take_ids(job_id: str, hands_risk: bool) -> list[str]:

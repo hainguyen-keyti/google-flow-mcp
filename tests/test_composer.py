@@ -102,7 +102,7 @@ def test_fetch_720_asks_flow_for_a_moved_url(monkeypatch, tmp_path):
         "model": "veo_3_1_t2v_lite",
     }
 
-    asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "shot"))
+    asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "shot", project_id="P"))
 
     assert urls == ["https://flow.google.com/asb/T=m22"], urls
 
@@ -116,7 +116,7 @@ def test_a_360p_clip_is_not_held_waiting_for_a_720p_file_it_never_gets(monkeypat
         "model": "abra_t2v_4s_360p",
     }
 
-    out = asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "shot"))
+    out = asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "shot", project_id="P"))
 
     assert out == tmp_path / "sd.mp4"
     assert not any(u.endswith("=m22") for u in urls), urls
@@ -253,3 +253,55 @@ def test_ingredients_is_refused_while_the_panel_stays_on_image_whatever_the_butt
 
     with pytest.raises(RuntimeError, match="Video"):
         asyncio.run(composer.configure(_PanelSession(panel), mode="Ingredients", label="pre"))
+
+
+def _dead_renditions(monkeypatch, tmp_path):
+    """Job lly-v5-s1c-reveal, 2026-09-30: paid 10, then =m22 and =m18 both HTTP 404 and it ended pending; the editor's
+    Download at 720p fetched the same clip for 0 credits."""
+    editor = []
+
+    async def dead(request, *args, **kwargs):
+        raise RuntimeError("no rendition of video returned a real asset: o=m22: HTTP 404; o=m18: HTTP 404")
+
+    async def no_sleep(seconds):
+        return None
+
+    async def download_rendition(session, project_id, media_id, quality, out_dir, *, workflow_id=None):
+        editor.append((project_id, media_id, quality, out_dir))
+        return out_dir / f"{media_id}_{quality}.mp4"
+
+    monkeypatch.setattr(composer.download_mod, "fetch_to_file", dead)
+    monkeypatch.setattr(composer.clips, "_fetch_with_retry", dead)
+    monkeypatch.setattr(composer.clips, "download_rendition", download_rendition)
+    monkeypatch.setattr(composer.asyncio, "sleep", no_sleep)
+    return editor
+
+
+def test_a_paid_clip_whose_renditions_404_is_fetched_from_the_editor(monkeypatch, tmp_path):
+    editor = _dead_renditions(monkeypatch, tmp_path)
+    record = {
+        "id": "M1",
+        "kind": "video",
+        "url": "https://flow.google.com/asb/T",
+        "model": "omni_flash_i2v_6s_first_last",
+    }
+
+    out = asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "M1_ab", project_id="P"))
+
+    assert editor == [("P", "M1", "720p", tmp_path)], editor
+    assert out == tmp_path / "M1_720p.mp4"
+
+
+def test_an_error_that_is_not_a_404_is_not_hidden_behind_the_editor(monkeypatch, tmp_path):
+    editor = _dead_renditions(monkeypatch, tmp_path)
+
+    async def refused(request, *args, **kwargs):
+        raise RuntimeError("HTTP 403 forbidden")
+
+    monkeypatch.setattr(composer.download_mod, "fetch_to_file", refused)
+    monkeypatch.setattr(composer.clips, "_fetch_with_retry", refused)
+    record = {"id": "M1", "kind": "video", "url": "https://flow.google.com/asb/T", "model": "abra_i2v_8s"}
+
+    with pytest.raises(RuntimeError, match="403"):
+        asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "M1_ab", project_id="P"))
+    assert editor == []
