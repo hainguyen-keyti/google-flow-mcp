@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from video.flow import reader
 from video.session import FlowSession
@@ -45,7 +46,21 @@ def select_media(media: list[dict[str, Any]], media_id: str) -> dict[str, Any]:
     raise LookupError(f"media {media_id} is not in the project listing")
 
 
+MOVED_HOSTS = ("contribution.fife.usercontent.google.com",)
+FLOW_HOST = "flow.google.com"
+
+
+def asset_base(url: str) -> str:
+    """Measured 2026-09-29: the listing's media moved to contribution.fife.usercontent.google.com, which answers 400 to
+    every suffix, while the page loads the same /asb/ token from flow.google.com, where the suffixes below still work."""
+    parts = urlsplit(url)
+    if parts.netloc in MOVED_HOSTS:
+        return urlunsplit((parts.scheme or "https", FLOW_HOST, parts.path, parts.query, parts.fragment))
+    return url
+
+
 def asset_urls(kind: str | None, url: str) -> list[str]:
+    url = asset_base(url)
     if kind == "image":
         return [url + _IMAGE_RENDITION]
     if kind == "video":

@@ -544,9 +544,14 @@ async def fetch_720(session: FlowSession, record: dict[str, Any], stem: Path, at
     `=m22` answers 404 for a while after the record says done; taking `=m18` immediately leaves a
     360x640 clip inside a 720x1280 cut (measured 2026-09-13 on tryon-05).
     """
+    # A 360p run has no =m22 at all (measured 2026-09-29, key abra_t2v_4s_360p): =m18 IS its file.
+    if str(record.get("model") or "").endswith("_360p"):
+        return await clips._fetch_with_retry(session.page.request, record, stem)
     for attempt in range(attempts):
         try:
-            return await download_mod.fetch_to_file(session.page.request, record["url"] + "=m22", stem)
+            return await download_mod.fetch_to_file(
+                session.page.request, download_mod.asset_base(record["url"]) + "=m22", stem
+            )
         except RuntimeError:
             if attempt < attempts - 1:
                 await asyncio.sleep(15)

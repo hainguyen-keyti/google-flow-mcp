@@ -78,3 +78,22 @@ def test_fetch_to_file_never_overwrites_an_existing_file(tmp_path):
     with pytest.raises(FileExistsError):
         asyncio.run(download.fetch_to_file(request, "https://x/clip", tmp_path / "abc"))
     assert (tmp_path / "abc.mp4").read_bytes() == b"old"
+
+
+# Plan AD, measured 2026-09-29: the listing moved its media to contribution.fife.usercontent.google.com, which answers
+# 400 to every suffix; the page itself loads the same /asb/ token from flow.google.com, where every suffix still works.
+MOVED = "https://contribution.fife.usercontent.google.com/asb/ANqvLOtoken123"
+
+
+def test_a_moved_listing_url_is_fetched_from_flow_with_the_same_path():
+    assert download.asset_urls("video", MOVED) == [
+        "https://flow.google.com/asb/ANqvLOtoken123=m22",
+        "https://flow.google.com/asb/ANqvLOtoken123=m18",
+    ]
+    assert download.asset_urls("image", MOVED) == ["https://flow.google.com/asb/ANqvLOtoken123=s0"]
+
+
+def test_an_old_lh3_url_is_left_as_it_was():
+    assert download.asset_urls("image", "https://lh3.googleusercontent.com/abc") == [
+        "https://lh3.googleusercontent.com/abc=s0"
+    ]

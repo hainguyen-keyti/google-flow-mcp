@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from video.flow import composer
@@ -64,3 +66,56 @@ def test_pick_output_falls_back_to_the_newest_video_and_ignores_images():
     ]
     assert composer.pick_output(fresh, prompt)["workflow_id"] == "new"
     assert composer.pick_output([], prompt) is None
+
+
+def _fetch_world(monkeypatch, tmp_path):
+    urls = []
+
+    async def fetch(request, url, stem):
+        urls.append(url)
+        return tmp_path / "clip.mp4"
+
+    async def fallback(request, record, stem, attempts=6):
+        urls.append(f"fallback {record['url']}")
+        return tmp_path / "sd.mp4"
+
+    async def no_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(composer.download_mod, "fetch_to_file", fetch)
+    monkeypatch.setattr(composer.clips, "_fetch_with_retry", fallback)
+    monkeypatch.setattr(composer.asyncio, "sleep", no_sleep)
+    return urls
+
+
+class _FetchSession:
+    page = type("P", (), {"request": object()})()
+
+
+def test_fetch_720_asks_flow_for_a_moved_url(monkeypatch, tmp_path):
+    """Plan AD: the listing's new host answers 400 to every suffix; flow.google.com serves the same token."""
+    urls = _fetch_world(monkeypatch, tmp_path)
+    record = {
+        "kind": "video",
+        "url": "https://contribution.fife.usercontent.google.com/asb/T",
+        "model": "veo_3_1_t2v_lite",
+    }
+
+    asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "shot"))
+
+    assert urls == ["https://flow.google.com/asb/T=m22"], urls
+
+
+def test_a_360p_clip_is_not_held_waiting_for_a_720p_file_it_never_gets(monkeypatch, tmp_path):
+    """Measured 2026-09-29 (job ab-1, key abra_t2v_4s_360p): =m22 answers 404 and =m18 is the 360p file."""
+    urls = _fetch_world(monkeypatch, tmp_path)
+    record = {
+        "kind": "video",
+        "url": "https://contribution.fife.usercontent.google.com/asb/T",
+        "model": "abra_t2v_4s_360p",
+    }
+
+    out = asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "shot"))
+
+    assert out == tmp_path / "sd.mp4"
+    assert not any(u.endswith("=m22") for u in urls), urls
