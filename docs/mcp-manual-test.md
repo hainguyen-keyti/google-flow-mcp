@@ -1,198 +1,205 @@
-# Test tay MCP `video`: 43 tool, có giá và có rào chắn
+# Manual test of the `video` MCP server: 43 tools, with prices and guard rails
 
-> **English readers**: this page is a by-hand test pass written in Vietnamese for the repo owner. For the tool
-> reference in English, with prices, see [tools.md](tools.md), which is generated from the running server. The
-> gist of this page: call the free read tools first, then the ones that change a scratch project, and only then
-> the ones that spend credits, checking the balance before and after each.
+A pass to run by hand, or to hand to another agent that calls the tools over MCP. Every result shape below was
+**measured on a real account** between 2026-09-14 and 2026-09-29, not inferred from the code. For the generated
+reference of every tool and its arguments, see [tools.md](tools.md).
 
-Hướng dẫn để chủ repo tự test, hoặc giao cho một agent khác gọi qua MCP. Mọi hình dạng kết quả dưới đây là
-**đo thật ngày 2026-09-14 và 2026-09-15** (riêng `gen_character` và `character_create` nhận ảnh: 2026-09-16 và
-2026-09-17; các tool scene ghép phim: 2026-09-17; giọng nói và hai tool lưu clip: 2026-09-18), không phải suy từ code.
+The order matters: free reads first, then tools that change a scratch project, and only then the ones that spend
+credits, reading the balance before and after each.
 
-## 0. Trước khi bắt đầu
+## 0. Before you start
 
-- **Mở phiên Claude Code mới trong repo này.** Server `video` đang chạy KHÔNG tự nạp code mới. Tắt tiến trình
-  server thì lời gọi kế tiếp chạy code mới, nhưng phiên đang mở vẫn giữ mô tả tool và `instructions` cũ (đo
-  2026-09-15), nên agent trong phiên cũ đọc hướng dẫn cũ.
-- Gọi thử hai tool rẻ nhất: `flow_lane()` phải ra `verdict: MIGRATED`, và `flow_credits()` ra số dư (lần đo cuối
-  là **245**, 2026-09-15). Mỗi lần đọc số dư đều ghi thêm một dòng vào `out/credits.jsonl`.
-- Số dư **dao động giữa các lần đọc mà chưa rõ cơ chế**, nên trước mỗi lần định tiêu tiền phải đọc lại.
-- **Mỗi lời gọi lái một Chrome thật và chờ tới khi Flow trả lời.** Đo 2026-09-15 qua MCP: lời gọi mở một trang mất
-  12-17 s, lời gọi mở hai ba trang khoảng 50 s (`flow_tools()`, `project_rename`, `scene_restore`, `scene_delete`),
-  một lần sinh `gen_r2v` mất 292 s. Chậm không có nghĩa là hỏng: đừng gọi lại.
-- **Lỗi của tool giờ tới được agent kèm lý do** (đã lọc cookie và token), ví dụ
-  `LookupError: scene ... is already in the trash`. Trước đó agent chỉ thấy `Error executing tool <tên>`.
+- **Open a new Claude Code session in this repo.** A running `video` server does NOT reload code. Killing the server
+  process makes the next call run new code, but the open session keeps the old tool descriptions and `instructions`
+  (measured 2026-09-15), so an agent in that session reads stale guidance.
+- Call the two cheapest tools: `flow_lane()` must return `verdict: MIGRATED`, and `flow_credits()` returns the
+  balance. Every balance read also appends a line to `out/credits.jsonl`.
+- The balance **can move between readings on its own** (Flow tops a Pro plan up daily), so read it again right before
+  any spend.
+- **Every call drives a real Chrome and waits for Flow to answer.** Measured over MCP on 2026-09-15: a call that opens
+  one page takes 12-17 s, one that opens two or three pages about 50 s (`flow_tools()`, `project_rename`,
+  `scene_restore`, `scene_delete`), and one `gen_r2v` took 292 s. Slow is not broken: do not call again.
+- The window opens off the left edge of the screen with about 40 px visible; set `VIDEO_BROWSER_OFFSCREEN=0` to see it.
+- **Tool errors reach the agent with their reason** (cookies and tokens scrubbed), for example
+  `LookupError: scene ... is already in the trash`. Unknown arguments are refused before any browser opens.
 
-## 1. Tầng 0: để máy tự kiểm trước, 0 credit
+## 1. Tier 0: let the machine check first, 0 credits
 
-Tầng 0 đỏ thì dừng, đừng test tay tiếp: lỗi nằm ở tầng dưới chứ không phải ở thao tác của bạn.
+If tier 0 is red, stop: the fault is below anything you would test by hand.
 
-| Lệnh | Kỳ vọng |
+| Command | Expected |
 |---|---|
-| `uv run pytest -q` | mọi test xanh, không `failed` |
-| `uv run python scripts/acceptance/ledger_integrity.py` | `rows=6 pass=6 fail=0`, offline, không mở trình duyệt |
-| `uv run python scripts/acceptance/mcp_smoke.py` | `rows=15 pass=15 fail=0`, 2 đến 3 phút, gọi THẬT các tool đọc qua MCP, cộng một lần `gen_character` bị từ chối vì `out_dir` ngoài `out/` (không mở browser, không tiêu gì) |
-| `uv run python scripts/acceptance/flow_coverage.py --project <id> --character` | ma trận CLI; tự tạo rồi tự xoá project "acceptance probe" |
-| `uv run python -m video.probes.canary --project <id>` | 11 mỏ neo UI còn nguyên; exit 1 khi Google đổi giao diện |
+| `uv run pytest -q` | every test green, no `failed` |
+| `uv run python scripts/acceptance/ledger_integrity.py` | `fail=0`, offline, no browser |
+| `uv run python scripts/acceptance/mcp_smoke.py` | `fail=0`, 2 to 3 minutes; calls the read tools FOR REAL over MCP, plus one `gen_character` refused because its `out_dir` is outside `out/` (no browser, no spend) |
+| `uv run python scripts/acceptance/flow_coverage.py --project <id> --character` | the CLI matrix; creates and then deletes an "acceptance probe" project |
+| `uv run python -m video.probes.canary --project <id>` | 11 UI anchors still in place; exit 1 when Google changes the page |
 
-## 2. Dựng project nháp, để không đụng dữ liệu thật
+## 2. Make a scratch project, so real data is never touched
 
-1. Gọi `project_create(title="mcp manual test")`. Kết quả có dạng `{"id": "...", "rpcids": [...], "title": "..."}`.
-2. **Ghi lại `id` đó.** Mọi bước sau chỉ dùng đúng id này.
-3. Cuối buổi gọi `project_delete(project_id=<id nháp>)`.
+1. Call `project_create(title="mcp manual test")`. It returns `{"id": "...", "rpcids": [...], "title": "..."}`.
+2. **Write that `id` down.** Every later step uses exactly this id.
+3. At the end, call `project_delete(project_id=<scratch id>)`.
 
-**`project_delete` xoá vĩnh viễn cả clip, ingredient và prompt.** Đọc lại id hai lần trước khi gọi. Không bao
-giờ dán id của project thật vào tool này.
+**`project_delete` permanently deletes clips, ingredients and prompts.** Read the id twice before calling it. Never
+paste a real project's id into this tool.
 
-## 3. Bảng 43 tool
+## 3. The 43 tools
 
-Cột "giá" lấy từ đo trên gói PRO. Nhóm A và B an toàn với mọi project; nhóm C chỉ làm trong project nháp.
+Prices were measured on the Pro plan. Groups A and B are safe on any project; group C belongs in the scratch project.
 
-### A. Chỉ đọc, $0, an toàn tuyệt đối
+### A. Read only, $0, always safe
 
-| Tool | Tham số | Kết quả đúng trông như thế nào |
+| Tool | Arguments | What a correct result looks like |
 |---|---|---|
-| `flow_lane` | không | `{"verdict": "MIGRATED", "projects": 19, "roots": {...}}` |
-| `flow_projects` | không | list dict `{id, title, created, cover_media_id, thumbnail_url}`. **Có một id KHÔNG phải UUID**: `8822142b-ca75-46b7-aac8-03d2831_backfill` |
-| `flow_credits` | không | `{"balance": <int>, "raw": [...]}` |
-| `flow_media` | `project_id`, `all_versions=False`, `kind`, `since`, `limit`, `brief=False` | `{"meta": {id, title}, "media": [...], "models": [4 tên model]}`. `all_versions=true` trả CÙNG object đó, thêm khoá `versions`: list bản ghi có `type` và `workflow_id`. Bộ lọc (2026-09-18): `kind` là `video` hoặc `image`, `since` nhận epoch hay ngày ISO (ngày không kèm múi giờ đọc theo giờ máy), `limit` giữ N dòng mới nhất của TỪNG list và xếp mới trước, `brief=true` bỏ `url` và cắt `prompt` còn 120 ký tự cộng dấu ba chấm. Có ít nhất một bộ lọc thì kết quả thêm `media_total`, `truncated` (và `versions_total` khi `all_versions=true`); `truncated` đếm DÒNG bị bỏ, nên `brief` một mình vẫn để `truncated` là false. Không lọc thì thứ tự là thứ tự listing của Flow, KHÔNG phải mới trước: xem `created`; giá trị sai (`kind="clip"`, `limit=0`, `since="yesterday"`) bị TỪ CHỐI. Đo 2026-09-17: không lọc 28.378 ký tự, `all_versions=true` 122.919 |
-| `flow_characters` | `project_id` | list `{entity_id, name, portrait_media_id, portrait_workflow_id}`. Tải ảnh chân dung bằng `portrait_media_id` (là `null` khi listing chưa có record của ảnh); project mới ra `[]` |
-| `flow_tools` | `project_id` tuỳ chọn | list tool của gallery cộng đồng, giống nhau ở mọi project; số lượng đổi theo thời gian (62 ngày 14/9, 60 rồi 62 ngày 15/9). Bỏ trống `project_id` thì server tự mở project đầu tiên trên grid, vì Flow chỉ nạp gallery bên trong một project |
-| `flow_uploads` | `project_id` | `{"count": n}` và không có gì khác |
-| `scene_list` | `project_id`, `include_trashed=False` | list `{scene_id, title, trashed, created, updated}`. Mặc định ẩn scene đã xoá; `include_trashed=true` mới thấy |
-| `flow_voices` | `project_id`, `entity_id` | list `{name, description, custom}`: 30 preset của Flow cộng mọi giọng riêng đã lưu (`custom: true`, xếp trên đầu). Cần một nhân vật vì trang character là nơi DUY NHẤT Flow hiện danh sách; danh sách vẽ theo cửa sổ nên tool quét cuộn |
-| `scene_clips` | `project_id`, `scene_id` | đọc timeline từ listing: `{scene_id, title, trashed, aspect, seconds, clips}`, `clips` theo đúng thứ tự phim chạy, mỗi clip `{position, clip_id, title, seconds}`, `position` đếm từ 0. `clip_id` là id của clip trên timeline, không phải media id: thêm một media hai lần ra hai `clip_id`. Nhãn `Total duration` của trang đổi trước khi Flow lưu (đo 2026-09-17), nên đọc lại tool này sau mỗi thay đổi |
+| `flow_lane` | none | `{"verdict": "MIGRATED", "projects": <n>, "roots": {...}}` |
+| `flow_projects` | none | list of `{id, title, created, cover_media_id, thumbnail_url}`. **An id need not be a UUID**: one account has `8822142b-ca75-46b7-aac8-03d2831_backfill` |
+| `flow_credits` | none | `{"balance": <int>, "raw": [...]}` |
+| `flow_media` | `project_id`, `all_versions=False`, `kind`, `since`, `limit`, `brief=False` | `{"meta": {id, title}, "media": [...], "models": [...]}`. `all_versions=true` adds a `versions` key: records with `type` and `workflow_id`. Filters: `kind` is `video` or `image`; `since` takes an epoch or an ISO date (a date without a zone is read in local time); `limit` keeps the N newest rows of EACH list, newest first; `brief=true` drops `url` and cuts `prompt` to 120 characters plus an ellipsis. With any filter the result adds `media_total` and `truncated` (and `versions_total` with `all_versions=true`); `truncated` counts dropped ROWS, so `brief` alone leaves it false. Unfiltered, the order is Flow's listing order, NOT newest first: read `created`. Bad values (`kind="clip"`, `limit=0`, `since="yesterday"`) are REFUSED. Measured 2026-09-17: unfiltered 28,378 characters, `all_versions=true` 122,919 |
+| `flow_characters` | `project_id` | list of `{entity_id, name, portrait_media_id, portrait_workflow_id}`. Download the portrait with `portrait_media_id` (`null` while the listing has no record of the image); a new project gives `[]` |
+| `flow_tools` | `project_id` optional | the community tool gallery, the same in every project; its size changes over time. With no `project_id` the server opens the first project on the grid, because Flow only loads the gallery inside a project |
+| `flow_uploads` | `project_id` | `{"count": n}` and nothing else |
+| `scene_list` | `project_id`, `include_trashed=False` | list of `{scene_id, title, trashed, created, updated}`. Trashed scenes are hidden unless `include_trashed=true` |
+| `flow_voices` | `project_id`, `entity_id` | list of `{name, description, custom}`: Flow's 30 presets plus every saved custom voice (`custom: true`, listed first). It needs a character because the character page is the ONLY place Flow lists voices; the list renders a window at a time, so the tool scrolls |
+| `scene_clips` | `project_id`, `scene_id` | the timeline read from the listing: `{scene_id, title, trashed, aspect, seconds, clips}`, `clips` in play order, each `{position, clip_id, title, seconds}`, `position` from 0. `clip_id` is the timeline clip's id, not a media id: adding one media twice gives two `clip_id`s. The page's `Total duration` label changes before Flow saves (measured 2026-09-17), so read this tool again after every change |
 
-### B. Ghi file trên máy, $0
+### B. Writes files on this machine, $0
 
-| Tool | Tham số | Ghi chú |
+| Tool | Arguments | Notes |
 |---|---|---|
-| `flow_download` | `project_id`, `media_id`, `out_dir` | trả đường dẫn file trong `out/`; từ 2026-09-18 `out_dir` bị ÉP nằm trong `out/` (ngoài đó, hay trỏ vào file, bị từ chối trước khi mở browser). `media_id` phải là `id` của listing (`flow_media`); workflow id sẽ bị từ chối |
-| `clip_download` | `project_id`, `media_id`, `quality="1080p"`, `out_dir`, `workflow_id` | `out_dir` bị ÉP nằm trong `out/` từ 2026-09-18; mặc định lấy bản MỚI NHẤT đã xong; truyền `workflow_id` để chỉ đích danh một version. **`quality="4k"` là bản upscale mà bảng giá chính thức chỉ mở từ gói Ultra (50 credit), tài khoản này là Pro nên chưa đo được: có thể tốn credit hoặc bị từ chối, đừng gọi nếu chưa hỏi chủ repo**. 1080p đo được 0 credit |
-| `clip_reconcile` | `project_id`, `out_dir` | `out_dir` bị ÉP nằm trong `out/` từ 2026-09-18 (sổ ngoài đó thì guard `job_id` không quét tới); đóng sổ cho job editor mồ côi; trả `{"ledger": <đường dẫn tuyệt đối>, "ledger_exists", "ledger_rows", "jobs"}`. `jobs: []` chỉ nghĩa là sạch khi `ledger_exists` là `true` và đường dẫn đúng sổ bạn định đọc. Verdict: `done` (chỉ cho `clip_edit`: trên chính clip nguồn có đúng một version mới mang đúng prompt của job, chưa job nào khác trong cùng sổ giữ làm output `generated`, đã xong, và trong cùng sổ không còn job đối thủ cùng clip cùng prompt: job còn mở, hoặc đã đóng mà không giữ version `generated` nào trên clip đó, trừ job có dòng cuối là `failed` do `clip_reconcile` ghi; ghi vào `outputs`; bản upscale 1080p và bản chép do extend tạo không bao giờ bị nhận), `failed` (số dư không đổi VÀ project không có record mới nào; `clip_extend` cũng có thể ra `failed`), `unknown` (để người quyết; với `clip_extend` là mọi ca không `failed`; cả khi version còn đang sinh, khi có hai version, khi còn job đối thủ như trên, khi listing không còn record nào của clip nguồn mà job đã thấy, và với dòng `opening` cũ thiếu tập workflow hay prompt, hoặc tập workflow rỗng), `skipped` (job gen hay agent, hoặc job editor của project khác kèm `project`; không bao giờ bị ghi). Sổ không có gì để chấm thì trả ngay, không mở Chrome. `spent` của dòng do reconcile ghi là độ lệch số dư từ lúc job mở, có thể gồm khoản chi khác: đừng cộng làm tổng chi |
+| `flow_download` | `project_id`, `media_id`, `out_dir` | returns a path inside `out/`; `out_dir` must be inside `out/` (outside it, or naming a file, is refused before a browser opens). `media_id` is the listing `id` from `flow_media`; a workflow id is refused |
+| `clip_download` | `project_id`, `media_id`, `quality="1080p"`, `out_dir`, `workflow_id` | `out_dir` must be inside `out/`. Defaults to the NEWEST finished version; pass `workflow_id` to fetch one version (measured 2026-09-28: all four versions of an edited clip, each distinct). 1080p measured 0 credits. **`quality="4k"`: Flow greys it out on this Pro account** (measured 2026-09-29 on every clip tried; Flow's table offers it from Ultra at 50), so it is refused before any click and costs nothing |
+| `clip_reconcile` | `project_id`, `out_dir` | `out_dir` must be inside `out/` (a ledger outside it escapes the `job_id` guard). Closes the books for orphaned editor jobs; returns `{"ledger": <absolute path>, "ledger_exists", "ledger_rows", "jobs"}`. `jobs: []` means clean only when `ledger_exists` is `true` and the path is the ledger you meant. Verdicts: `done` (for `clip_edit` only: exactly one new finished version on the source clip carrying the job's prompt, not already claimed as `generated` by another job in the same ledger, and no rival job on the same clip with the same prompt still open or closed without a version on that clip, unless its last row is a `failed` written by `clip_reconcile`; written to `outputs`; a 1080p upscale or a copy made by extend is never claimed), `failed` (balance unchanged AND no new record in the project; `clip_extend` can end `failed` too), `unknown` (for a person to decide; for `clip_extend` every case that is not `failed`; also while a version is still generating, with two versions, with a rival job as above, when the listing no longer holds a record of the source clip the job saw, and for an old `opening` row missing its workflow set or prompt, or with an empty workflow set), `skipped` (gen or agent jobs, or editor jobs of another project given `project`; never written). A ledger with nothing to judge returns at once, without Chrome. The `spent` a reconcile row writes is the balance change since the job opened and can include other spends: never add those rows up as a total |
 
-### C. Đổi dữ liệu Flow, $0, CHỈ làm trong project nháp
+### C. Changes Flow data, $0, scratch project ONLY
 
-| Tool | Tham số | Ghi chú |
+| Tool | Arguments | Notes |
 |---|---|---|
-| `project_create` | `title` | trả `{"id", "rpcids", "title"}` |
-| `project_rename` | `project_id`, `title` | đọc lại tên trên grid rồi trả `{"id", "title"}`; grid hiện tên khác thì báo lỗi |
-| `project_delete` | `project_id` | **xoá vĩnh viễn**; chỉ dùng cho id nháp |
-| `scene_create` | `project_id`, `title` | trả dict có `scene_id` |
-| `scene_delete` | `project_id`, `scene_id` | là "move to trash", scene vẫn còn trong `scene_list(include_trashed=true)`; lấy lại bằng `scene_restore`. Tile trên grid không mang scene id nên tool QUÉT CUỘN grid ảo (`div.cdk-virtual-scrollable`, đo 2026-09-17 chỉ vẽ 7/8 tile) tới khi thấy tile mang tên đúng nguyên, trần 60 nấc. Tính duy nhất của tên lấy từ listing: hai scene đang hoạt động cùng tên thì từ chối, tên rỗng hay chỉ ký tự vô hình thì từ chối, trang vẽ CÙNG LÚC hai tile cùng khớp cũng từ chối (tile trùng tên nằm ở cửa sổ khác thì bắt sau cú bấm, bằng lần đọc lại listing); bấm xong đọc lại listing, scene khác bị đổi cờ thì báo tên nó |
-| `scene_restore` | `project_id`, `scene_id` | lấy scene ra khỏi thùng rác, đọc lại listing rồi trả `{"scene_id", "trashed": false, "rpcids", "active"}`. Tile trong thùng rác không mang scene id nên tool quét cuộn thùng rác (đo 2026-09-17: vẽ 16/37 tile) tới khi thấy tile mang tên đúng nguyên, và **từ chối khi tên rỗng hay chỉ ký tự vô hình, khi listing có hơn một scene đã xoá cùng tên, khi trang vẽ cùng lúc hai tile cùng khớp**, hay khi quét hết mà không thấy |
-| `scene_rename` | `project_id`, `scene_id`, `title` | đổi tên scene rồi đọc LẠI listing để xác nhận. Trang scene có đúng một ô sửa được trong header (đo 2026-09-16) và tool đòi đúng một ô đó; tên rỗng hay chỉ ký tự vô hình bị từ chối, vì các tool scene tìm nhau bằng tên |
-| `scene_add_clip` | `project_id`, `scene_id`, `media_id` | đặt một clip của project vào **CUỐI** timeline, đây là cách một scene thành phim nhiều cảnh: thêm theo đúng thứ tự phim chạy. Picker không mang media id nên tool tra `media_id` ra **title** từ listing rồi khớp đúng nguyên tên; từ chối khi title rỗng, khi media khác trong project trùng title, hay khi picker hiện title đó hơn một lần. Flow chỉ lưu khi trả lời lượt thêm, 11 tới 14 s sau cú bấm, nên tool chờ rồi đọc lại listing; trả `{scene_id, media_id, title, position, clip_id, seconds, clips, rpcids}`. **Lỗi sau cú bấm thì clip vẫn có thể vào: đọc `scene_clips` trước, không thêm lại khi chưa đọc**, vì thêm hai lần là clip vào phim hai lần |
-| `scene_set_aspect` | `project_id`, `scene_id`, `aspect` (`9:16` hay `16:9`) | đặt tỉ lệ khung của phim; scene mới là 16:9. Trả `{scene_id, aspect, changed, rpcids}`: tỉ lệ đúng rồi thì `changed: false` và không bấm gì; trang hiện tỉ lệ khác listing thì từ chối chứ không bấm mò |
-| `scene_move_clip` | `project_id`, `scene_id`, `clip_id`, `position` | chuyển một clip (gọi bằng `clip_id` của `scene_clips`) tới vị trí đếm từ 0, các clip ở giữa dịch một chỗ. Flow chỉ đổi thứ tự bằng kéo thả nên tool zoom out tới khi hai chỗ cùng hiện rồi kéo; kiểm thứ tự trang gửi và listing đọc lại. Clip đã đúng chỗ thì `moved: false`. Trả `clips` theo thứ tự mới |
-| `scene_remove_clip` | `project_id`, `scene_id`, `clip_id` | gỡ một clip khỏi timeline qua menu chuột phải; Flow **không hỏi xác nhận** (đo 2026-09-17), nên tool chỉ bấm khi trang hiện đúng số clip listing có và chuột phải đã chọn đúng clip. Media vẫn còn trong project, `scene_add_clip` đặt lại được vào cuối. Trả `removed_position` và `clips` còn lại |
-| `scene_download` | `project_id`, `scene_id`, `out_dir=None` | tải cả scene thành MỘT phim, không phải một clip: đo 2026-09-16, hai clip 8 s ra một mp4 **16,0 giây**. Phim được dựng ngay trong trang (đo 2026-09-17: phim 40 s mất 33 tới 42 s), tool chờ theo độ dài phim và báo ngay khi cú bấm không khởi động xuất. File chép sang tên tạm rồi mới đổi tên, không bao giờ có phim dở dưới tên trả về. Scene rỗng bị từ chối, `out_dir` phải nằm trong `out/`. Trả thêm `seconds`, `clips` của listing để đối chiếu, và `attempts`: bằng 2 là lần đầu hỏng giữa đường và tool lấy lại trong phiên mới. Trang scene KHÔNG có menu chọn chất lượng, muốn 270p/720p/1080p/4k thì dùng `clip_download` |
-| `character_set_voice` | `project_id`, `entity_id`, `voice` | gắn một giọng từ `flow_voices` (preset hay giọng riêng) cho nhân vật, rpc `rzMKMb`, khoảng 20 s. Giọng thuộc về NHÂN VẬT: gắn một lần, mọi lượt sinh sau đều dùng. Tên không có trong danh sách bị từ chối kèm danh sách thật |
-| `character_make_voice` | `project_id`, `entity_id`, `preset`, `performance`, `name`, `sample`, `attach=True` | tạo GIỌNG RIÊNG: preset cộng câu tả lối diễn, bấm Preview, chờ Flow tổng hợp (rpc `no0P6`, khoảng 24 s) rồi mới lưu (`lt8g5`, `mYWVGd`); đo thật 2026-09-18: 44 s, $0. Dùng khi câu tả quan trọng: `character_set_voice` chỉ gửi TÊN preset trong bản cập nhật nhân vật (đo trên body rpc), nên chữ viết cạnh preset không được gắn theo. `sample` tối đa 120 ký tự; `attach=false` lưu mà không đổi giọng đang gắn. Mẫu giọng lưu xong hiện trong `flow_media` thành hàng `kind: "video"` tên bằng tên giọng, `url` và `prompt` là `null`. Bấm lưu trước khi Flow trả lời thì KHÔNG gửi gì cả, nên tool báo lỗi thay vì nói đã lưu |
-| `character_clear_voice` | `project_id`, `entity_id` | gỡ giọng, nhân vật im trở lại |
-| `clip_save_frame` | `project_id`, `media_id` | lưu khung đầu của clip thành ẢNH của project (rpc `maseQ`, tiêu đề `Saved frame from <clip>`), để làm `initial_frame` cho cảnh sau (tải về bằng `flow_download` rồi đưa file cho `gen_i2v`; đưa thẳng media id chưa chạy thử lần nào); đo thật 2026-09-18: 53 s, $0, ảnh 1080x1920. Trình sửa vẽ clip vào CANVAS khoảng 5 s sau khi trang sẵn sàng và Flow gửi đúng thứ canvas đang giữ, nên tool chờ canvas sáng rồi mới bấm và TỪ CHỐI khi trang vẫn trắng: lần bấm sớm đã lưu ra ảnh ĐEN hoàn toàn (YAVG 0, trong khi khung đầu của clip là 111). Flow đánh chỉ mục khoảng 40 s sau cú bấm nên tool chờ listing 90 s. **Không phải lúc nào cũng chạy**: 5 cú bấm thật ra 3 ảnh, 2 lần có snackbar mà không có media sau 160 s; tool phân biệt hai ca trong câu lỗi (`save_started`) |
-| `scene_save_clip` | `project_id`, `scene_id`, `clip_id` | chép một clip của timeline ra grid thành media riêng (chuột phải, `Save to Project`, rpc `Sc7aEb`); timeline không đổi. Cũng chờ khoảng 40 s để listing thấy |
-| `character_create` | `project_id`, `prompt` HOẶC `image`, `name`, `personality`, `wait=90` | **không tốn credit**, nhận đúng một trong hai: `prompt` thì chân dung vẽ bằng Nano Banana 2; `image` là đường dẫn ảnh trên máy (png, jpg, jpeg, webp), tải qua nút Upload của trang New character (đo 2026-09-16: ảnh cắt cận mặt được nhận; Flow từng im lặng từ chối ảnh người mặc đồ ren, tool báo "created no character"). Trả `portrait.workflow_id`, **không phải media id**: lấy media id bằng `flow_characters` |
-| `character_delete` | `project_id`, `entity_id` | xoá vĩnh viễn nhân vật |
-| `flow_upload` | `project_id`, `path` | đường dẫn file trên máy; trả `{file, bytes, rpcids, tiles, media_id, workflow_id, size_bytes, ...}`. `media_id` là id dùng được với `flow_download`. `bytes` là file trên máy, `size_bytes` là bản Flow lưu (Flow nén ảnh lại: PNG 139 KB thành JPEG 5,6 KB). `tiles` đếm tile của view đang mở, không phải số upload |
-| `agent_mode` | `project_id`, `enabled` | bật xong **nhớ tắt**: bật thì Flow giấu chip và nút settings của composer |
+| `project_create` | `title` | returns `{"id", "rpcids", "title"}` |
+| `project_rename` | `project_id`, `title` | reads the name back from the grid and returns `{"id", "title"}`; a different name on the grid is an error |
+| `project_delete` | `project_id` | **permanent**; scratch ids only |
+| `scene_create` | `project_id`, `title` | returns a dict with `scene_id` |
+| `scene_delete` | `project_id`, `scene_id` | "move to trash": the scene stays in `scene_list(include_trashed=true)` and `scene_restore` brings it back. Grid tiles carry no scene id, so the tool SCROLLS the virtual grid (`div.cdk-virtual-scrollable`, measured 2026-09-17 drawing 7 of 8 tiles) until a tile with the exact name shows, up to 60 steps. Name uniqueness comes from the listing: two live scenes with one name, a blank or invisible-only name, or two matching tiles drawn at once are refused (a same-name tile in another window is caught after the click, by re-reading the listing); after the click the listing is read again, and another scene whose flag changed is named |
+| `scene_restore` | `project_id`, `scene_id` | takes a scene out of the trash, re-reads the listing and returns `{"scene_id", "trashed": false, "rpcids", "active"}`. Trash tiles carry no scene id either, so the tool scrolls the trash (measured 2026-09-17: 16 of 37 tiles drawn) until the exact name shows, and **refuses a blank or invisible-only name, more than one trashed scene with that name in the listing, or two matching tiles drawn at once**, or a full scroll with no match |
+| `scene_rename` | `project_id`, `scene_id`, `title` | renames and re-reads the listing to confirm. The scene page has exactly one editable field in its header (measured 2026-09-16) and the tool insists on exactly that one; a blank or invisible-only name is refused, since the scene tools find each other by name |
+| `scene_add_clip` | `project_id`, `scene_id`, `media_id` | puts a project clip at the **END** of the timeline, which is how a scene becomes a multi-shot film: add in play order. The picker carries no media id, so the tool maps `media_id` to its **title** from the listing and matches it exactly; it refuses a blank title, another media with the same title, or a title shown more than once in the picker. Flow saves only when it answers the add, 11 to 14 s after the click, so the tool waits and re-reads the listing; returns `{scene_id, media_id, title, position, clip_id, seconds, clips, rpcids}`. **After an error past the click the clip may still be in: read `scene_clips` first and do not add again unread**, or the clip plays twice |
+| `scene_set_aspect` | `project_id`, `scene_id`, `aspect` (`9:16` or `16:9`) | sets the film's frame; a new scene is 16:9. Returns `{scene_id, aspect, changed, rpcids}`: already right gives `changed: false` and no click; a page showing a different aspect from the listing is refused rather than clicked at random |
+| `scene_move_clip` | `project_id`, `scene_id`, `clip_id`, `position` | moves a clip (by its `clip_id` from `scene_clips`) to a 0-based position, shifting the clips between by one. Flow reorders only by drag and drop, so the tool zooms out until both places show, then drags; it checks the order the page sends and the listing read back. A clip already in place gives `moved: false`. Returns `clips` in the new order |
+| `scene_remove_clip` | `project_id`, `scene_id`, `clip_id` | removes a clip from the timeline through the right-click menu; Flow **asks for no confirmation** (measured 2026-09-17), so the tool clicks only when the page shows as many clips as the listing and the right-click selected the right one. The media stays in the project and `scene_add_clip` can put it back at the end. Returns `removed_position` and the remaining `clips` |
+| `scene_download` | `project_id`, `scene_id`, `out_dir=None` | downloads the whole scene as ONE film, not a clip: measured 2026-09-16, two 8 s clips gave one **16.0 s** mp4. The film is rendered in the page (measured 2026-09-17: a 40 s film took 33 to 42 s), so the tool waits by the film's length and says at once when the click did not start an export. The file is written under a temporary name and then renamed, so the returned name never holds half a film. An empty scene is refused and `out_dir` must be inside `out/`. Also returns `seconds`, the listing's `clips` for comparison, and `attempts`: 2 means the first try broke midway and the tool fetched it again in a new session. The scene page has NO quality menu; for 270p/720p/1080p use `clip_download` |
+| `character_set_voice` | `project_id`, `entity_id`, `voice` | attaches a voice from `flow_voices` (preset or custom) to the character, rpc `rzMKMb`, about 20 s. The voice belongs to the CHARACTER: attach once and every later generation uses it. A name not in the list is refused with the real list |
+| `character_make_voice` | `project_id`, `entity_id`, `preset`, `performance`, `name`, `sample`, `attach=True` | makes a CUSTOM voice: a preset plus a line describing the delivery, clicks Preview, waits for Flow to synthesize it (rpc `no0P6`, about 24 s), then saves (`lt8g5`, `mYWVGd`); measured 2026-09-18: 44 s, $0. Use it when the description matters: `character_set_voice` sends only the preset's NAME in the character update (read from the rpc body), so text written next to a preset does not travel. `sample` is at most 120 characters; `attach=false` saves without changing the attached voice. A saved voice sample shows up in `flow_media` as a `kind: "video"` row named after the voice, with `url` and `prompt` `null`. Saving before Flow answers sends NOTHING, so the tool reports an error instead of claiming a save |
+| `character_clear_voice` | `project_id`, `entity_id` | removes the voice; the character is silent again |
+| `clip_save_frame` | `project_id`, `media_id` | saves a clip's first frame as a project IMAGE (rpc `maseQ`, title `Saved frame from <clip>`), to use as the `initial_frame` of the next shot (download it with `flow_download` and give the file to `gen_i2v`; passing the media id directly has never been tried); measured 2026-09-18: 53 s, $0, a 1080x1920 image. The editor paints the clip onto a CANVAS about 5 s after the page is ready and Flow sends whatever the canvas holds, so the tool waits for a lit canvas and REFUSES while it is blank: an early click saved a fully BLACK image (YAVG 0, against 111 for the clip's first frame). Flow indexes it about 40 s after the click, so the tool waits up to 90 s for the listing. **It does not always work**: 5 real clicks gave 3 images, twice a snackbar and no media after 160 s; the error tells the two cases apart (`save_started`) |
+| `scene_save_clip` | `project_id`, `scene_id`, `clip_id` | copies a timeline clip out to the grid as its own media (right click, `Save to Project`, rpc `Sc7aEb`); the timeline is unchanged. Also waits about 40 s for the listing |
+| `character_create` | `project_id`, `prompt` OR `image`, `name`, `personality`, `wait=90` | **costs no credits** and takes exactly one of the two: with `prompt` the portrait is drawn by Nano Banana 2; `image` is a local path (png, jpg, jpeg, webp) uploaded through the New character page (measured 2026-09-16: a close-cropped face was accepted; Flow once silently refused a photo of a person in lace, and the tool says "created no character"). Returns `portrait.workflow_id`, **not a media id**: get the media id from `flow_characters` |
+| `character_delete` | `project_id`, `entity_id` | deletes the character permanently |
+| `flow_upload` | `project_id`, `path` | a local file path; returns `{file, bytes, rpcids, tiles, media_id, workflow_id, size_bytes, ...}`. `media_id` works with `flow_download`. `bytes` is the local file and `size_bytes` the copy Flow keeps (Flow recompresses images: a 139 KB PNG became a 5.6 KB JPEG). `tiles` counts tiles in the open view, not uploads |
+| `agent_mode` | `project_id`, `enabled` | **turn it off again**: while on, Flow hides the composer's chips and settings button, and every `gen_*` fails |
 
-### D. Tiêu credit, chỉ chạy khi bạn cố ý
+### D. Spends credits, run only on purpose
 
-Cả 7 tool tốn credit **bắt buộc `job_id`** (riêng `gen_character` với `dry_run=true` thì không, vì không bấm gì). `job_id` đã có bất kỳ dòng nào trong mọi `ledger.jsonl` dưới `out/` (tên
-file hoa hay thường) bị từ chối ngay, trước khi mở trình duyệt; `job_id` mang chữ giống bí mật phiên (tên cookie hay
-header `Authorization`) cũng bị từ chối; `job_id` đang chạy ở lời gọi khác cũng bị từ chối, lúc đó phải chờ rồi gọi
-lại với CÙNG `job_id`, không đổi id mới. `clip_edit`, `clip_extend`, `agent_send` từ chối prompt có ký tự xuống dòng;
-prompt toàn dấu cách bị từ chối; `out_dir` của `clip_edit`, `clip_extend` phải là thư mục nằm trong `out/`, không có
-thành phần nào tên `ledger.jsonl` (hoa hay thường) hay đã có sẵn là file.
+All 7 spending tools **require a `job_id`** (except `gen_character` with `dry_run=true`, which clicks nothing). A
+`job_id` that already has any row in any `ledger.jsonl` under `out/` (any letter case in the file name) is refused
+before a browser opens; a `job_id` that looks like a session secret (a cookie name or an `Authorization` header) is
+refused; a `job_id` running in another call is refused, and then you wait and call again with the SAME `job_id`, never
+a new one. `clip_edit`, `clip_extend` and `agent_send` refuse a prompt with a newline; an all-space prompt is refused;
+the `out_dir` of `clip_edit` and `clip_extend` must be a folder inside `out/` with no part named `ledger.jsonl` (any
+case) and no part that is an existing file.
 
-| Tool | Giá đã đo | Ghi chú |
+`clip_extend`, `clip_edit` and `agent_send` answer `balance_moved {kind, measured, moved, note}` when the balance
+moved by anything other than the measured price; when the call ends in an error, the job's ledger row holds it.
+
+| Tool | Measured price | Notes |
 |---|---|---|
-| `gen_t2i`, `gen_i2i` | **0 credit** (nano2) | tính vào quota ảnh theo ngày, không phải credit |
-| `gen_t2v` | **15** khi bỏ trống model (omni-flash 10 s, count 1); **10** với `model="veo-lite"` (8 s) | `count` nhân giá (veo-lite `count=2` là 20); `count` phải 1-4, `aspect` chỉ `9:16` hoặc `16:9` |
-| `gen_r2v` | **12** khi bỏ trống model (omni-flash, luôn 8 s, đo 2026-09-15); **10** với `model="veo-lite"` | host này chỉ cho r2v 8 s: đừng truyền `duration` (truyền 8 cũng không được gửi đi). Số ảnh: omni-flash tối đa 7, veo-lite và veo-fast tối đa 3, veo-quality không nhận ảnh; quá số bị từ chối trước khi tiêu. Flow từ chối ảnh có người mặc đồ lót |
-| `gen_character` | **12** khi bỏ trống model (omni-flash, 8 s, đo 2026-09-17 qua MCP); **10** với `model="veo-lite"` (đo 2026-09-17); **20** với `model="veo-fast"` theo dòng giá của Flow, chưa tiêu | tham số `project`, `prompt`, `characters` (entity id, ít nhất một), `media_ids` (ảnh đã có trong project), `model`, `aspect` (`9:16` hoặc `16:9`), `dry_run`, `job_id`, `out_dir` (tuỳ chọn, phải nằm trong `out/`, đặt clip và sổ vào thư mục riêng; ngoài `out/` hay trỏ vào file thì bị từ chối trước khi mở browser, kể cả lượt `dry_run`). **Gọi `dry_run=true` trước**: $0, trả `quoted_credits`, `price_ok`, `chips` (nhân vật mang entity id, ảnh mang WORKFLOW id), `prompt_text`, `composer_left`. Tên nhân vật và tiêu đề ảnh phải là duy nhất trong project, không thì bị từ chối. Lượt thật trả `media_id`, `path`, `spent`, `body_check`. Flow có thể từ chối vì bộ lọc nội dung mà không tính tiền, lý do nằm trong câu lỗi (đo L4: trạng thái 4, `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED` với nhân vật tạo từ ảnh người thật): đừng thử lại cùng đầu vào |
-| `gen_i2v` | **15** khi bỏ trống model (omni-flash 10 s, đo 2026-09-18 qua MCP, 105 s đầu cuối) | chạy được từ **gflow 0.78.0**; trước đó hỏng 5/5 lần (gflow exit 23 `UiSelectorDriftError`, "the frame picker stayed open 15s after picking", 0 credit, sổ có dòng `failed`). **Truyền `aspect`**: bỏ trống là 9:16 (mặc định của chính gflow, áp cho cả t2v/i2v/r2v), và Flow CẮT ảnh khác tỉ lệ cho vừa: ảnh 16:9 ra clip 720x1280 với chủ thể bị đẩy nửa ra mép. `end_frame` (ảnh local) nội suy giữa hai khung, đi submit riêng của Flow: **đo 2026-09-18 cũng 15 credit, 119 s**, clip bắt đầu và kết thúc đúng hai ảnh đưa vào (khung cuối cùng là khung gần ảnh cuối nhất, lệch 1,9/255). **CHỈ omni-flash 10 s được đo**: model hay `duration` khác kèm `end_frame` bị tool TỪ CHỐI |
-| `clip_extend` | **10** | tạo scene mới và chép clip nguồn vào đó (output có `role: copy`). **Chỉ chạy trên clip Veo**: đo 2026-09-16 bằng đối chứng đổi đúng một biến, clip omni-flash làm mục `Extend (Veo 3.1 - Lite)` hiện XÁM nên tool từ chối kèm lời giải thích, clip veo-lite thì chạy ngay |
-| `clip_edit` | **20** đo được; bảng giá chính thức của Flow ghi Omni Flash Edit **40** | Omni 1.1 Flash, sửa video theo chữ. Tool KHÔNG đọc dòng giá trước khi bấm (khác `gen_character`), nên chốt chặn duy nhất là số dư đọc trước và sau, trả về ở `credits_before` và `credits_after` (hiệu của chúng nằm ở khoá `spent` của DÒNG SỔ, không có trong kết quả tool): dự trù 40, thường mất 20 |
-| `agent_send` | **0** ở 4 lần agent không sinh gì (lần thứ tư qua MCP, 2026-09-16, số dư 193 trước và sau) | agent tự sinh media thì trả giá của lần sinh đó; hỏi trước khi gọi |
+| `gen_t2i`, `gen_i2i` | **0 credits** (nano2) | counts against a daily image quota, not credits |
+| `gen_t2v` | **15** with no model (omni-flash 10 s, count 1); **10** with `model="veo-lite"` (8 s) | `count` multiplies the price (veo-lite `count=2` is 20); `count` is 1-4, `aspect` only `9:16` or `16:9` |
+| `gen_r2v` | **12** with no model (omni-flash, always 8 s, measured 2026-09-15); **10** with `model="veo-lite"` | through gflow r2v runs 8 s only: leave `duration` out. For 10 s from images, upload them and use `gen_character` with `media_ids`. Images: omni-flash up to 7, veo-lite and veo-fast up to 3, veo-quality none; more is refused before any spend. Flow refuses images of people in underwear |
+| `gen_character` | **12** with no model (omni-flash, 8 s); **10** with `model="veo-lite"`; **15** for omni-flash `duration=10`; **20** for `model="veo-fast"` by Flow's price line, never spent | arguments `project`, `prompt`, `characters` (entity ids), `media_ids` (images already in the project), at least one of the two; `model`, `aspect` (`9:16` or `16:9`), `duration`, `dry_run`, `job_id`, `out_dir` (optional, inside `out/`, keeps a film's clips and ledger together; outside `out/` or naming a file is refused before a browser opens, dry run included). **Call `dry_run=true` first**: $0, returns `quoted_credits`, `price_ok`, `chips` (characters carry their entity id, images their WORKFLOW id), `prompt_text`, `composer_left`. Character names and image titles must be unique in the project. A real run returns `media_id`, `path`, `spent`, `body_check`. Images alone, 10 s: measured 2026-09-28, 15 credits, body `abra_r2v_10s`, a 10.0 s clip that matches the image. Flow can refuse under its content filters without charging, with the reason in the error (status 4, `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED` for a character made from a real person's photo): do not retry the same inputs |
+| `gen_i2v` | **15** with no model (omni-flash 10 s, measured 2026-09-18 over MCP, 105 s end to end) | works from **gflow 0.78.0**. **Pass `aspect`**: omitted is 9:16 (gflow's own default for t2v, i2v and r2v), and Flow CROPS an image of another shape to fit: a 16:9 image became a 720x1280 clip with the subject pushed half off the edge. `end_frame` (a local image) interpolates between two frames through a separate Flow submit: **measured 2026-09-18 also 15 credits, 119 s**, the clip starts and ends on the two images. **ONLY omni-flash 10 s is measured**: another model or `duration` with `end_frame` is REFUSED |
+| `clip_extend` | **10** | makes a new scene and copies the source clip into it (outputs with `role: copy`). **Flow greys Extend out on some clips**: on omni-flash clips (measured 2026-09-16, with a one-variable control where a veo-lite clip ran), and on a veo-lite clip after two Omni edits and a 1080p upscale (measured 2026-09-29). The tool then refuses before the click, at no cost |
+| `clip_edit` | **20** measured; Flow's own table lists Omni Flash Edit at **40** | Omni 1.1 Flash, text-guided video edit. It does NOT read the price line before clicking (unlike `gen_character`): that line shows only while hovering Start and read 12 for an edit that charged 20. The guard is the balance read before and after, returned as `credits_before` and `credits_after`, plus `balance_moved`: budget 40, usually 20 |
+| `agent_send` | **0** in every measured send where the agent generated nothing (5 sends to 2026-09-28) | if the agent generates media, that generation's price applies; ask before calling |
 
-## 4. Prompt sẵn để giao cho agent khác
+## 4. A ready prompt to hand to another agent
 
-Dán nguyên khối này, thay `<ID NHÁP>` bằng id vừa tạo ở mục 2:
+Paste this block as is, replacing `<SCRATCH ID>` with the id from section 2:
 
 ```
-Bạn có MCP server "video" điều khiển Google Flow. Hãy test nó và báo cáo lại.
+You have an MCP server "video" that drives Google Flow. Test it and report back.
 
-RÀO CHẮN, không được vi phạm:
-- Chỉ thao tác trong project <ID NHÁP>. Không đụng project nào khác.
-- Không gọi project_delete với bất kỳ id nào khác <ID NHÁP>.
-- Không gọi tool tiêu credit (gen_t2v, gen_i2v, gen_r2v, gen_character, clip_extend, clip_edit, agent_send) và
-  không gọi clip_download với quality="4k". Riêng gen_character với dry_run=true là miễn phí và được gọi. Nếu thấy
-  cần tiêu tiền, hãy DỪNG và hỏi tôi trước.
-- Nếu tool nào báo Google gắn cờ hoạt động bất thường, DỪNG hẳn: không thử lại, không đăng nhập lại, báo tôi.
+GUARD RAILS, not to be broken:
+- Work only in project <SCRATCH ID>. Touch no other project.
+- Never call project_delete with any id other than <SCRATCH ID>.
+- Do not call a credit-spending tool (gen_t2v, gen_i2v, gen_r2v, gen_character, clip_extend, clip_edit,
+  agent_send). gen_character with dry_run=true is free and allowed. If spending seems needed, STOP and ask me.
+- If any tool reports that Google flagged unusual activity, STOP completely: no retry, no new sign-in, tell me.
 
-Việc cần làm, theo thứ tự, và sau mỗi bước dán nguyên JSON trả về:
+Do these in order, and after each step paste the JSON returned, verbatim:
 1. flow_lane, flow_projects, flow_credits
-2. flow_media cho <ID NHÁP>, rồi flow_media với all_versions=true
-3. flow_characters, flow_tools, flow_uploads, scene_list cho <ID NHÁP>
-4. project_rename đổi tên thành "mcp manual test 2", rồi flow_projects xem tên đã đổi chưa
-5. scene_create, scene_list, scene_delete, scene_list với include_trashed=true, rồi scene_restore và scene_list lần nữa
-   5b. Trên scene đó: scene_set_aspect 9:16, scene_add_clip ba video khác tên của <ID NHÁP>, scene_clips (thứ tự và
-   position 0, 1, 2), scene_move_clip clip đầu tới position 2, scene_remove_clip clip ở position 1, scene_clips lần
-   nữa, rồi scene_download: phim phải dài đúng seconds của scene_clips
-6. character_create với prompt tuỳ bạn, flow_characters, character_delete
-7. flow_upload một file ảnh nhỏ có sẵn trên máy, rồi flow_uploads xem count tăng
-8. agent_mode bật rồi tắt
-9. clip_reconcile cho <ID NHÁP>
-10. character_create với prompt tuỳ bạn và name duy nhất, rồi gen_character với dry_run=true cho nhân vật đó:
-    kiểm quoted_credits là 12, chips có đúng entity id, composer_left rỗng
+2. flow_media for <SCRATCH ID>, then flow_media with all_versions=true
+3. flow_characters, flow_tools, flow_uploads, scene_list for <SCRATCH ID>
+4. project_rename to "mcp manual test 2", then flow_projects to see the new name
+5. scene_create, scene_list, scene_delete, scene_list with include_trashed=true, then scene_restore and scene_list again
+   5b. On that scene: scene_set_aspect 9:16, scene_add_clip three differently titled videos of <SCRATCH ID>,
+   scene_clips (order and positions 0, 1, 2), scene_move_clip the first clip to position 2, scene_remove_clip the
+   clip at position 1, scene_clips again, then scene_download: the film must last exactly the seconds of scene_clips
+6. character_create with a prompt of your choice, flow_characters, character_delete
+7. flow_upload a small image already on this machine, then flow_uploads to see the count go up
+8. agent_mode on, then off
+9. clip_reconcile for <SCRATCH ID>
+10. character_create with a prompt of your choice and a unique name, then gen_character with dry_run=true for that
+    character: check quoted_credits is 12, chips carry the right entity id, composer_left is empty
+11. clip_download with quality="4k" on any clip: it must be refused as greyed out, with 0 credits spent
 
-Cuối cùng: liệt kê tool nào chạy đúng, tool nào sai hoặc báo lỗi, kèm nguyên văn lỗi.
+Finally: list which tools worked, and which failed or errored, with the exact error text.
 ```
 
-## 5. Khi bạn quyết định chạy phần tiêu credit
+## 5. When you decide to run the spending part
 
-1. Gọi `flow_credits()` và ghi lại số dư.
-2. Gọi đúng **một** lần, ví dụ `gen_t2v(prompt="...", project="<ID NHÁP>", job_id="thu-t2v-1", model="veo-lite",
-   aspect="9:16")`. `job_id` là bắt buộc và do bạn đặt; bỏ trống `model` thì server dùng omni-flash 10 s (15 credit).
-3. Gọi lại `flow_credits()`.
-4. Đối chiếu bằng chứng:
-   - `out/ledger.jsonl`: job đó phải có dòng `submitted` rồi `done`, kèm `credits_before`, `credits_after`, `spent`.
-   - `out/credits.jsonl`: hai dòng có giờ, khớp với số dư trước và sau.
-5. **Không bao giờ bấm lại khi nghi ngờ.** Flow có thể nhận cú bấm, bắn request, rồi không tạo job và không trừ
-   tiền. Kết luận thành hay bại bằng `flow_media` cộng số dư, đừng bằng cách gọi lại. Lỡ gọi lại cùng job thì giữ
-   đúng `job_id` cũ: sổ từ chối ngay (`already has ledger rows`), không trừ tiền lần hai.
+1. Call `flow_credits()` and note the balance.
+2. Call exactly **once**, for example `gen_t2v(prompt="...", project="<SCRATCH ID>", job_id="try-t2v-1",
+   model="veo-lite", aspect="9:16")`. `job_id` is required and yours to choose; with no `model` the server uses
+   omni-flash 10 s (15 credits).
+3. Call `flow_credits()` again.
+4. Check the evidence:
+   - `out/ledger.jsonl`: the job has a `submitted` row and then `done`, with `credits_before`, `credits_after`, `spent`
+     and `code` (the git sha that ran it).
+   - `out/credits.jsonl`: two timestamped lines matching the balance before and after.
+5. **Never click again on a hunch.** Flow can take the click, send the request, and then make no job and charge
+   nothing. Decide success or failure from `flow_media` plus the balance, never by calling again. If you do call the
+   same job again, keep the SAME `job_id`: the ledger refuses it at once (`already has ledger rows`) and nothing is
+   charged twice.
 
-## 6. Bẫy đã đo, sẽ gặp khi bấm tay
+## 6. Measured traps you will meet by hand
 
-- **Server MCP đang chạy không nạp code mới, và phiên đang mở giữ mô tả tool cũ.** Sửa code xong phải mở phiên
-  mới.
-- **Sidebar của project render sau khi trang sẵn sàng**, khoảng 2000ms (project có upload) đến 3000ms (project
-  rỗng). Tool đã chờ đúng cách, nhưng nếu bạn tự lái trình duyệt thì đừng đọc sidebar quá sớm.
-- **Mục Uploads lọc phía client**: bấm vào không gọi mạng, URL không đổi.
-- **`clip_download` mặc định lấy bản mới nhất.** Muốn đúng bản của một lần edit thì lấy `workflow_id` từ
-  `flow_media(all_versions=true)`.
-- **Xoá scene là soft trash**, không biến mất khỏi listing.
-- **Nút thêm ingredient của composer chỉ gắn được một ingredient mỗi prompt.** Gõ `@` thì được nhiều: `gen_character`
-  đã gắn nhân vật cộng ảnh trong một prompt (đo 2026-09-17).
-- **Flow từ chối mọi generation vẽ người đang mặc đồ bán hàng**: submit đi bình thường, chờ rất lâu, không có
-  record nào, 0 credit, không báo gì.
-- **Bộ lọc người nổi tiếng của Flow chấm khung hình đầu ra**, nên lúc chặn lúc không: cùng nhân vật tạo từ ảnh người
-  thật, lần đầu hỏng không lý do trên trang, lần sau qua, lần khác bị chặn với `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED`
-  (2026-09-17), cả hai lần hỏng đều 0 credit.
-- **Rendition có thể 404 ngay sau khi sinh**, thậm chí 404 vĩnh viễn với một workflow trong khi workflow khác
-  cùng media vẫn tải được.
-- **Đừng chạy `gflow auth login`** trên tài khoản này, kể cả khi gflow khuyên thế.
+- **A running MCP server does not load new code, and an open session keeps the old tool descriptions.** After a code
+  change, open a new session.
+- **A project's sidebar renders after the page is ready**, about 2000 ms (a project with uploads) to 3000 ms (an empty
+  one). The tools wait correctly; if you drive the browser yourself, do not read the sidebar too early.
+- **The Uploads section filters on the client**: clicking it makes no request and does not change the URL.
+- **`clip_download` takes the newest version by default.** For the version one edit produced, take its `workflow_id`
+  from `flow_media(all_versions=true)`.
+- **Deleting a scene is a soft trash**; it stays in the listing.
+- **The composer's add-ingredient button attaches one ingredient per prompt.** Typing `@` attaches several:
+  `gen_character` attached a character plus an image in one prompt (measured 2026-09-17).
+- **Flow refuses every generation that draws a person wearing a product being sold**: the submit goes out, a long
+  wait, no record, 0 credits, no message.
+- **Flow's prominent-people filter judges the output frames**, so it blocks some runs and not others: the same
+  character made from a real person's photo failed once with no reason on the page, passed once, and was blocked once
+  with `PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED` (2026-09-17); both failures cost 0 credits.
+- **A rendition can 404 right after generation**, even permanently for one workflow while another workflow of the same
+  media still downloads.
+- **Do not run `gflow auth login`** on this account, even when gflow suggests it.
 
-## 7. Dọn dẹp sau khi test
+## 7. Clean up after the test
 
-1. `agent_mode(project_id=<ID NHÁP>, enabled=false)` nếu đã bật.
-2. `project_delete(project_id=<ID NHÁP>)`.
-3. `flow_projects()` xem project nháp đã biến mất chưa.
-4. Xem lại `out/ledger.jsonl` và `out/credits.jsonl` nếu có chạy phần tiêu credit.
+1. `agent_mode(project_id=<SCRATCH ID>, enabled=false)` if it was turned on.
+2. `project_delete(project_id=<SCRATCH ID>)`.
+3. `flow_projects()` to see that the scratch project is gone.
+4. Review `out/ledger.jsonl` and `out/credits.jsonl` if the spending part was run.
 
-## 8. Báo lỗi thế nào cho sửa được
+## 8. How to report a bug so it can be fixed
 
-Với mỗi lỗi, gửi đủ bốn thứ: tên tool, tham số đã truyền, nguyên văn JSON hoặc thông báo lỗi trả về, và id
-project. Nếu là lỗi lúc tiêu tiền thì kèm các dòng liên quan trong `out/ledger.jsonl`.
+For each error, send four things: the tool name, the arguments passed, the exact JSON or error message returned, and
+the project id. For an error while spending, add the matching lines of `out/ledger.jsonl`.

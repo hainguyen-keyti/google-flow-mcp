@@ -163,7 +163,7 @@ read-only by default, and say in their own output what they spent.
 |---|---|
 | [docs/tools.md](docs/tools.md) | Every MCP tool with its price, generated from the running server |
 | [README.vi.md](README.vi.md) | The original Vietnamese README: the full measured record, including traps paid for in credits |
-| [docs/mcp-manual-test.md](docs/mcp-manual-test.md) | A by-hand test pass over the tools (Vietnamese) |
+| [docs/mcp-manual-test.md](docs/mcp-manual-test.md) | A by-hand test pass over the tools, with a ready prompt for another agent |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to run the gate and the rules that keep the money safe |
 
 ## License
