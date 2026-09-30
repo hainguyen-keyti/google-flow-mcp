@@ -319,3 +319,27 @@ def test_the_video_check_in_the_page_uses_the_pattern_that_matches_flows_radio_t
         assert composer._VIDEO_TAB.search(text), text
     for text in ("imageImage", "Video generation off", "chrome_extensionIngredients"):
         assert not composer._VIDEO_TAB.search(text), text
+
+
+def test_renditions_that_all_answer_400_fall_back_to_the_editor_too(monkeypatch, tmp_path):
+    """Live 2026-09-30: flow.google.com answers 400, not 404, to a token it will not serve; the paid clip is lost to
+    the job the same way, and the editor Download costs nothing."""
+    editor = _dead_renditions(monkeypatch, tmp_path)
+
+    async def bad_request(request, *args, **kwargs):
+        raise RuntimeError("no rendition of video returned a real asset: A=m22: HTTP 400; A=m18: HTTP 400")
+
+    monkeypatch.setattr(composer.download_mod, "fetch_to_file", bad_request)
+    monkeypatch.setattr(composer.clips, "_fetch_with_retry", bad_request)
+    record = {
+        "id": "M1",
+        "workflow_id": "W2",
+        "kind": "video",
+        "url": "https://flow.google.com/asb/T",
+        "model": "abra_i2v_8s",
+    }
+
+    out = asyncio.run(composer.fetch_720(_FetchSession(), record, tmp_path / "M1_ab", project_id="P"))
+
+    assert editor == [("P", "M1", "720p", tmp_path / "M1_ab", "W2")], editor
+    assert out == tmp_path / "M1_ab" / "M1_720p.mp4"

@@ -587,9 +587,9 @@ async def fetch_720(
     try:
         return await clips._fetch_with_retry(session.page.request, record, stem)
     except RuntimeError as exc:
-        # Some workflows 404 on every rendition for good (job lly-v5-s1c-reveal, 2026-09-30); the editor's own
-        # Download serves the same clip for 0 credits.
-        if "404" not in str(exc) or project_id is None:
+        # Every rendition link failed: 404 for a whole day on job lly-v5-s1c-reveal, 400 for a token the host will not
+        # serve (both 2026-09-30); the editor's own Download serves the same clip for 0 credits.
+        if "no rendition" not in str(exc) or project_id is None:
             raise
         # The editor names every download <media>_720p and refuses to overwrite, so each stem gets its own folder.
         return await clips.download_rendition(
