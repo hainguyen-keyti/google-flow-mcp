@@ -191,10 +191,14 @@ class _Loc:
 
     @property
     def first(self):
-        return _Loc(self.page, self.items[:1])
+        return type(self)(self.page, self.items[:1])
 
     def nth(self, index):
-        return _Loc(self.page, self.items[index : index + 1])
+        return type(self)(self.page, self.items[index : index + 1])
+
+    def filter(self, has_text=None):
+        # The pickers these fakes model pin on the tile click and show no 'Add to prompt'.
+        return type(self)(self.page, [])
 
     async def count(self):
         return len(self.items)
@@ -628,3 +632,78 @@ def test_two_same_titled_images_whose_urls_end_alike_are_still_refused():
     same_tail = [RECORDS[0], RECORDS[1] | {"url": "https://lh3/zz" + RECORDS[0]["url"][-24:]}]
     with pytest.raises(LookupError, match="rename the file"):
         video.frame_references([TEAPOT, TWIN], same_tail, "m-teapot", None)
+
+
+class _ListPicker:
+    """Flow's frame picker as measured 2026-09-30 when the search finds several images: a list of results beside a
+    preview, where clicking a result only previews it and 'Add to prompt' pins the previewed image."""
+
+    def __init__(self, results):
+        self.results, self.preview, self.pinned, self.clicked = results, results[0], None, []
+        self.keyboard = self
+
+    async def insert_text(self, text):
+        self.clicked.append(f"typed {text}")
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    def locator(self, selector):
+        if "img" in selector:
+            items = [{"src": s, "what": ("select", s)} for s in self.results] + [
+                {"src": self.preview, "what": "big"}
+            ]
+            return _ListLoc(self, items)
+        if "button" in selector:
+            return _ListLoc(
+                self, [{"text": video.ADD_TO_PROMPT, "what": "add"}] if self.pinned is None else []
+            )
+        if "input" in selector:
+            return _ListLoc(self, [{"what": "search"}])
+        return _ListLoc(self, [{"what": "bar"}])
+
+    async def evaluate(self, script, arg=None):
+        if script == video._PICKER_PREVIEW_JS:
+            return self.preview
+        return ["Image ingredient" if self.pinned else "Start", "Swap first and last frames", "End"]
+
+    def act(self, what):
+        self.clicked.append(what)
+        if isinstance(what, tuple):
+            self.preview = what[1]
+        elif what == "add":
+            self.pinned = self.preview
+
+
+class _ListLoc(_Loc):
+    def filter(self, has_text=None):
+        return _ListLoc(self.page, [i for i in self.items if has_text in i.get("text", "")])
+
+    async def click(self, timeout=None):
+        self.page.act(self.items[0].get("what"))
+
+
+def test_a_list_picker_pins_the_asked_image_through_add_to_prompt_after_its_preview_shows_it():
+    """Live dry run 2026-09-30 with a shared title: the url tile was found and clicked, and the Start slot stayed empty;
+    the click had only previewed the image, 'Add to prompt' pins it."""
+    ref = video.frame_references([TEAPOT, TWIN], RECORDS, "m-cup", None)[0]
+    cup, teapot = ("https://x/" + r["url"][-40:] for r in (RECORDS[1], RECORDS[0]))
+    page = _ListPicker([teapot, cup])
+
+    asyncio.run(video.pin_frame(page, "Start", ref))
+
+    assert page.pinned == cup, page.clicked
+    assert page.clicked[-2:] == [("select", cup), "add"], page.clicked
+
+
+def test_a_preview_that_does_not_show_the_asked_image_is_never_added():
+    ref = video.frame_references([TEAPOT, TWIN], RECORDS, "m-cup", None)[0]
+    cup, teapot = ("https://x/" + r["url"][-40:] for r in (RECORDS[1], RECORDS[0]))
+    page = _ListPicker([teapot, cup])
+    page.act = lambda what: page.clicked.append(
+        what
+    )  # the click never moves the preview off the first result
+
+    with pytest.raises(LookupError, match="preview"):
+        asyncio.run(video.pin_frame(page, "Start", ref))
+    assert "add" not in page.clicked, page.clicked

@@ -114,6 +114,25 @@ TAIL = 24
 SLOT_WAIT_MS = 20_000
 PICK_WAIT_MS = 30_000
 PICK_POLL_MS = 2_000
+ADD_TO_PROMPT = "Add to prompt"
+# The picker lists its results and then shows the selected one large, last (measured 2026-09-30).
+_PICKER_PREVIEW_JS = """() => { const all = [...document.querySelectorAll('.cdk-overlay-pane img, [role=dialog] img')];
+  return all.length ? (all[all.length - 1].getAttribute('src') || '') : ''; }"""
+
+
+async def _add_previewed(page: Any, slot: str, ref: FrameRef) -> None:
+    """With several results a click only previews the image and 'Add to prompt' pins it (measured 2026-09-30, a
+    title three images share); it is pressed only once the preview shows the asked image's url."""
+    add = page.locator(".cdk-overlay-pane button, [role=dialog] button").filter(has_text=ADD_TO_PROMPT)
+    if await add.count() == 0:
+        return
+    shown = await page.evaluate(_PICKER_PREVIEW_JS)
+    if not str(shown).endswith(ref.tail):
+        raise LookupError(
+            f"the {slot} picker's preview shows another image than {ref.title!r} ({ref.id}); nothing was pinned"
+        )
+    await add.first.click(timeout=8_000)
+    await page.wait_for_timeout(3_000)
 
 
 @dataclass(frozen=True)
@@ -214,6 +233,7 @@ async def pin_frame(page: Any, slot: str, ref: FrameRef) -> None:
             if (await tile.get_attribute("src") or "").endswith(ref.tail):
                 await tile.click(timeout=8_000)
                 await page.wait_for_timeout(3_000)
+                await _add_previewed(page, slot, ref)
                 return
         if waited >= PICK_WAIT_MS:
             break
