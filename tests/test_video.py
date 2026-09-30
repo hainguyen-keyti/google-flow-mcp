@@ -171,7 +171,7 @@ RECORDS = [
 ]
 
 
-def test_frames_are_named_by_media_id_and_must_be_images_with_a_title_nobody_else_has():
+def test_frames_are_named_by_media_id_and_must_be_images_with_a_title():
     refs = video.frame_references([TEAPOT, CUP], RECORDS, "m-teapot", "m-cup")
     assert [(r.id, r.title, r.tail) for r in refs] == [
         ("m-teapot", "Green teapot on wooden table", RECORDS[0]["url"][-24:]),
@@ -181,8 +181,8 @@ def test_frames_are_named_by_media_id_and_must_be_images_with_a_title_nobody_els
         video.frame_references([TEAPOT], RECORDS, "m-nope", None)
     with pytest.raises(ValueError, match="is a video"):
         video.frame_references([TEAPOT | {"kind": "video"}], RECORDS, "m-teapot", None)
-    with pytest.raises(LookupError, match="titled"):
-        video.frame_references([TEAPOT, CUP | {"title": TEAPOT["title"]}], RECORDS, "m-teapot", None)
+    with pytest.raises(LookupError, match="no title"):
+        video.frame_references([TEAPOT | {"title": " "}], RECORDS, "m-teapot", None)
 
 
 class _Loc:
@@ -599,6 +599,32 @@ def test_a_frame_the_picker_never_shows_is_still_refused_without_a_click():
     assert not any(str(c).startswith("tile") and "other" not in str(c) for c in page.clicked)
 
 
-def test_two_images_with_one_title_are_refused_with_the_way_out():
+TWIN = CUP | {"title": TEAPOT["title"]}
+
+
+def test_two_images_with_one_title_are_each_told_apart_by_their_own_url():
+    """Measured 2026-09-30: gen_i2i images carry Flow's own titles, which repeat ("Woman posing in bedroom" twice), and
+    the unique-title rule refused them; the picker tile is chosen by the listing url, the title is only search text."""
+    refs = video.frame_references([TEAPOT, TWIN], RECORDS, "m-teapot", "m-cup")
+
+    assert [(r.id, r.title, r.tail) for r in refs] == [
+        ("m-teapot", TEAPOT["title"], RECORDS[0]["url"][-24:]),
+        ("m-cup", TEAPOT["title"], RECORDS[1]["url"][-24:]),
+    ]
+
+
+@pytest.mark.parametrize(("asked", "record"), [("m-teapot", 0), ("m-cup", 1)])
+def test_a_picker_showing_both_same_titled_images_pins_only_the_one_asked(asked, record):
+    ref = video.frame_references([TEAPOT, TWIN], RECORDS, asked, None)[0]
+    page = _PickerPage(["https://x/" + r["url"][-40:] for r in RECORDS], [])
+
+    asyncio.run(video.pin_frame(page, "Start", ref))
+
+    tiles = [c for c in page.clicked if str(c).startswith("tile")]
+    assert tiles == ["tile " + RECORDS[record]["url"][-6:]], page.clicked
+
+
+def test_two_same_titled_images_whose_urls_end_alike_are_still_refused():
+    same_tail = [RECORDS[0], RECORDS[1] | {"url": "https://lh3/zz" + RECORDS[0]["url"][-24:]}]
     with pytest.raises(LookupError, match="rename the file"):
-        video.frame_references([TEAPOT, CUP | {"title": TEAPOT["title"]}], RECORDS, "m-teapot", None)
+        video.frame_references([TEAPOT, TWIN], same_tail, "m-teapot", None)

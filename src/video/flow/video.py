@@ -128,12 +128,17 @@ class FrameRef:
         return self.workflows | {self.id}
 
 
+def _same_title(a: str | None, b: str) -> bool:
+    return re.sub(r"\s+", " ", a or "").strip().casefold() == b.casefold()
+
+
 def frame_references(
     media: list[dict[str, Any]], records: list[dict[str, Any]], start: str | None, end: str | None
 ) -> list[FrameRef]:
-    """The start and end images, by media id, each an image whose title no other project image carries."""
+    """The start and end images, by media id. The title is only the picker's search text; the tile is told by its url,
+    so images sharing a title (gen_i2i's own titles repeat, measured 2026-09-30) are refused only when their urls end
+    alike."""
     by_id = {each["id"]: each for each in media}
-    titles = [re.sub(r"\s+", " ", each.get("title") or "").strip().casefold() for each in media]
     out = []
     for media_id in (start, end):
         if not media_id:
@@ -146,16 +151,19 @@ def frame_references(
         title = re.sub(r"\s+", " ", found.get("title") or "").strip()
         if not title:
             raise LookupError(f"image {media_id} has no title for the frame picker's search")
-        if titles.count(title.casefold()) > 1:
-            raise LookupError(
-                f"{titles.count(title.casefold())} images are titled {title!r}; the picker cannot tell them apart: "
-                "rename the file (a unique name) and flow_upload it again, then pass the new media id"
-            )
         mine = [r for r in records if r.get("id") == media_id]
         urls = [str(r.get("url") or "") for r in mine if r.get("url")]
         if not urls:
             raise LookupError(
                 f"image {media_id} has no url in the listing, so its picker tile cannot be checked"
+            )
+        twins = {
+            each["id"] for each in media if each["id"] != media_id and _same_title(each.get("title"), title)
+        }
+        if any(str(r.get("url") or "").endswith(urls[0][-TAIL:]) for r in records if r.get("id") in twins):
+            raise LookupError(
+                f"another image titled {title!r} ends with the same url, so the picker cannot tell them apart: "
+                "rename the file (a unique name) and flow_upload it again, then pass the new media id"
             )
         out.append(
             FrameRef(

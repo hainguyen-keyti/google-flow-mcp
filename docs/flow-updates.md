@@ -14,8 +14,9 @@ $0: it opens pages, sidebar sections, the composer's settings (clicking every op
 and the clip editor's toolbar menus, then presses Escape. Every click it makes itself goes through `safe_click`, which
 reads the element's label first and refuses anything that reads like spending, saving or deleting (`UNSAFE` in
 `src/video/flow/survey.py`). It does change three things on the project it walks: Agent mode is turned off for the walk
-and put back after; the prompt box is cleared; the composer is left on the last model and count it walked (every
-generating tool sets its own before it runs). Use a project that holds at least one finished video, one scene and one character, so every route is walked.
+and put back after; the prompt box is cleared; the composer is left on the Video tab, the first mode's first model, at
+x1 (every generating tool sets its own before it runs). The settings pane is recorded on the Video tab whatever tab it
+opened on: a gen_i2i run leaves it on Image, which shows neither Frames nor Ingredients. Use a project that holds at least one finished video, one scene and one character, so every route is walked.
 A full walk takes 10 to 20 minutes, most of it in the settings pane.
 
 For every route (home, project, each sidebar section, the composer in Frames and in Ingredients, the settings pane, the
