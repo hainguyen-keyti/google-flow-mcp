@@ -199,11 +199,12 @@ class Backend:
     async def _with(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
         """Run one call in its own session and say what the session did to Flow's cookie notice.
 
-        The owner lets the driver press that notice (2026-10-01), and a call that did so says it did. Flow shows the
-        notice once, so a press is kept until an answer carries it: one that cannot (a list) leaves it for the next
-        that can. A failing call names it in a note and leaves it too, because the error may never reach the agent:
-        a retry swallows it (scene_download), and so does a step that must not fail (_agent_restore). A notice left
-        standing is named either way (review of plan AL and its scoped re-review, 2026-10-02)."""
+        The owner lets the driver press that notice (2026-10-01), and a call that did so says it did. Once pressed,
+        Flow stops showing the notice, so a press is kept until an answer carries it: one that cannot (a list) leaves
+        it for the next that can. A failing call names it in a note and leaves it too, because the error may never
+        reach the agent: a retry swallows it (scene_download), and so does a step that must not fail
+        (_agent_restore). A notice left standing is named either way (review of plan AL and its scoped re-reviews,
+        2026-10-02)."""
         async with FlowSession(self.profile) as session:
             try:
                 result = await fn(session)
@@ -213,6 +214,10 @@ class Backend:
                 self._noted(exc)
                 for left in session.unpressed:
                     exc.add_note(left)
+                raise
+            except BaseException:
+                # A cancelled call answers nobody: what it pressed so far waits for the next answer.
+                self._unreported += session.notices
                 raise
             await session.notices_settled()
             self._unreported += session.notices

@@ -2074,6 +2074,25 @@ def test_a_call_that_fails_still_says_which_notice_the_driver_pressed(monkeypatc
     assert asyncio.run(backend._with(saw_none)) == {"balance": 75}
 
 
+def test_a_call_cancelled_after_a_press_leaves_the_press_for_the_next_answer(monkeypatch, tmp_path):
+    # Round two of the scoped re-review: a client whose read timeout runs out cancels the call, which answers
+    # nobody; the notice is gone from then on, so the press it made would be told to no one.
+    backend = _browserless_backend(monkeypatch, tmp_path)
+    said = "flow.google.com uses cookies from Google ... OK, got it"
+
+    async def pressed_then_cancelled(session):
+        session.notices.append(said)
+        raise asyncio.CancelledError
+
+    async def saw_none(session):
+        return {"balance": 75}
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        asyncio.run(backend._with(pressed_then_cancelled))
+    assert not getattr(cancelled.value, "__notes__", [])
+    assert asyncio.run(backend._with(saw_none)) == {"balance": 75, "dismissed_notices": [said]}
+
+
 def test_a_press_no_answer_has_carried_yet_is_named_by_the_next_call_that_fails(monkeypatch, tmp_path):
     backend = _browserless_backend(monkeypatch, tmp_path)
     said = "flow.google.com uses cookies from Google ... OK, got it"
@@ -2175,21 +2194,32 @@ def _generation_over_real_sessions(
     return said
 
 
-@pytest.mark.parametrize("presses_in", ["agent off", "agent back on", "image listing"])
+@pytest.mark.parametrize(
+    ("tool", "presses_in"),
+    [
+        ("gen_t2i", "agent off"),
+        ("gen_t2i", "agent back on"),
+        ("gen_t2i", "image listing"),
+        ("gen_t2v", "agent off"),
+        ("gen_t2v", "agent back on"),
+    ],
+)
 def test_a_press_met_in_a_session_the_agent_never_sees_is_named_by_the_tools_own_answer(
-    monkeypatch, tmp_path, presses_in
+    monkeypatch, tmp_path, tool, presses_in
 ):
     # Scoped re-review of plan AL, 2026-10-02: the tools that run gflow open sessions of their own first (Agent
     # mode off and back on, the listing read for an image's media id). Their answers stay inside the server, and
-    # the first notice of a fresh profile, met there, was handed to one of them and never reported.
+    # the first notice of a fresh profile, met there, was handed to one of them and never reported. The video
+    # tools are the ones that pay, and they read no listing (round two of that re-review).
     said = _generation_over_real_sessions(monkeypatch, tmp_path, presses_in=presses_in)
 
-    result = _call("gen_t2i", {"prompt": "a cup", "project": "P"})
+    result = _call(tool, {"prompt": "a cup", "project": "P", "job_id": f"carry-{tool}-1"})
 
     assert not result.is_error, _texts([result])
     answer = _payload(result)
     assert answer["dismissed_notices"] == [said], answer
-    assert answer["outputs"][0]["media_id"] == "m-1" and answer["agent_mode_restored"] is True
+    assert answer["agent_mode_restored"] is True
+    assert answer["outputs"][0]["media_id"] == ("m-1" if tool == "gen_t2i" else "wf-1")
 
 
 @pytest.mark.parametrize("presses_in", ["agent off", "agent back on"])
@@ -2205,7 +2235,13 @@ def test_a_generation_gflow_failed_names_the_press_of_its_own_sessions(monkeypat
 
 def test_a_notice_over_the_agent_chip_is_named_beside_the_advice_about_the_chip(monkeypatch, tmp_path):
     # The Agent step raises its own advice FROM the timeout that carries the note, so the note sits one cause down.
-    left = "Flow's cookie notice shows 2 accept buttons, not one; nothing was clicked: 'uses cookies'"
+    # The notice's words are the real ones, 164 characters: gflow's redaction cuts what the agent reads at 500
+    # (gflow_cli/data/redaction.py), so the reason has to come before the words it quotes.
+    notice = (
+        "flow.google.com uses cookies from Google to deliver and enhance the quality of its services "
+        "and to analyze traffic. Learn more OK, got it"
+    )
+    left = f"Flow's cookie notice shows 2 accept buttons, not one; nothing was clicked: {notice!r}"
     said = _generation_over_real_sessions(
         monkeypatch, tmp_path, presses_in="nowhere", chip_times_out=True, left=left
     )
@@ -2213,7 +2249,8 @@ def test_a_notice_over_the_agent_chip_is_named_beside_the_advice_about_the_chip(
     result = _call("gen_t2v", {"prompt": "a cup", "project": "P", "job_id": "covered-chip-1"})
 
     text = _texts([result])[0]
-    assert result.is_error and "prompt bar" in text and "2 accept buttons" in text, text
+    assert result.is_error and "prompt bar" in text and "nothing was spent" in text.lower(), text
+    assert "Flow's cookie notice shows 2 accept buttons, not one; nothing was clicked" in text, text
     assert text.index("prompt bar") < text.index("2 accept buttons") and "Call log" not in text, text
     assert said not in text
 

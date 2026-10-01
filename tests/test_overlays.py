@@ -13,8 +13,8 @@ NOTICE = (
     "flow.google.com uses cookies from Google to deliver and enhance the quality of its services "
     "and to analyze traffic. Learn more OK, got it"
 )
-# What most of the driver's actions allow themselves (148 of them, counted 2026-10-02): the action that meets the
-# notice waits for the handler under that deadline.
+# What most of the driver's actions allow themselves (`timeout=8_000`): the action that meets the notice waits for the
+# handler under that deadline.
 ACTION_MS = 8_000
 
 
@@ -42,6 +42,8 @@ class _Bar:
 
     async def inner_text(self, timeout=None):
         self.page.read_timeouts.append(timeout)
+        if self.page.idle is not None:
+            self.page.idle_during_read.append(self.page.idle.is_set())
         if self.page.unreadable:
             raise PlaywrightTimeoutError("Locator.inner_text: Timeout 1000ms exceeded.")
         return self.text
@@ -91,7 +93,8 @@ class _Page:
         gone_after_ms=0,
     ):
         self.clicks, self.handlers, self.asked, self.steps = [], [], [], []
-        self.click_timeouts, self.read_timeouts, self.idle_during_press = [], [], []
+        self.click_timeouts, self.read_timeouts = [], []
+        self.idle_during_press, self.idle_during_read = [], []
         self.bar = _Bar(self, text, accepts)
         self.cover = covering
         self.press_fails, self.stays, self.unreadable, self.closes = press_fails, stays, unreadable, closes
@@ -158,7 +161,9 @@ def test_the_notice_is_watched_until_it_leaves_without_an_action_check():
 
     assert "wait_for" not in page.steps
     assert notices == [NOTICE] and unpressed == []
-    assert 300 <= page.waited < 300 + overlays.GONE_POLL_MS
+    # Looked at often enough that a bar gone in 0.3 s gives the action back within half a second: measured
+    # 2026-10-02, the real bar is gone in the same tick as the click.
+    assert 300 <= page.waited <= 500
 
 
 def test_the_handler_gives_the_action_back_inside_the_eight_seconds_most_actions_allow():
@@ -236,6 +241,9 @@ def test_a_press_that_failed_is_not_tried_again_at_every_later_action(failure):
     asyncio.run(handler(page.bar))
 
     assert len(page.click_timeouts) == 1 and len(unpressed) == 1 and notices == []
+    # Nothing is in flight after a trigger that tried nothing: a watch left busy would hold every call's end for
+    # the whole wait (scoped re-review, round two).
+    assert page.idle.is_set()
 
 
 def test_a_notice_whose_button_shows_late_is_still_pressed():
@@ -272,8 +280,9 @@ def test_the_watch_tells_when_a_press_is_in_flight(failure):
     asyncio.run(handler(page.bar))
 
     assert before is True and page.idle.is_set()
-    if failure != "unreadable":
-        assert page.idle_during_press == [False]
+    # Busy from before its first look at the page, so no reader can slip in ahead of it.
+    assert page.idle_during_read == [False]
+    assert page.idle_during_press == ([] if failure == "unreadable" else [False])
 
 
 def test_what_covers_a_control_is_reported_with_its_own_words():
