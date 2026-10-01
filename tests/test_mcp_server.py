@@ -2826,6 +2826,10 @@ def test_gen_video_describes_every_model_in_the_surveyed_options_file():
         ({"start_frame": "S", "media_ids": ["M"]}, "either frames or ingredients"),
         ({"end_frame": "E"}, "end_frame needs a start_frame"),
         ({"media_ids": [" "]}, "must not be blank"),
+        ({"media_ids": ["M"], "voices": [" "]}, "must not be blank"),
+        ({"start_frame": "S", "voices": ["Achird"]}, "either frames or ingredients"),
+        # Flow's own refusal of a voice with nothing beside it (measured 2026-10-01, out/al/t5.json).
+        ({"voices": ["Achird"]}, "An audio ingredient requires other ingredients to function."),
     ],
 )
 def test_gen_video_refuses_what_it_cannot_run_before_a_browser_opens(monkeypatch, tmp_path, change, message):
@@ -2876,6 +2880,24 @@ def test_gen_video_forwards_every_option_to_the_driver(monkeypatch, tmp_path):
         "end_frame": "E",
     }
     assert got["max_credits"] == 20 and got["job_id"] == "job-video" and got["out_dir"] == str(tmp_path)
+
+
+def test_gen_video_forwards_the_voices_beside_the_ingredients(monkeypatch, tmp_path):
+    _spending_backend(monkeypatch, tmp_path)
+    arguments = SPEND_CALLS["gen_video"] | {"media_ids": ["M"], "voices": ["Achird", "LilyVoice"]}
+
+    result = _call("gen_video", arguments)
+
+    assert not result.is_error, _texts([result])
+    got = json.loads(_texts([result])[0])
+    assert got["voices"] == ["Achird", "LilyVoice"] and got["media_ids"] == ["M"]
+
+
+def test_gen_video_tells_where_voices_come_from_and_what_each_model_takes():
+    description = served_tool_objects()["gen_video"].description
+    assert "voices" in description and "flow_voices" in description
+    # The caps read off the composer on 2026-10-01, written from the table the driver refuses by.
+    assert ingredients.voice_caps_text() in description
 
 
 def _image_world(monkeypatch, tmp_path, listing):

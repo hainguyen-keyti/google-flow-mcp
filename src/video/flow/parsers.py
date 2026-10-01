@@ -163,6 +163,33 @@ def voices_from_listing(payload: Any) -> list[dict[str, Any]]:
     ]
 
 
+def custom_voices(payload: Any) -> list[dict[str, Any]]:
+    """The voices saved on this account with character_make_voice that the project grid still lists.
+
+    Measured 2026-10-01 on LilyVoice: such a voice is a record whose [10][0] holds the words it was made from, its
+    description, its direction, the speech model, the audio type ('audio/wav') and [[the preset it is built on, its
+    name]]; a request names it by its workflow id. It goes by the title of its grid entry, the name flow_media shows.
+    """
+    descriptors, records_ = _split_listing(payload)
+    titles = {_at(descriptor, 0): _str(_at(descriptor, 3, 0)) for descriptor in descriptors}
+    out = []
+    for record in records_:
+        arm = _at(record, 10, 0)
+        mime = _at(arm, 10)
+        if not (isinstance(mime, str) and mime.startswith("audio/")) or record[2] not in titles:
+            continue
+        names = _at(arm, 11, 0)
+        out.append(
+            {
+                "workflow_id": _str(_at(record, 0)),
+                "media_id": record[2],
+                "name": titles[record[2]] or _str(_at(names, 1)),
+                "base": _str(_at(names, 0)),
+            }
+        )
+    return out
+
+
 def _record_model(record: list[Any]) -> str | None:
     arm = _at(record, 7, 0)
     if isinstance(arm, str) and " " not in arm:

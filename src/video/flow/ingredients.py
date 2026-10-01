@@ -16,7 +16,10 @@ Measured 2026-10-01 (plan AL T4, $0 probes out/al/t4.json and t4b.json):
   line does not move;
 - the '@' picker is that same dialog and keeps the category it last showed, under which it offers no character, so
   characters are mentioned before the dialog is opened;
-- one listed image (lily_black_face.png) is offered by no row of the dialog.
+- one listed image (lily_black_face.png) is offered by no row of the dialog;
+- under Voices (out/al/t5.json) the search finds a voice whatever its letter case and a voice of your own carries a
+  badge; a voice chip carries no name, and its hover card names the voice after 'voice_selection'; a voice with no
+  image or character beside it is greyed out with "An audio ingredient requires other ingredients to function.".
 
 Measured 2026-09-16 (plan character-generation T1, out/character_mentions_20260916_175616.json):
 - '@' and a name list `button.asset-item[role=option]`, each carrying only `.asset-title` and a `.type-subtitle`
@@ -33,6 +36,7 @@ Measured 2026-09-16 (plan character-generation T1, out/character_mentions_202609
 from __future__ import annotations
 
 import contextlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +48,7 @@ from gflow_cli.api.video import Aspect, GenerateVideoRequest, Mode, VideoModel, 
 from gflow_cli.errors import UiSelectorDriftError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from video.flow import agent, composer, parsers
+from video.flow import agent, composer, parsers, reader
 from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
@@ -95,6 +99,19 @@ ICON_KINDS = {"voice_selection": "voice", "accessibility_new": "character"}
 CAP_WORDS = "Maximum image ingredients reached ({cap} allowed)"
 NO_IMAGES_WORDS = "You cannot use image ingredients with this model."
 CAPS_MEASURED = "2026-10-01"
+# The voices each model takes as audio ingredients, and Flow's own refusals, read off the composer on 2026-10-01
+# (log_caps2.txt; a voice alone out/al/t5.json). A character that has a voice takes one of them (t1b.json).
+VOICE_CAPS = {"omni-flash": 5, "veo-lite": 1, "veo-fast": 1, "veo-quality": 0}
+AUDIO_CAP_WORDS = "Maximum audio ingredients reached ({cap} allowed)"
+NO_AUDIO_WORDS = "You cannot use audio ingredients with this model."
+ALONE_WORDS = "An audio ingredient requires other ingredients to function."
+
+
+def voice_caps_text() -> str:
+    """The voice caps in words, for a tool's description, written from the table the driver refuses by."""
+    caps = ", ".join(f"{model} {cap or 'none'}" for model, cap in VOICE_CAPS.items())
+    return f"Voices each model takes (read off the composer on {CAPS_MEASURED}): {caps}."
+
 
 _OPTIONS_JS = """(sel) => [...document.querySelectorAll(sel)].map(o => ({
   title: ((o.querySelector('.asset-title') || {}).textContent || '').trim(),
@@ -130,6 +147,7 @@ _ROWS_JS = """(sel) => [...document.querySelectorAll(sel)].map(o => ({
   src: (o.querySelector('img') || {getAttribute: () => ''}).getAttribute('src') || '',
   visible: !!(o.offsetWidth || o.offsetHeight),
   active: o.classList.contains('asset-item-active'),
+  custom: !!o.querySelector('.custom-voice-badge-icon'),
 }))"""
 
 _BAR_JS = """(sel) => [...document.querySelectorAll(sel)].map(c => ({
@@ -155,6 +173,8 @@ class Reference:
     mention_ids: frozenset[str]
     # An image only: the end of its listing url, which its row in the "+" dialog carries.
     tail: str = ""
+    # A voice only: saved on this account (its row carries a badge), not one of Flow's presets.
+    custom: bool = False
 
     @property
     def query(self) -> str:
@@ -174,8 +194,14 @@ def resolve(
     characters: list[str],
     media_ids: list[str],
     model: str,
+    *,
+    voices: list[str] | tuple[str, ...] = (),
+    presets: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
+    customs: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
 ) -> list[Reference]:
-    """Name every requested character and image from one listing, refusing anything the picker cannot single out."""
+    """Name every requested character, image and voice from one listing, refusing anything the picker cannot single
+    out. A voice is named the way the request carries it: a preset by its lowercase id, a voice of your own by its
+    workflow id (measured 2026-10-01)."""
     from video.flow.video import TAIL
 
     wanted = [*characters, *media_ids]
@@ -183,6 +209,20 @@ def resolve(
         raise ValueError("at least one character or image is required")
     if len(set(wanted)) != len(wanted):
         raise ValueError(f"each character and image may be named once, got {wanted}")
+    if len({_norm(voice) for voice in voices}) != len(voices):
+        raise ValueError(f"each voice may be named once, got {list(voices)}")
+    if voices:
+        voice_cap = VOICE_CAPS.get(model)
+        if voice_cap is None:
+            raise ValueError(
+                f"no voice cap was read for {model}; voices are measured on {sorted(VOICE_CAPS)}"
+            )
+        if len(voices) > voice_cap:
+            words = AUDIO_CAP_WORDS.format(cap=voice_cap) if voice_cap else NO_AUDIO_WORDS
+            raise ValueError(
+                f"{model} takes at most {voice_cap} voice{'' if voice_cap == 1 else 's'}, got {len(voices)}: Flow's composer refuses the next "
+                f"voice with {words!r} (read off the composer on {CAPS_MEASURED})"
+            )
     cap = reference_cap_for(VideoModel.from_cli(model))
     if len(wanted) > cap and media_ids:
         # A mentioned character takes one of the image slots: on Veo 3.1 Lite a character and two images filled it,
@@ -261,6 +301,23 @@ def resolve(
                 "rename the file (a unique name) and flow_upload it again, then pass the new media id"
             )
         references.append(Reference("media", media_id, title, workflows, tail))
+
+    offered = [(each["name"], each["id"], False) for each in presets] + [
+        (each["name"], each["workflow_id"], True) for each in customs
+    ]
+    for voice in voices:
+        named = [(name, token, custom) for name, token, custom in offered if _norm(name) == _norm(voice)]
+        if len(named) > 1:
+            raise LookupError(
+                f"{len(named)} voices are named {voice!r} (preset or your own: "
+                f"{['your own' if custom else 'preset' for _, _, custom in named]}); not guessing which one is meant"
+            )
+        if not named:
+            raise LookupError(
+                f"no voice named {voice!r} in this project; it offers {sorted(name for name, _, _ in offered)}"
+            )
+        name, token, custom = named[0]
+        references.append(Reference("voice", token, name, frozenset({token}), custom=custom))
     return references
 
 
@@ -419,7 +476,8 @@ async def _settled_bar(page: Any) -> list[dict[str, Any]]:
 
 def bar_problems(bar: list[dict[str, Any]], references: list[Reference]) -> list[str]:
     """Everything that sets the ingredient bar apart from what was asked for: each image by the workflow id its chip
-    names, one chip for each character, no chip of any other kind, and none that Flow refuses."""
+    names, each voice by the name its hover card gives (`name`, read by check_bar), one chip for each character, no
+    chip of any other kind, and none that Flow refuses."""
     problems = []
     images = [chip for chip in bar if chip["kind"] == "image"]
     asked = [reference for reference in references if reference.kind == "media"]
@@ -437,7 +495,18 @@ def bar_problems(bar: list[dict[str, Any]], references: list[Reference]) -> list
     entities = sum(reference.kind == "entity" for reference in references)
     if characters != entities:
         problems.append(f"{characters} character chips for {entities} characters")
-    problems += ["a voice chip, and no voice was asked for" for chip in bar if chip["kind"] == "voice"]
+    voices = [chip for chip in bar if chip["kind"] == "voice"]
+    spoken = [reference for reference in references if reference.kind == "voice"]
+    for reference in spoken:
+        mine = [chip for chip in voices if _norm(chip.get("name")) == _norm(reference.title)]
+        if len(mine) != 1:
+            problems.append(f"the voice {reference.title!r} has {len(mine)} chips, not one")
+    names = {_norm(reference.title) for reference in spoken}
+    problems += [
+        f"a voice chip names {chip.get('name') or 'nothing'}, which was not asked for"
+        for chip in voices
+        if _norm(chip.get("name")) not in names
+    ]
     problems += [
         f"a chip showing {chip['seen']!r} is none of image, character, voice"
         for chip in bar
@@ -447,8 +516,8 @@ def bar_problems(bar: list[dict[str, Any]], references: list[Reference]) -> list
     return problems
 
 
-async def _refusal_words(page: Any, index: int) -> str:
-    """Flow's own words for the refused chip at `index`, read off the card its hover opens ('' when none shows)."""
+async def _card(page: Any, index: int) -> str:
+    """The card the bar chip at `index` opens on hover, '' when none shows."""
     await page.locator(BAR).nth(index).hover(timeout=3_000, force=True)
     words: list[str] = []
     waited = 0
@@ -462,19 +531,36 @@ async def _refusal_words(page: Any, index: int) -> str:
     return " / ".join(words)
 
 
+def _card_voice(card: str) -> str:
+    """The voice a card names: 'play_arrow 0:06 voice_selection Achird' (measured 2026-10-01)."""
+    found = re.search(r"voice_selection\s+(.+)$", card)
+    return found.group(1).strip() if found else ""
+
+
+def _card_refusal(card: str) -> str:
+    """Flow's refusal on a card, which comes before a voice's player when the chip is a voice (measured 2026-10-01)."""
+    return re.split(r"\s*\bplay_arrow\b", card, maxsplit=1)[0].strip()
+
+
 async def check_bar(
     page: Any, references: list[Reference], *, at_click: bool = False
 ) -> list[dict[str, Any]]:
     """The settled bar, or a refusal naming what is wrong with it, in Flow's own words for a chip Flow refuses.
 
-    The price line reads the same with a refused chip on the bar (10 on Veo 3.1 Lite beside a refused fourth image,
-    measured 2026-10-01), so this read is what keeps a refused or missing ingredient from being paid for."""
+    A voice chip carries no name, so its hover card is read for one. The price line reads the same with a refused
+    chip on the bar (10 on Veo 3.1 Lite beside a refused fourth image, measured 2026-10-01), so this read is what
+    keeps a refused or missing ingredient from being paid for."""
     bar = await _settled_bar(page)
+    for index, chip in enumerate(bar):
+        if chip["kind"] == "voice" or chip["refused"]:
+            card = await _card(page, index)
+            chip["name"] = _card_voice(card) if chip["kind"] == "voice" else ""
+            chip["said"] = _card_refusal(card) if chip["refused"] else ""
     problems = bar_problems(bar, references)
     if not problems:
         return bar
-    said = [await _refusal_words(page, index) for index, chip in enumerate(bar) if chip["refused"]]
-    flow = "; Flow says: " + " / ".join(sorted({words for words in said if words})) if any(said) else ""
+    said = sorted({chip["said"] for chip in bar if chip.get("said")})
+    flow = "; Flow says: " + " / ".join(said) if said else ""
     raise LookupError(
         f"{'right before the click ' if at_click else ''}the ingredient bar is not what was asked for: "
         f"{'; '.join(problems)}{flow}; {'refusing to spend' if at_click else 'refusing to generate'}"
@@ -503,36 +589,32 @@ async def _bar_after(page: Any, before: list[dict[str, Any]], wait_ms: int) -> l
     return after
 
 
-async def attach_image(page: Any, reference: Reference) -> dict[str, str]:
-    """Add one project image through the composer's "+" dialog and prove the chip that landed is that image.
+async def _add_from_dialog(
+    page: Any, reference: Reference, category: str, is_mine: Any, what: str, unseen: str
+) -> tuple[dict[str, Any], int]:
+    """Add the one row of `category` that `is_mine` tells, through the composer's "+" dialog, and return the chip that
+    landed on the bar with its place there.
 
-    The title is only the search text. The row is the one whose thumbnail ends like the image's listing url, read
-    twice alike before its index is trusted, since the first read after typing can still show the unfiltered rows.
-    A click adds only the ACTIVE row, so when it adds no chip 'Add to prompt' is pressed only once the wanted row is
-    the active one. Never Enter. The chip that landed must name the image's workflow id and must not be refused.
+    The title is the search text. The rows are read twice alike before an index is trusted, since the first read after
+    typing can still show the unfiltered rows. A click adds only the ACTIVE row, so when it adds no chip 'Add to
+    prompt' is pressed only once the wanted row is the active one. Never Enter.
     """
-    from video.flow.video import _bare_src
-
-    if reference.kind != "media" or not reference.tail:
-        raise ValueError(f"{reference.title!r} carries no listing url to tell its row in the dialog by")
 
     def mine_in(rows: list[dict[str, Any]]) -> list[int]:
-        return [
-            index
-            for index, row in enumerate(rows)
-            if row.get("visible") and _bare_src(row.get("src")).endswith(reference.tail)
-        ]
+        return [index for index, row in enumerate(rows) if row.get("visible") and is_mine(row)]
 
     before = await _settled_bar(page)
     await close_dialog(page)
     await page.locator(ADD).first.click(timeout=8_000)
-    category = page.locator(DIALOG).get_by_text("Images", exact=True).first
+    tab = page.locator(DIALOG).get_by_text(category, exact=True).first
     try:
-        await category.wait_for(state="visible", timeout=DIALOG_WAIT_MS)
+        await tab.wait_for(state="visible", timeout=DIALOG_WAIT_MS)
     except PlaywrightTimeoutError:
         await close_dialog(page)
-        raise LookupError("the ingredients dialog showed no Images category; nothing was attached") from None
-    await category.click(timeout=8_000)
+        raise LookupError(
+            f"the ingredients dialog showed no {category} category; nothing was attached"
+        ) from None
+    await tab.click(timeout=8_000)
     search = page.locator(DIALOG).locator(SEARCH).first
     await search.wait_for(state="visible", timeout=DIALOG_WAIT_MS)
     await search.fill(reference.title)
@@ -553,14 +635,13 @@ async def attach_image(page: Any, reference: Reference) -> dict[str, str]:
         await close_dialog(page)
         if mine:
             raise LookupError(
-                f"{len(mine)} rows of the ingredients dialog carry the url of {reference.title!r} "
-                f"({reference.id}); not guessing"
+                f"{len(mine)} rows of the ingredients dialog are the {what} {reference.title!r} ({reference.id}); "
+                "not guessing"
             )
         raise LookupError(
-            f"the ingredients dialog offers no image {reference.title!r} ({reference.id}): it shows "
-            f"{len(shown)} row{'' if len(shown) == 1 else 's'} for that title ({shown[:8]}), none carrying this "
-            "image's url. Flow lists the image in the project and still does not offer it as an ingredient; "
-            "nothing was attached"
+            f"the ingredients dialog offers no {what} {reference.title!r} ({reference.id}): it shows "
+            f"{len(shown)} row{'' if len(shown) == 1 else 's'} for that title ({shown[:8]}), {unseen}; nothing was "
+            "attached"
         )
     await page.locator(OPTION).nth(mine[0]).click(timeout=8_000)
     after = await _bar_after(page, before, COMMIT_WAIT_MS)
@@ -571,7 +652,8 @@ async def attach_image(page: Any, reference: Reference) -> dict[str, str]:
             if len(active) != 1 or active != mine_in(now):
                 await close_dialog(page)
                 raise LookupError(
-                    f"clicking the image {reference.title!r} left another row active; refusing to add another image"
+                    f"clicking the {what} {reference.title!r} left another row active; refusing to add another "
+                    f"{what}"
                 )
             confirm = page.locator(CONFIRM)
             visible = [
@@ -589,10 +671,29 @@ async def attach_image(page: Any, reference: Reference) -> dict[str, str]:
     added = _added(before, after)
     if len(added) != 1:
         raise LookupError(
-            f"adding the image {reference.title!r} added {len(added)} ingredient chips, not one; refusing to "
+            f"adding the {what} {reference.title!r} added {len(added)} ingredient chips, not one; refusing to "
             "generate"
         )
-    chip = added[0]
+    return added[0], len(after) - 1 - after[::-1].index(added[0])
+
+
+async def attach_image(page: Any, reference: Reference) -> dict[str, str]:
+    """Add one project image through the composer's "+" dialog and prove the chip that landed is that image: its row
+    is the one whose thumbnail ends like the image's listing url, and the chip must name the image's workflow id and
+    must not be refused."""
+    from video.flow.video import _bare_src
+
+    if reference.kind != "media" or not reference.tail:
+        raise ValueError(f"{reference.title!r} carries no listing url to tell its row in the dialog by")
+    chip, index = await _add_from_dialog(
+        page,
+        reference,
+        "Images",
+        lambda row: _bare_src(row.get("src")).endswith(reference.tail),
+        "image",
+        "none carrying this image's url. Flow lists the image in the project and still does not offer it as an "
+        "ingredient",
+    )
     if chip["kind"] != "image" or chip["id"] not in reference.mention_ids:
         raise LookupError(
             f"adding the image {reference.title!r} put a {chip['kind']} chip naming {chip['id'] or 'nothing'} on "
@@ -600,12 +701,45 @@ async def attach_image(page: Any, reference: Reference) -> dict[str, str]:
             "wrong image"
         )
     if chip["refused"]:
-        words = await _refusal_words(page, len(after) - 1 - after[::-1].index(chip))
+        words = _card_refusal(await _card(page, index))
         raise LookupError(
             f"Flow refuses the image {reference.title!r} ({reference.id}) on this model"
             f"{': ' + words if words else ''}; refusing to generate"
         )
     return {"kind": "media", "id": chip["id"], "text": reference.title}
+
+
+async def attach_voice(page: Any, reference: Reference) -> dict[str, str]:
+    """Add one voice through the composer's "+" dialog and prove the chip that landed is that voice.
+
+    Measured 2026-10-01 (out/al/t5.json): the Voices search finds a voice whatever its letter case; a voice of your
+    own carries a badge, a preset none; the chip carries no name, and its hover card names the voice after
+    `voice_selection`, behind Flow's refusal when there is one."""
+    if reference.kind != "voice":
+        raise ValueError(f"{reference.title!r} is a {reference.kind}, not a voice")
+    chip, index = await _add_from_dialog(
+        page,
+        reference,
+        "Voices",
+        lambda row: (
+            _norm(row.get("title")) == _norm(reference.title) and bool(row.get("custom")) == reference.custom
+        ),
+        "voice",
+        f"none of that name {'with' if reference.custom else 'without'} the badge of a voice of your own",
+    )
+    card = await _card(page, index)
+    named = _card_voice(card)
+    if chip["kind"] != "voice" or _norm(named) != _norm(reference.title):
+        raise LookupError(
+            f"adding the voice {reference.title!r} put a {chip['kind']} chip whose card names {named or 'nothing'!r} "
+            "on the bar; refusing to generate with the wrong voice"
+        )
+    if chip["refused"]:
+        raise LookupError(
+            f"Flow refuses the voice {reference.title!r} on this model: {_card_refusal(card) or 'no reason shown'}; "
+            "refusing to generate"
+        )
+    return {"kind": "voice", "id": reference.id, "text": reference.title}
 
 
 async def apply_settings(page: Any, model: str, aspect: str, references: list[Reference]) -> None:
@@ -684,6 +818,64 @@ async def pin_resolution(page: Any, resolution: str) -> None:
         await page.wait_for_timeout(1_000)
 
 
+def _submit_frames(node: Any) -> Any:
+    if isinstance(node, list):
+        if (
+            len(node) >= 2
+            and isinstance(node[0], str)
+            and node[0] in mc.SUBMIT_RPCS
+            and isinstance(node[1], str)
+        ):
+            yield node
+            return
+        for each in node:
+            yield from _submit_frames(each)
+
+
+def request_voices(post_data: str) -> list[str] | None:
+    """The voices a submit carries, read off their own field and never off a word of the prompt.
+
+    Measured 2026-10-01 on the submit bodies of plan AK (out/flow_research/body_ak-*.txt): an Ingredients item (rpc
+    MZZa6b) carries the voices at [7] as [["<voice of your own: workflow id>"], ["achird"]] and leaves [7] out when no
+    voice rides; a Frames item carries none. None when the body is no submit this can read."""
+    try:
+        outer = json.loads(parse_qs(post_data).get("f.req", [""])[0])
+    except ValueError:
+        return None
+    for frame in _submit_frames(outer):
+        try:
+            inner = json.loads(frame[1])
+        except ValueError:
+            return None
+        if not (isinstance(inner, list) and inner and isinstance(inner[0], list)):
+            return None
+        voices: list[str] = []
+        for item in inner[0]:
+            arm = item[7] if isinstance(item, list) and len(item) > 7 and isinstance(item[7], list) else []
+            voices += [
+                each[0] for each in arm if isinstance(each, list) and each and isinstance(each[0], str)
+            ]
+        return voices
+    return None
+
+
+def recipe_check(recipe: dict[str, Any], references: list[Reference]) -> dict[str, Any]:
+    """Whether a clip kept every reference it was given, by the recipe the listing holds for it (clip_recipe): each
+    voice by its id, each image by a workflow id of its own, each character by its entity id, and nothing more."""
+    kept_voices = [str(each.get("voice")) for each in recipe.get("voices") or []]
+    kept_images = [str(each.get("workflow_id")) for each in recipe.get("reference_images") or []]
+    kept_characters = [str(each.get("entity_id")) for each in recipe.get("characters") or []]
+    missing = [
+        reference.id
+        for reference in references
+        if not set(reference.mention_ids)
+        & set({"voice": kept_voices, "media": kept_images, "entity": kept_characters}[reference.kind])
+    ]
+    asked = {mention for reference in references for mention in reference.mention_ids}
+    unexpected = [kept for kept in [*kept_voices, *kept_images, *kept_characters] if kept not in asked]
+    return {"ok": not missing and not unexpected, "missing": missing, "unexpected": unexpected}
+
+
 class SubmitBodyCheck:
     """What the submit request carried, read as it leaves: a references model key and every reference's id."""
 
@@ -748,11 +940,13 @@ async def generate(
     max_credits: int | None = None,
     body_check_for: Any = None,
     table_credits: int = 0,
+    voices: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """One video from characters and project images, or with dry_run the quote and the chips, never a click.
+    """One video from characters, project images and voices, or with dry_run the quote and the chips, never a click.
 
     With max_credits (gen_video, plan AB) the caller has checked the settings against the surveyed options, and the
-    live price line is held against that cap instead of this module's own table."""
+    live price line is held against that cap instead of this module's own table. A paid clip's recipe is read back
+    off the listing, and a clip that dropped or gained a reference is an error though it was paid (plan AL, I4)."""
     if max_credits is not None:
         expected = table_credits
     elif model not in PRICES:
@@ -778,10 +972,14 @@ async def generate(
         list(characters),
         list(media_ids),
         model,
+        voices=list(voices),
+        presets=parsers.voices_from_listing(listing),
+        customs=parsers.custom_voices(listing),
     )
 
     entities = [reference for reference in references if reference.kind == "entity"]
     images = [reference for reference in references if reference.kind == "media"]
+    spoken = [reference for reference in references if reference.kind == "voice"]
     mentioned: list[dict[str, str]] = []
     added: list[dict[str, str]] = []
 
@@ -806,7 +1004,9 @@ async def generate(
             raise LookupError(
                 f"the prompt holds {len(on_page)} mention chips for {len(entities)} characters; refusing to generate"
             )
+        # Then the images and the voices, in the order T1b measured with a quote and no refusal (2026-10-01).
         added[:] = [await attach_image(page, reference) for reference in images]
+        added.extend([await attach_voice(page, reference) for reference in spoken])
         await check_bar(page, references)
         # The prompt goes in after the chips without a click, which could land on a chip (review F1, 2026-09-16).
         if not await page.evaluate(_CARET_END_JS, BOX):
@@ -842,6 +1042,7 @@ async def generate(
             )
         bar = await check_bar(page, references, at_click=True)
         titles = {mention: reference.title for reference in images for mention in reference.mention_ids}
+        by_name = {_norm(reference.title): reference for reference in spoken}
         return {
             "chips": [
                 *(
@@ -852,6 +1053,15 @@ async def generate(
                     {"kind": "media", "id": chip["id"], "text": titles.get(chip["id"], "")}
                     for chip in bar
                     if chip["kind"] == "image"
+                ),
+                *(
+                    {
+                        "kind": "voice",
+                        "id": by_name[_norm(chip["name"])].id,
+                        "text": by_name[_norm(chip["name"])].title,
+                    }
+                    for chip in bar
+                    if chip["kind"] == "voice"
                 ),
             ],
             "prompt_text": text,
@@ -898,8 +1108,28 @@ async def generate(
         spent = result.get("spent", (result.get("credits_before") or 0) - (result.get("credits_after") or 0))
         raise RuntimeError(
             f"{spent} credits were spent, but Flow's submit request did not carry the references: model keys "
-            f"{check.get('model_keys')}, missing {check.get('missing')}, rpc {check.get('rpcid')}. The clip "
+            f"{check.get('model_keys')}, missing {check.get('missing')}"
+            f"{', voices sent ' + str(check['voices']) if 'voices' in check else ''}, rpc {check.get('rpcid')}. The clip "
             f"({result.get('path') or result.get('media_id')}) may not show them. Do not run this job again under a new "
             f"job_id; its ledger row holds the body check. job {job_id}"
         )
+    if not dry_run and result.get("media_id"):
+        try:
+            kept = await reader.recipe(session, project_id, result["media_id"])
+        except Exception as exc:  # noqa: BLE001
+            # The clip is paid for and the request carried every reference; a listing that cannot be read now is no
+            # reason to call it failed.
+            result["recipe_check"] = {"ok": None, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+            return result
+        result["recipe_check"] = recipe_check(kept, references)
+        if not result["recipe_check"]["ok"]:
+            spent = result.get(
+                "spent", (result.get("credits_before") or 0) - (result.get("credits_after") or 0)
+            )
+            raise RuntimeError(
+                f"{spent} credits were spent and the request carried every reference, but the clip "
+                f"{result['media_id']} kept another set: missing {result['recipe_check']['missing']}, not asked for "
+                f"{result['recipe_check']['unexpected']} (clip_recipe reads it). Do not run this job again under a new "
+                f"job_id. job {job_id}"
+            )
     return result

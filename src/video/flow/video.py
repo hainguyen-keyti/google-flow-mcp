@@ -22,6 +22,7 @@ from gflow_cli.api.transports import migrated_composer as mc
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video.flow import agent, composer, ingredients, parsers
+from video.flow.ingredients import ALONE_WORDS, CAPS_MEASURED
 from video.session import FlowSession
 
 OPTIONS: dict[str, Any] = json.loads(
@@ -90,17 +91,24 @@ def mode_for(
     end_frame: str | None = None,
     characters: list[str] | None = None,
     media_ids: list[str] | None = None,
+    voices: list[str] | None = None,
 ) -> str:
-    """Frames for text or a first and last frame, Ingredients for characters and images; never both at once."""
+    """Frames for text or a first and last frame, Ingredients for characters, images and voices; never both at once.
+    A voice rides only beside an image or a character: Flow refuses it alone (measured 2026-10-01, out/al/t5.json)."""
     frames = bool(start_frame or end_frame)
-    ingredients = bool(characters or media_ids)
+    ingredients = bool(characters or media_ids or voices)
     if frames and ingredients:
         raise ValueError(
             "pass either frames or ingredients, not both: frames are start_frame and end_frame, ingredients are "
-            "characters and media_ids, and the composer runs one mode per video"
+            "characters, media_ids and voices, and the composer runs one mode per video"
         )
     if end_frame and not start_frame:
         raise ValueError("end_frame needs a start_frame: the composer fills Start first")
+    if voices and not (characters or media_ids):
+        raise ValueError(
+            f"a voice needs an image or a character beside it: Flow greys a voice alone out with {ALONE_WORDS!r} "
+            f"(read off the composer on {CAPS_MEASURED})"
+        )
     return "Ingredients" if ingredients else "Frames"
 
 
@@ -276,12 +284,14 @@ def _mode_matches(kind: str, keys: list[str]) -> bool:
 
 class VideoBodyCheck:
     """The submit request as it leaves: its model key must name the mode asked (t2v, i2v, r2v) and, when the key
-    carries a length, that length; every reference's id must ride in the body."""
+    carries a length, that length; every image's and character's id must ride in the body, and the voice field must
+    hold exactly the voices asked (plan AL, I4), read off the field itself since a prompt may name a voice."""
 
     def __init__(
         self, kind: str, references: list[Any], duration: int | None, resolution: str | None = None
     ) -> None:
         self.kind, self.references, self.duration, self.resolution = kind, references, duration, resolution
+        self.voices = [r.id for r in references if getattr(r, "kind", "") == "voice"]
         self.seen: dict[str, Any] | None = None
 
     def on_request(self, request: Any) -> None:
@@ -301,15 +311,23 @@ class VideoBodyCheck:
             return
         keys = sorted(set(mc.MODEL_KEY.findall(body)))
         lengths = sorted({int(m) for key in keys for m in KEY_LENGTH.findall(key)})
-        missing = [r.id for r in self.references if not any(m in body for m in r.mention_ids)]
+        sent = ingredients.request_voices(getattr(request, "post_data", "") or "")
+        missing = [
+            r.id
+            for r in self.references
+            if getattr(r, "kind", "") != "voice" and not any(m in body for m in r.mention_ids)
+        ] + [voice for voice in self.voices if voice not in (sent or [])]
+        voices_ok = sorted(sent) == sorted(self.voices) if sent is not None else not self.voices
         self.seen = {
             "rpcid": submit[0],
             "model_keys": keys,
             "lengths": lengths,
             "missing": missing,
+            **({"voices": sent} if sent is not None else {}),
             "ok": bool(body)
             and _mode_matches(self.kind, keys)
             and not missing
+            and voices_ok
             and (self.duration is None or not lengths or lengths == [self.duration])
             and _resolution_matches(self.resolution, keys),
         }
@@ -339,13 +357,18 @@ async def generate(
     out_dir: Path = Path("out"),
     dry_run: bool = False,
     wait: float = 480.0,
+    voices: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """One gen_video run: every check that needs no browser first, then one of the two composer modes."""
     offers_length = bool(_model(model)["durations"])
     resolution, duration = defaults(model, resolution, duration)
     check_settings(model=model, resolution=resolution, duration=duration, count=count, aspect=aspect)
     mode = mode_for(
-        start_frame=start_frame, end_frame=end_frame, characters=list(characters), media_ids=list(media_ids)
+        start_frame=start_frame,
+        end_frame=end_frame,
+        characters=list(characters),
+        media_ids=list(media_ids),
+        voices=list(voices),
     )
     if not dry_run and max_credits is None:
         raise ValueError("max_credits is required for a real run: the most credits this call may spend")
@@ -361,6 +384,7 @@ async def generate(
             prompt=prompt,
             characters=list(characters),
             media_ids=list(media_ids),
+            voices=list(voices),
             model=model,
             aspect=aspect,
             job_id=job_id,

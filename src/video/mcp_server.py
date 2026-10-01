@@ -1603,6 +1603,13 @@ def _video_options() -> str:
         "One video from Flow's composer with any option it offers; it spends credits and is ledgered. Text alone "
         "runs Frames; start_frame (and end_frame) are project image media ids for the first and last frame; "
         "characters (entity ids) and media_ids (project images) run Ingredients. Frames and ingredients do not mix. "
+        "voices are voice names as flow_voices lists them (a preset such as Achird, or one character_make_voice "
+        "saved): each rides as an audio ingredient beside at least one image or character, and a character that "
+        "has a voice takes one of the model's voice places. "
+        + ingredients_mod.voice_caps_text()
+        + " Every chip is read back before the click, the request's own voice field is checked as it leaves, and the "
+        "clip's recipe is read back after a paid run: a voice or image Flow dropped is an error even though it was "
+        "paid. "
         + _video_options()
         + " resolution and duration apply to omni-flash only (defaults 720p and 8 s). The money guard is Flow's own "
         "price line, read right before the single click: a real run needs max_credits and is refused when the live "
@@ -1629,19 +1636,29 @@ async def gen_video(
     media_ids: list[str] | None = None,
     dry_run: bool = False,
     out_dir: str | None = None,
+    voices: list[str] | None = None,
 ) -> str:
     _require(project, "project")
     _require(prompt, "prompt")
     _one_line(prompt, "prompt")
-    wanted = [*(characters or []), *(media_ids or []), *(x for x in (start_frame, end_frame) if x)]
+    wanted = [
+        *(characters or []),
+        *(media_ids or []),
+        *(voices or []),
+        *(x for x in (start_frame, end_frame) if x),
+    ]
     if any(not value or not value.strip() for value in wanted):
-        raise ValueError("frame, character and media ids must not be blank")
+        raise ValueError("frame, character, media ids and voice names must not be blank")
     filled_resolution, filled_duration = video_mod.defaults(model, resolution, duration)
     video_mod.check_settings(
         model=model, resolution=filled_resolution, duration=filled_duration, count=count, aspect=aspect
     )
     video_mod.mode_for(
-        start_frame=start_frame, end_frame=end_frame, characters=characters or [], media_ids=media_ids or []
+        start_frame=start_frame,
+        end_frame=end_frame,
+        characters=characters or [],
+        media_ids=media_ids or [],
+        voices=voices or [],
     )
     if not dry_run:
         _require(job_id or "", "job_id")
@@ -1664,6 +1681,7 @@ async def gen_video(
             end_frame=end_frame,
             characters=characters or [],
             media_ids=media_ids or [],
+            voices=voices or [],
             dry_run=dry_run,
             out_dir=out_dir,
         )

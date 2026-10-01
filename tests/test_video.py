@@ -1,4 +1,5 @@
 import asyncio
+import re
 from pathlib import Path
 
 """gen_video's driver (plan AB): every video option Flow's composer offers, read from the surveyed options file."""
@@ -391,6 +392,8 @@ def test_ingredients_go_through_the_proven_ingredients_driver_with_the_new_setti
         ({"job_id": None}, "job_id is required"),
         ({"model": "veo-lite", "duration": 10}, "no length choice"),
         ({"start_frame": "m-teapot", "media_ids": ["m-cup"]}, "either frames or ingredients"),
+        ({"start_frame": "m-teapot", "voices": ["Achird"]}, "either frames or ingredients"),
+        ({"voices": ["Achird"]}, "An audio ingredient requires other ingredients to function."),
     ],
 )
 def test_a_real_run_is_refused_before_the_listing_is_read(monkeypatch, change, message):
@@ -399,6 +402,53 @@ def test_a_real_run_is_refused_before_the_listing_is_read(monkeypatch, change, m
     with pytest.raises(ValueError, match=message):
         _run(**change)
     assert calls["log"] == []
+
+
+def test_voices_ride_only_in_ingredients_and_only_beside_an_image_or_a_character():
+    assert video.mode_for(media_ids=["m"], voices=["Achird"]) == "Ingredients"
+    assert video.mode_for(characters=["e"], voices=["Achird"]) == "Ingredients"
+    # Flow's own words for a voice with nothing beside it (measured 2026-10-01, out/al/t5.json).
+    with pytest.raises(
+        ValueError, match=re.escape("An audio ingredient requires other ingredients to function.")
+    ):
+        video.mode_for(voices=["Achird"])
+    with pytest.raises(ValueError, match="either frames or ingredients"):
+        video.mode_for(start_frame="m", voices=["Achird"])
+
+
+def test_the_driver_hands_the_voices_to_the_ingredients_driver(monkeypatch):
+    calls = _driver_world(monkeypatch)
+
+    _run(model="veo-lite", media_ids=["m-teapot"], voices=["Achird", "LilyVoice"])
+
+    assert calls["ingredients"]["voices"] == ["Achird", "LilyVoice"]
+
+
+def _voice_submit(body):
+    url = "https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=MZZa6b"
+    return type("Request", (), {"url": url, "post_data": body})()
+
+
+def test_the_body_check_holds_the_voices_to_the_ones_asked_read_off_their_own_field():
+    # Plan AL I4: the request names a preset by its lowercase id and a custom voice by its workflow id, at item[7]
+    # (measured on the 2026-10-01 bodies). A prompt that names a voice carries none, so the field itself is read.
+    from test_ingredients import ACHIRD, IMAGE, LILY, LILY_VOICE, _submit_body
+
+    def judged(body, references):
+        check = video.VideoBodyCheck("r2v", references, None)
+        check.on_request(_voice_submit(body))
+        return check.report()
+
+    both = [IMAGE, ACHIRD, LILY]
+    assert judged(_submit_body([LILY_VOICE, "achird"]), both)["ok"] is True
+    assert judged(_submit_body([LILY_VOICE, "achird"]), both)["voices"] == [LILY_VOICE, "achird"]
+    one = judged(_submit_body(["achird"]), both)
+    assert one["ok"] is False and one["missing"] == [LILY_VOICE]
+    assert judged(_submit_body([LILY_VOICE, "achird", "leda"]), both)["ok"] is False
+    named_only = judged(_submit_body([], prompt=f"achird and LilyVoice {LILY_VOICE}"), both)
+    assert named_only["ok"] is False and named_only["missing"] == ["achird", LILY_VOICE]
+    assert judged(_submit_body(["leda"]), [IMAGE])["ok"] is False
+    assert judged(_submit_body(), [IMAGE])["ok"] is True
 
 
 def test_a_dry_run_needs_no_cap_and_no_job_id(monkeypatch):

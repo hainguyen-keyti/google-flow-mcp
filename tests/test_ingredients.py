@@ -32,6 +32,20 @@ FLOW_SAYS = "Maximum image ingredients reached (3 allowed)"
 
 THU = ingredients.Reference("entity", ENTITY, "Thu", frozenset({ENTITY}))
 IMAGE = ingredients.Reference("media", MEDIA, "peobj1.png", frozenset({WORKFLOW}), TAIL)
+# A request names a preset voice by its lowercase id and a custom voice by its workflow id (measured 2026-10-01).
+LILY_VOICE = "17b8dafb-7c04-441e-9239-36feaf27eb65"
+ACHIRD = ingredients.Reference("voice", "achird", "Achird", frozenset({"achird"}))
+LILY = ingredients.Reference("voice", LILY_VOICE, "LilyVoice", frozenset({LILY_VOICE}), custom=True)
+PRESETS = [{"id": "achird", "name": "Achird"}, {"id": "leda", "name": "Leda"}]
+CUSTOMS = [
+    {
+        "workflow_id": LILY_VOICE,
+        "media_id": "9712ce82-97a4-4d2c-9e22-9ad1188c6654",
+        "name": "LilyVoice",
+        "base": "Leda",
+    }
+]
+AUDIO_CAP_SAYS = "Maximum audio ingredients reached (1 allowed)"
 
 
 def _character(entity=ENTITY, name="Thu"):
@@ -178,6 +192,80 @@ def test_resolve_never_puts_flows_image_refusal_in_the_mouth_of_a_character_over
     with pytest.raises(ValueError, match="at most 3") as refused:
         ingredients.resolve(characters, [], [], [c["entity_id"] for c in characters], [], "veo-lite")
     assert "image ingredients" not in str(refused.value)
+
+
+def _voices(*names, model="omni-flash", presets=PRESETS, customs=CUSTOMS):
+    return ingredients.resolve(
+        [_character()],
+        [_image()],
+        [_record()],
+        [],
+        [MEDIA],
+        model,
+        voices=list(names),
+        presets=presets,
+        customs=customs,
+    )
+
+
+def test_resolve_names_each_voice_by_what_the_request_carries_for_it():
+    references = _voices("Achird", "LilyVoice")
+    assert [(r.kind, r.id, r.title, r.custom) for r in references] == [
+        ("media", MEDIA, "peobj1.png", False),
+        ("voice", "achird", "Achird", False),
+        ("voice", LILY_VOICE, "LilyVoice", True),
+    ]
+    assert references[1].mention_ids == {"achird"} and references[2].mention_ids == {LILY_VOICE}
+
+
+def test_resolve_finds_a_voice_whatever_its_letter_case():
+    # The dialog's search found Achird for 'achird' (measured 2026-10-01).
+    assert _voices(" achird ")[1].title == "Achird"
+
+
+def test_resolve_refuses_a_voice_the_project_does_not_offer_and_names_the_ones_it_does():
+    with pytest.raises(LookupError, match="no voice named 'Zeus'") as refused:
+        _voices("Zeus")
+    assert "Leda" in str(refused.value) and "LilyVoice" in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    "customs",
+    [
+        [*CUSTOMS, {**CUSTOMS[0], "workflow_id": "w-twin", "media_id": "m-twin"}],
+        [{**CUSTOMS[0], "name": "Achird"}],
+    ],
+    ids=["two voices of your own", "a voice of your own named like a preset"],
+)
+def test_resolve_refuses_a_voice_name_two_voices_carry(customs):
+    name = customs[-1]["name"]
+    with pytest.raises(LookupError, match="2 voices are named"):
+        _voices(name, customs=customs)
+
+
+def test_resolve_refuses_a_voice_named_twice():
+    with pytest.raises(ValueError, match="named once"):
+        _voices("Achird", "achird")
+
+
+@pytest.mark.parametrize(
+    ("model", "count", "flow_says"),
+    [
+        ("veo-lite", 2, "Maximum audio ingredients reached (1 allowed)"),
+        ("veo-fast", 2, "Maximum audio ingredients reached (1 allowed)"),
+        ("omni-flash", 6, "Maximum audio ingredients reached (5 allowed)"),
+    ],
+)
+def test_resolve_refuses_more_voices_than_the_model_takes_in_the_words_flow_shows(model, count, flow_says):
+    # Read off the composer's refusal cards on 2026-10-01 (out/flow_research/log_caps2.txt).
+    presets = [{"id": f"v{index}", "name": f"V{index}"} for index in range(count)]
+    with pytest.raises(ValueError, match=re.escape(flow_says)) as refused:
+        _voices(*[each["name"] for each in presets], model=model, presets=presets, customs=[])
+    assert "2026-10-01" in str(refused.value)
+    assert (
+        len(_voices(*[each["name"] for each in presets[:-1]], model=model, presets=presets, customs=[]))
+        == count
+    )
 
 
 def test_resolve_refuses_no_reference_at_all_and_a_repeated_id():
@@ -492,6 +580,22 @@ def _bar_raw(workflow=WORKFLOW, *, refused=False):
     }
 
 
+def _voice_row(title="Achird", *, custom=False, **more):
+    return {"title": title, "category": "Voices", "custom": custom, "src": "", "workflow": title, **more}
+
+
+def _voice_raw(name="Achird", *, refused=None):
+    """A voice chip as the page shows it (out/al/t5.json): no name in it, only its icon; the hover card names the voice
+    after `voice_selection`, behind Flow's refusal when there is one; a refused voice chip's class is `disabled`."""
+    return {
+        "cls": "chip-container disabled" if refused else "chip-container",
+        "text": "error cancel cancel voice_selection" if refused else "cancel voice_selection",
+        "error": bool(refused),
+        "src": "",
+        "card": f"{refused + ' ' if refused else ''}play_arrow 0:06 voice_selection {name}",
+    }
+
+
 VOICE_RAW = {"cls": "chip-container", "text": "cancel voice_selection", "error": False, "src": ""}
 CHARACTER_RAW = {
     "cls": "chip-container",
@@ -605,11 +709,12 @@ class _DialogPage:
         self.mouse = _Mouse(self)
 
     def shown(self):
-        if not self.open or self.category != "Images" or self.clock < self.searched_at + self.rows_after_ms:
+        if not self.open or self.category is None or self.clock < self.searched_at + self.rows_after_ms:
             return []
+        rows = [row for row in self.rows if row.get("category", "Images") == self.category]
         if self.clock < self.searched_at + self.unfiltered_ms:
-            return self.rows
-        return [row for row in self.rows if self.query.casefold() in row["title"].casefold()]
+            return rows
+        return [row for row in rows if self.query.casefold() in row["title"].casefold()]
 
     def count(self, selector):
         if selector == ingredients.BACKDROP:
@@ -649,7 +754,12 @@ class _DialogPage:
 
     def commit(self, index):
         row = self.shown()[index]
-        chip = row["chip"] if "chip" in row else _bar_raw(row["workflow"], refused=self.refused is not None)
+        if "chip" in row:
+            chip = row["chip"]
+        elif row.get("category") == "Voices":
+            chip = _voice_raw(row["title"], refused=self.refused)
+        else:
+            chip = _bar_raw(row["workflow"], refused=self.refused is not None)
         if chip is not None:
             self.bar.append({**chip, "landed_at": self.clock})
         if not self.stays_open:
@@ -680,6 +790,7 @@ class _DialogPage:
                     "src": row["src"],
                     "visible": row.get("visible", True),
                     "active": index == self.active,
+                    "custom": row.get("custom", False),
                 }
                 for index, row in enumerate(self.shown())
             ]
@@ -687,7 +798,7 @@ class _DialogPage:
             assert arg == ingredients.BAR
             return [
                 {
-                    **{key: value for key, value in chip.items() if key != "landed_at"},
+                    **{key: value for key, value in chip.items() if key not in ("landed_at", "card")},
                     "src": ""
                     if "landed_at" in chip and self.clock < chip["landed_at"] + self.thumb_after_ms
                     else chip["src"],
@@ -695,8 +806,11 @@ class _DialogPage:
                 for chip in self.bar
             ]
         if script == ingredients._CARD_JS:
-            hovered = self.bar[self.hovered] if self.hovered is not None else None
-            return [self.refused] if hovered is not None and hovered["error"] and self.refused else []
+            if self.hovered is None:
+                return []
+            hovered = self.bar[self.hovered]
+            card = hovered["card"] if "card" in hovered else (self.refused if hovered["error"] else None)
+            return [card] if card else []
         raise AssertionError(f"unexpected script {script[:40]!r}")
 
 
@@ -847,6 +961,92 @@ def test_attach_image_refuses_a_reference_that_carries_no_url_to_match():
     assert page.clicked == []
 
 
+def test_attach_voice_searches_the_name_under_voices_and_reads_the_name_back_off_the_chips_card():
+    page = _DialogPage([_voice_row("Achird")])
+    chip = asyncio.run(ingredients.attach_voice(page, ACHIRD))
+    assert chip == {"kind": "voice", "id": "achird", "text": "Achird"}
+    assert page.clicked == ["+", "Voices", ("Achird", "Achird")]
+    assert page.open is False and page.hovered is None
+    assert "Enter" not in page.keyboard.pressed
+
+
+def test_attach_voice_adds_the_voice_of_your_own_and_never_the_preset_it_shadows():
+    page = _DialogPage([_voice_row("LilyVoice", custom=True)])
+    assert asyncio.run(ingredients.attach_voice(page, LILY)) == {
+        "kind": "voice",
+        "id": LILY_VOICE,
+        "text": "LilyVoice",
+    }
+    # A preset row named like a custom voice of your own is not it, and the other way round.
+    twins = _DialogPage([_voice_row("Achird", custom=True), _voice_row("Achird")])
+    assert asyncio.run(ingredients.attach_voice(twins, ACHIRD))["id"] == "achird"
+    assert twins.clicked[-2:] == [("Achird", "Achird"), "Add to prompt"]
+
+
+def test_attach_voice_refuses_a_voice_the_dialog_does_not_offer():
+    page = _DialogPage([_voice_row("Leda")])
+    with pytest.raises(LookupError, match="offers no voice 'Achird'"):
+        asyncio.run(ingredients.attach_voice(page, ACHIRD))
+    assert page.bar == [] and page.open is False
+
+
+def test_attach_voice_says_in_flows_own_words_why_a_voice_is_refused():
+    # Measured 2026-10-01: Veo 3.1 Lite takes one audio ingredient, and a character with a voice already holds it.
+    page = _DialogPage([_voice_row("Achird")], refused=AUDIO_CAP_SAYS)
+    with pytest.raises(LookupError, match=re.escape(AUDIO_CAP_SAYS)) as refused:
+        asyncio.run(ingredients.attach_voice(page, ACHIRD))
+    assert "play_arrow" not in str(refused.value)
+    assert page.hovered is None
+
+
+def test_attach_voice_refuses_a_chip_whose_card_names_another_voice():
+    page = _DialogPage([_voice_row("Achird", chip=_voice_raw("Leda"))])
+    with pytest.raises(LookupError, match="wrong voice"):
+        asyncio.run(ingredients.attach_voice(page, ACHIRD))
+
+
+def test_attach_voice_refuses_a_reference_that_is_no_voice():
+    page = _DialogPage([_voice_row("Achird")])
+    with pytest.raises(ValueError, match="voice"):
+        asyncio.run(ingredients.attach_voice(page, IMAGE))
+    assert page.clicked == []
+
+
+def test_attach_image_never_takes_a_voice_row_for_its_image():
+    page = _DialogPage([_voice_row("peobj1.png"), _row()])
+    assert asyncio.run(ingredients.attach_image(page, IMAGE))["id"] == WORKFLOW
+    assert page.clicked[:2] == ["+", "Images"]
+
+
+@pytest.mark.parametrize(
+    ("card", "name", "said"),
+    [
+        ("play_arrow 0:06 voice_selection Achird", "Achird", ""),
+        (
+            "Maximum audio ingredients reached (1 allowed) play_arrow 0:06 voice_selection Achird",
+            "Achird",
+            "Maximum audio ingredients reached (1 allowed)",
+        ),
+        (
+            "An audio ingredient requires other ingredients to function. play_arrow 0:04 voice_selection LilyVoice",
+            "LilyVoice",
+            "An audio ingredient requires other ingredients to function.",
+        ),
+        (
+            "Maximum image ingredients reached (3 allowed)",
+            "",
+            "Maximum image ingredients reached (3 allowed)",
+        ),
+        ("", "", ""),
+    ],
+    ids=["a voice", "a refused voice", "a voice alone", "a refused image", "no card"],
+)
+def test_a_hover_card_gives_the_voices_name_and_flows_refusal_apart(card, name, said):
+    # The cards as read on 2026-10-01 (out/al/t5.json, t1b.json, t4.json).
+    assert ingredients._card_voice(card) == name
+    assert ingredients._card_refusal(card) == said
+
+
 def test_close_dialog_gives_up_on_a_dialog_that_will_not_close():
     page = _DialogPage([_row()], never_closes=True)
     page.open = True
@@ -912,11 +1112,65 @@ def test_a_bar_chip_never_carries_the_signed_url_it_was_read_from():
     assert "Signature" not in json.dumps(ingredients._bar_chip(_bar_raw()))
 
 
-def _on_bar(kind, mention="", refused=False):
-    return {"kind": kind, "id": mention, "refused": refused, "seen": "cancel"}
+def _on_bar(kind, mention="", refused=False, name=""):
+    """A chip as bar_chips reads it, with the hover card the page would show for it."""
+    chip = {"kind": kind, "id": mention, "refused": refused, "seen": "cancel"}
+    if kind == "voice":
+        chip["name"] = name
+        chip["card"] = f"{AUDIO_CAP_SAYS + ' ' if refused else ''}play_arrow 0:06 voice_selection {name}"
+    elif refused:
+        chip["card"] = FLOW_SAYS
+    return chip
+
+
+def _show_bar(monkeypatch, chips):
+    """The ingredient bar a generate test reads from here on, its hover cards included."""
+    monkeypatch.setattr(ingredients, "bar_chips", lambda page: _async([dict(chip) for chip in chips]))
+    monkeypatch.setattr(ingredients, "_card", lambda page, index: _async(chips[index].get("card", "")))
 
 
 GOOD_BAR = [_on_bar("character"), _on_bar("image", WORKFLOW)]
+VOICE_BAR = [*GOOD_BAR, _on_bar("voice", name="Achird"), _on_bar("voice", name="LilyVoice")]
+
+
+def test_the_bar_is_right_with_each_voice_asked_for_named_once():
+    assert ingredients.bar_problems(VOICE_BAR, [THU, IMAGE, ACHIRD, LILY]) == []
+
+
+@pytest.mark.parametrize(
+    ("bar", "says"),
+    [
+        (VOICE_BAR[:3], "LilyVoice"),
+        ([*VOICE_BAR[:3], _on_bar("voice", name="Leda")], "Leda"),
+        ([*VOICE_BAR, _on_bar("voice", name="achird")], "2 chips"),
+        ([*VOICE_BAR[:3], _on_bar("voice", name="LilyVoice", refused=True)], "refuses"),
+        ([*VOICE_BAR[:3], _on_bar("voice")], "nothing"),
+    ],
+    ids=[
+        "a voice never reached the bar",
+        "another voice in its place",
+        "a voice twice",
+        "Flow refuses a voice",
+        "a voice chip whose card named nothing",
+    ],
+)
+def test_the_bar_is_wrong_when_its_voices_differ_from_what_was_asked(bar, says):
+    problems = ingredients.bar_problems(bar, [THU, IMAGE, ACHIRD, LILY])
+    assert problems and says in " ".join(problems), problems
+
+
+def test_check_bar_reads_each_voices_name_off_its_card():
+    page = _DialogPage([], bar=[_bar_raw(), _voice_raw("Achird"), _voice_raw("LilyVoice")])
+    chips = asyncio.run(ingredients.check_bar(page, [IMAGE, ACHIRD, LILY]))
+    assert [chip["name"] for chip in chips if chip["kind"] == "voice"] == ["Achird", "LilyVoice"]
+    assert page.hovered is None
+
+
+def test_check_bar_refuses_a_voice_flow_refuses_in_its_own_words():
+    page = _DialogPage([], bar=[_bar_raw(), _voice_raw("Achird", refused=AUDIO_CAP_SAYS)])
+    with pytest.raises(LookupError, match=re.escape(AUDIO_CAP_SAYS)) as refused:
+        asyncio.run(ingredients.check_bar(page, [IMAGE, ACHIRD]))
+    assert "play_arrow" not in str(refused.value)
 
 
 def test_the_bar_is_right_when_every_reference_has_its_one_chip_and_nothing_else_is_on_it():
@@ -1025,6 +1279,44 @@ def test_body_check_judges_the_first_submit_and_ignores_a_later_one():
     check.on_request(_request("MZZa6b", ENTITY, WORKFLOW))
     check.on_request(_request("MZZa6b", ENTITY))
     assert check.report()["ok"] is True and check.report()["missing"] == []
+
+
+def _submit_body(voices=None, images=(WORKFLOW,), key="veo_3_1_r2v_lite", prompt=PROMPT, rpcid="MZZa6b"):
+    """An Ingredients submit in its measured shape (out/flow_research/body_ak-*.txt, 2026-10-01): the item carries the
+    prompt, the images as [None, workflow id], the model key, and at [7] the voices when any ride."""
+    item = [
+        [None, None, [[[prompt]]]],
+        [[None, w] for w in images],
+        key,
+        1,
+        None,
+        [None, None, None, None, "s" * 36],
+    ]
+    if voices is not None:
+        item += [None, [[voice] for voice in voices]]
+    inner = json.dumps([[item], [None, 22, None, None, None, "p-1"], ["x" * 36, 2]])
+    return "f.req=" + quote_plus(json.dumps([[[rpcid, inner, None, "generic"]]])) + "&at=AJpMio%3A1790000000"
+
+
+def test_request_voices_reads_the_voices_a_submit_carries_off_their_own_field():
+    assert ingredients.request_voices(_submit_body([LILY_VOICE, "achird"])) == [LILY_VOICE, "achird"]
+    assert ingredients.request_voices(_submit_body()) == []
+    # A prompt that names a voice carries no voice.
+    assert ingredients.request_voices(_submit_body(prompt="achird and LilyVoice speak")) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "f.req=" + quote_plus("not json"),
+        "",
+        _submit_body(["achird"], rpcid="WuwhI"),
+        "f.req=" + quote_plus("[]"),
+    ],
+    ids=["not json", "empty", "not a submit", "no frame"],
+)
+def test_request_voices_says_it_cannot_tell_rather_than_guess(body):
+    assert ingredients.request_voices(body) is None
 
 
 def test_body_check_ignores_requests_that_are_not_a_submit():
@@ -2707,29 +2999,45 @@ def _generate_world(monkeypatch, log, *, was=False, chips_on_page=None):
     monkeypatch.setattr(ingredients.parsers, "media", lambda payload: [_image()])
     monkeypatch.setattr(ingredients.parsers, "records", lambda payload: [_record()])
 
+    monkeypatch.setattr(ingredients.parsers, "voices_from_listing", lambda payload: PRESETS)
+    monkeypatch.setattr(ingredients.parsers, "custom_voices", lambda payload: CUSTOMS)
+
     resolved = []
+    shown = []
     really_resolve = ingredients.resolve
 
-    def resolve(*args):
-        resolved[:] = really_resolve(*args)
+    def resolve(*args, **kwargs):
+        resolved[:] = really_resolve(*args, **kwargs)
         return list(resolved)
 
     async def attach_image(page, reference):
         log.append(f"attach_image {reference.id}")
         return {"kind": "media", "id": min(reference.mention_ids), "text": reference.title}
 
+    async def attach_voice(page, reference):
+        log.append(f"attach_voice {reference.id}")
+        return {"kind": "voice", "id": reference.id, "text": reference.title}
+
+    def on_bar(reference):
+        if reference.kind == "entity":
+            return _on_bar("character")
+        if reference.kind == "voice":
+            return _on_bar("voice", name=reference.title)
+        return _on_bar("image", min(reference.mention_ids))
+
     async def bar_chips(page):
         """The bar as Flow shows it once everything asked for is attached: a mention puts its character there too."""
-        return [
-            _on_bar("character")
-            if reference.kind == "entity"
-            else _on_bar("image", min(reference.mention_ids))
-            for reference in resolved
-        ]
+        shown[:] = [on_bar(reference) for reference in resolved]
+        return [dict(chip) for chip in shown]
+
+    async def card(page, index):
+        return shown[index].get("card", "")
 
     monkeypatch.setattr(ingredients, "resolve", resolve)
     monkeypatch.setattr(ingredients, "attach_image", attach_image)
+    monkeypatch.setattr(ingredients, "attach_voice", attach_voice)
     monkeypatch.setattr(ingredients, "bar_chips", bar_chips)
+    monkeypatch.setattr(ingredients, "_card", card)
 
     async def set_mode(session, project_id, enabled):
         log.append(f"agent {enabled}")
@@ -2931,7 +3239,7 @@ def test_generate_setup_refuses_a_prompt_holding_more_chips_than_references(monk
         asyncio.run(captured["setup"](session))
 
 
-def _prepared(monkeypatch, log, on_page, *, box_text=f"Thu {PROMPT}", caret_lands=True, bar=None):
+def _prepared(monkeypatch, log, on_page, *, box_text=f"Thu {PROMPT}", caret_lands=True, bar=None, voices=()):
     """Run generate as a dry run against a stubbed _submit, then return its setup, verify and a page to run them on."""
     captured = _generate_world(monkeypatch, log)
 
@@ -2944,19 +3252,21 @@ def _prepared(monkeypatch, log, on_page, *, box_text=f"Thu {PROMPT}", caret_land
     async def chips_on(page):
         return [dict(chip) for chip in on_page]
 
-    async def words(page, index):
-        return FLOW_SAYS
-
     monkeypatch.setattr(ingredients, "apply_settings", nothing)
     monkeypatch.setattr(ingredients, "pin_duration", nothing)
     monkeypatch.setattr(ingredients, "attach", attach)
     monkeypatch.setattr(ingredients, "chips_on", chips_on)
-    monkeypatch.setattr(ingredients, "_refusal_words", words)
     if bar is not None:
-        monkeypatch.setattr(ingredients, "bar_chips", lambda page: _async([dict(chip) for chip in bar]))
+        _show_bar(monkeypatch, bar)
     asyncio.run(
         ingredients.generate(
-            object(), "p-1", prompt=PROMPT, characters=[ENTITY], media_ids=[MEDIA], dry_run=True
+            object(),
+            "p-1",
+            prompt=PROMPT,
+            characters=[ENTITY],
+            media_ids=[MEDIA],
+            dry_run=True,
+            voices=voices,
         )
     )
     page = _GeneratePage(log, box_text=box_text, caret_lands=caret_lands)
@@ -3102,7 +3412,7 @@ def test_generate_verify_refuses_a_bar_that_changed_after_setup(monkeypatch, at_
     # image, measured 2026-10-01), so only this read stands between a refused or missing ingredient and the click.
     setup, verify, session = _prepared(monkeypatch, [], ON_PAGE)
     asyncio.run(setup(session))
-    monkeypatch.setattr(ingredients, "bar_chips", lambda page: _async([dict(chip) for chip in at_click]))
+    _show_bar(monkeypatch, at_click)
     with pytest.raises(LookupError, match="refusing to spend"):
         asyncio.run(verify(session))
 
@@ -3110,9 +3420,45 @@ def test_generate_verify_refuses_a_bar_that_changed_after_setup(monkeypatch, at_
 def test_generate_verify_says_in_flows_own_words_why_a_chip_is_refused_at_the_click(monkeypatch):
     setup, verify, session = _prepared(monkeypatch, [], ON_PAGE)
     asyncio.run(setup(session))
-    refused = [GOOD_BAR[0], _on_bar("image", WORKFLOW, refused=True)]
-    monkeypatch.setattr(ingredients, "bar_chips", lambda page: _async([dict(chip) for chip in refused]))
+    _show_bar(monkeypatch, [GOOD_BAR[0], _on_bar("image", WORKFLOW, refused=True)])
     with pytest.raises(LookupError, match=re.escape(FLOW_SAYS)):
+        asyncio.run(verify(session))
+
+
+def test_generate_setup_attaches_the_voices_last_and_reports_them_with_the_other_chips(monkeypatch):
+    # The order T1b measured with a quote and no refusal (2026-10-01): the character's mention, then the image, then
+    # the voice, both through the "+" dialog.
+    log = []
+    setup, verify, session = _prepared(monkeypatch, log, ON_PAGE, voices=["Achird", "LilyVoice"])
+    extra = asyncio.run(setup(session))
+    assert [line for line in log if line.startswith("attach")] == [
+        f"attach_image {MEDIA}",
+        "attach_voice achird",
+        f"attach_voice {LILY_VOICE}",
+    ]
+    voices = [chip for chip in extra["chips"] if chip["kind"] == "voice"]
+    assert voices == [
+        {"kind": "voice", "id": "achird", "text": "Achird"},
+        {"kind": "voice", "id": LILY_VOICE, "text": "LilyVoice"},
+    ]
+    read = asyncio.run(verify(session))
+    assert [chip for chip in read["chips"] if chip["kind"] == "voice"] == voices
+
+
+@pytest.mark.parametrize(
+    "at_click",
+    [
+        [*GOOD_BAR, _on_bar("voice", name="Achird")],
+        [*GOOD_BAR, _on_bar("voice", name="Achird"), _on_bar("voice", name="Leda")],
+        [*GOOD_BAR, _on_bar("voice", name="Achird"), _on_bar("voice", name="LilyVoice", refused=True)],
+    ],
+    ids=["a voice is gone", "another voice in its place", "Flow refuses a voice"],
+)
+def test_generate_verify_refuses_voices_that_changed_after_setup(monkeypatch, at_click):
+    setup, verify, session = _prepared(monkeypatch, [], ON_PAGE, voices=["Achird", "LilyVoice"])
+    asyncio.run(setup(session))
+    _show_bar(monkeypatch, at_click)
+    with pytest.raises(LookupError, match="refusing to spend"):
         asyncio.run(verify(session))
 
 
@@ -3805,3 +4151,159 @@ def test_two_images_the_dialog_cannot_tell_apart_are_refused_with_the_way_out():
     records = [_record(), _record(media="m-twin", workflow="w-twin")]
     with pytest.raises(LookupError, match="rename the file"):
         ingredients.resolve([_character()], [_image(), twin], records, [], [MEDIA], "omni-flash")
+
+
+# the recipe, read back after a paid run
+
+KEPT = {
+    "voices": [{"voice": "achird"}, {"voice": LILY_VOICE}],
+    "reference_images": [{"workflow_id": WORKFLOW}],
+    "characters": [{"entity_id": ENTITY}],
+}
+
+
+def test_the_recipe_check_passes_a_clip_that_kept_everything_it_was_given():
+    assert ingredients.recipe_check(KEPT, [THU, IMAGE, ACHIRD, LILY]) == {
+        "ok": True,
+        "missing": [],
+        "unexpected": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("recipe", "missing", "unexpected"),
+    [
+        ({**KEPT, "voices": [{"voice": "achird"}]}, [LILY_VOICE], []),
+        ({**KEPT, "voices": [*KEPT["voices"], {"voice": "leda"}]}, [], ["leda"]),
+        ({**KEPT, "reference_images": []}, [MEDIA], []),
+        (
+            {**KEPT, "reference_images": [{"workflow_id": WORKFLOW}, {"workflow_id": "w-other"}]},
+            [],
+            ["w-other"],
+        ),
+        ({**KEPT, "characters": []}, [ENTITY], []),
+        ({**KEPT, "characters": [{"entity_id": ENTITY}, {"entity_id": OTHER}]}, [], [OTHER]),
+    ],
+    ids=[
+        "a voice dropped",
+        "a voice nobody asked for",
+        "the image dropped",
+        "an image nobody asked for",
+        "the character dropped",
+        "a character nobody asked for",
+    ],
+)
+def test_the_recipe_check_names_what_the_clip_dropped_or_gained(recipe, missing, unexpected):
+    assert ingredients.recipe_check(recipe, [THU, IMAGE, ACHIRD, LILY]) == {
+        "ok": False,
+        "missing": missing,
+        "unexpected": unexpected,
+    }
+
+
+def _paid_world(monkeypatch, log, *, recipe=None, recipe_error=None):
+    _generate_world(monkeypatch, log, was=True)
+
+    async def submit(session, project_id, **kwargs):
+        log.append("submit")
+        return {
+            "job_id": kwargs["job_id"],
+            "media_id": "m-new",
+            "path": "out/x.mp4",
+            "spent": 10,
+            "credits_before": 75,
+            "credits_after": 65,
+            "body_check": {"ok": True},
+        }
+
+    async def read_recipe(session, project_id, media_id, **kwargs):
+        log.append(f"recipe {media_id}")
+        if recipe_error is not None:
+            raise recipe_error
+        return recipe
+
+    monkeypatch.setattr(ingredients.composer, "_submit", submit)
+    monkeypatch.setattr(ingredients.reader, "recipe", read_recipe)
+
+
+def _paid_run(tmp_path, **options):
+    return asyncio.run(
+        ingredients.generate(
+            object(),
+            "p-1",
+            prompt=PROMPT,
+            characters=[ENTITY],
+            media_ids=[MEDIA],
+            voices=["Achird"],
+            model="veo-lite",
+            job_id="job-1",
+            out_dir=tmp_path,
+            **options,
+        )
+    )
+
+
+KEPT_ONE_VOICE = {**KEPT, "voices": [{"voice": "achird"}]}
+
+
+def test_a_paid_run_reads_the_clips_recipe_back_and_says_it_kept_every_input(monkeypatch, tmp_path):
+    # Plan AL I4: the request carried the voices, and the listing says the clip kept them.
+    log = []
+    _paid_world(monkeypatch, log, recipe=KEPT_ONE_VOICE)
+    result = _paid_run(tmp_path)
+    assert result["recipe_check"] == {"ok": True, "missing": [], "unexpected": []}
+    assert log[-3:] == ["submit", "agent True", "recipe m-new"]
+
+
+def test_a_paid_clip_whose_recipe_dropped_a_voice_is_an_error_though_it_was_paid(monkeypatch, tmp_path):
+    log = []
+    _paid_world(monkeypatch, log, recipe={**KEPT, "voices": []})
+    with pytest.raises(RuntimeError) as caught:
+        _paid_run(tmp_path)
+    said = str(caught.value)
+    assert "10 credits were spent" in said and "achird" in said and "m-new" in said, said
+    assert "Do not run this job again under a new job_id" in said
+    assert "agent True" in log
+
+
+def test_a_recipe_that_cannot_be_read_never_turns_a_paid_clip_into_an_error(monkeypatch, tmp_path):
+    log = []
+    _paid_world(monkeypatch, log, recipe_error=LookupError("rpc Zzl0ze not observed; saw []"))
+    result = _paid_run(tmp_path)
+    assert result["recipe_check"]["ok"] is None and "Zzl0ze" in result["recipe_check"]["error"]
+    assert result["path"] == "out/x.mp4"
+
+
+def test_a_dry_run_reads_no_recipe(monkeypatch, tmp_path):
+    log = []
+    _paid_world(monkeypatch, log, recipe=KEPT_ONE_VOICE)
+
+    async def quote(session, project_id, **kwargs):
+        return {"dry_run": True, "quoted_credits": 10, "body_check": {"ok": False}}
+
+    monkeypatch.setattr(ingredients.composer, "_submit", quote)
+    result = _paid_run(tmp_path, dry_run=True)
+    assert "recipe_check" not in result and not [line for line in log if line.startswith("recipe")]
+
+
+def test_a_paid_run_whose_request_carried_other_voices_says_which_it_sent(monkeypatch, tmp_path):
+    # A voice nobody asked for leaves `missing` empty, so the error names the voices the request carried.
+    log = []
+    _paid_world(monkeypatch, log, recipe=KEPT_ONE_VOICE)
+
+    async def submit(session, project_id, **kwargs):
+        return {
+            "spent": 10,
+            "path": "out/x.mp4",
+            "body_check": {
+                "rpcid": "MZZa6b",
+                "model_keys": ["veo_3_1_r2v_lite"],
+                "missing": [],
+                "voices": ["achird", "leda"],
+                "ok": False,
+            },
+        }
+
+    monkeypatch.setattr(ingredients.composer, "_submit", submit)
+    with pytest.raises(RuntimeError, match=re.escape("voices sent ['achird', 'leda']")):
+        _paid_run(tmp_path)

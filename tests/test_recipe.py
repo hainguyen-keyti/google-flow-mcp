@@ -336,3 +336,63 @@ def test_an_input_the_listing_no_longer_names_keeps_its_id_and_says_so():
 def test_a_clip_that_cannot_be_read_is_refused_with_the_reason(media_id, workflow_id, says):
     with pytest.raises(LookupError, match=says):
         reader.recipe_from(LISTING, media_id, workflow_id=workflow_id)
+
+
+def voice_record(mime="audio/wav", names=("Leda", "LilyVoice")):
+    """A voice saved with character_make_voice, as the listing keeps it (measured 2026-10-01 on LilyVoice): record[10]
+    holds the words it was made from, its description, its direction, the speech model, the audio type and
+    [the preset it is built on, its name]."""
+    return [
+        VOICE_WF,
+        PROJECT,
+        VOICE_MEDIA,
+        "CAE",
+        None,
+        [[1790700754, 0], None, None, None, None, None, [None, None, None, None, 1], None, None, 1],
+        None,
+        None,
+        None,
+        None,
+        [
+            [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "Hello",
+                "A young woman's voice",
+                "### DIRECTOR'S NOTES",
+                "models/gemini-v4s-tts-flow",
+                mime,
+                [list(names)],
+            ]
+        ],
+    ]
+
+
+def test_a_voice_of_your_own_is_read_off_its_own_record():
+    listing = [None, [descriptor(VOICE_MEDIA, "LilyVoice", VOICE_WF), LISTING[1][0]], [voice_record(), IMAGE]]
+    assert parsers.custom_voices(listing) == [
+        {"workflow_id": VOICE_WF, "media_id": VOICE_MEDIA, "name": "LilyVoice", "base": "Leda"}
+    ]
+
+
+def test_a_voice_of_your_own_goes_by_the_title_flow_media_shows_for_it():
+    listing = [None, [descriptor(VOICE_MEDIA, "Lily speaking", VOICE_WF)], [voice_record()]]
+    assert parsers.custom_voices(listing)[0]["name"] == "Lily speaking"
+
+
+def test_a_voice_whose_asset_left_the_project_grid_is_not_offered():
+    assert parsers.custom_voices([None, [], [voice_record()]]) == []
+
+
+def test_a_record_that_is_no_voice_is_never_offered_as_one():
+    listing = [
+        None,
+        [descriptor(VOICE_MEDIA, "LilyVoice", VOICE_WF)],
+        [voice_record(mime="image/png"), TWO_VOICES],
+    ]
+    assert parsers.custom_voices(listing) == []
+    assert parsers.custom_voices(LISTING) == []
