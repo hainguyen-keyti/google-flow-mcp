@@ -71,6 +71,8 @@ EXPECTED_TOOLS = {
     # Plan AB: one tool that covers every video option Flow's composer offers, 43 to 44 on purpose.
     "gen_video",
     "flow_uploads",
+    # Plan AL: what a clip was made from, read back off the listing, 44 to 45 on purpose.
+    "clip_recipe",
 }
 
 
@@ -143,6 +145,7 @@ TOOL_CALLS: dict[str, dict] = {
     "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going", "job_id": "job-extend"},
     "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt", "job_id": "job-edit"},
     "clip_reconcile": {"project_id": "P"},
+    "clip_recipe": {"project_id": "P", "media_id": "M", "workflow_id": "W"},
     "gen_t2v": {"prompt": "a boat", "project": "P", "job_id": "job-t2v"},
     "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P", "job_id": "job-i2v"},
     "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"},

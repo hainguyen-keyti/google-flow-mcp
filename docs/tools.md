@@ -2,9 +2,9 @@
 
 Generated from the running server by `scripts/gen_tool_docs.py`; do not edit by hand. Prices are the ones measured on the account this was built for, and they are part of each tool's own description, which is what an agent reads before spending.
 
-**44 tools.**
+**45 tools.**
 
-> These tools are served but not grouped yet, so they are listed last: `gen_video`
+> These tools are served but not grouped yet, so they are listed last: `clip_recipe`, `gen_video`
 
 ## Read, free
 
@@ -281,6 +281,12 @@ Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledg
 Send a message to Flow's agent in a project. It may spend credits: 0 credits in every measured send where the agent generated nothing, but a message that makes it generate media costs that generation's price. The send itself took 69-80 s in those runs, plus a balance read before and after. When the balance moved by anything other than the measured price, the answer carries balance_moved {kind, measured, moved, note}, or, when the call ends in an error, the job's ledger row does: read it before assuming the price in this description still holds. job_id is required: use a new one for each new job, and keep the SAME one when calling again after an error or a timeout. Any job_id already in a ledger under the out folder is refused before a browser opens, so a retry never pays twice; that refusal means the job may already have spent credits, so check flow_media and flow_credits before starting it under a new one. A job_id still running in another call is refused too: wait for that call to finish and call again with the SAME job_id, never a new one.
 
 ## Ungrouped
+
+### `clip_recipe`
+
+**Arguments**: `project_id`, `media_id`, `workflow_id` (optional)
+
+What one clip was made from, read back off the project listing: the model key Flow ran, the kind of run (frames, ingredients, derived for an edit or an upscale, extend), the start and end frame, the reference images, the voices and the characters, each with its id and its name, and for a derived or extended clip the clip it came from. Use it after a paid generation to check that the clip carried what was asked: Flow drops a character typed into a Frames prompt without saying so (measured 2026-10-01), and this is where that shows. A voice is listed as Flow recorded it: a preset by its lowercase name, a voice made on this account by its id, with `custom` true. Defaults to the newest version of the media, never an upscale; pass workflow_id (from flow_media with all_versions=true) to read one specific version. An image keeps no recipe and is refused. Free.
 
 ### `gen_video`
 

@@ -53,6 +53,9 @@ READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_uploads", "scene
 READ_ONLY_PER_SCENE = ("scene_clips",)
 # Reads a character's own page, so it needs an entity id the way scene_clips needs a scene id.
 READ_ONLY_PER_CHARACTER = ("flow_voices",)
+# Reads what one clip was made from, so it needs a video the project's own listing named.
+READ_ONLY_PER_MEDIA = ("clip_recipe",)
+RECIPE_KINDS = ("frames", "ingredients", "derived", "extend", "unknown")
 
 # Free but they CHANGE things. Never called here; see I4 in the plan.
 MUTATING = (
@@ -109,6 +112,7 @@ CLASSIFIED = (
     *READ_ONLY_PER_PROJECT,
     *READ_ONLY_PER_SCENE,
     *READ_ONLY_PER_CHARACTER,
+    *READ_ONLY_PER_MEDIA,
     *MUTATING,
     *DOWNLOADING,
     *MAYBE_SPENDING,
@@ -328,6 +332,33 @@ def timeline_of(scene_id):
     return check
 
 
+def recipe_of(media_id):
+    def check(payload):
+        if not isinstance(payload, dict):
+            return f"expected an object, got {type(payload).__name__}"
+        if payload.get("media_id") != media_id:
+            return f"asked for the recipe of {media_id}, got the one of {payload.get('media_id')!r}"
+        if not isinstance(payload.get("model_key"), str) or not payload["model_key"]:
+            return f"no model key: {payload.get('model_key')!r}"
+        if payload.get("kind") not in RECIPE_KINDS:
+            return f"kind is {payload.get('kind')!r}, not one of {RECIPE_KINDS}"
+        for key, fields in (
+            ("frames", ("slot", "workflow_id")),
+            ("reference_images", ("workflow_id",)),
+            ("voices", ("voice",)),
+            ("characters", ("entity_id",)),
+        ):
+            rows = payload.get(key)
+            if not isinstance(rows, list) or not _each_has(rows, *fields):
+                return f"{key} is not a list of rows carrying {fields}: {str(rows)[:80]}"
+        # A preset and a voice made on this account are told apart by this flag, and False is a real answer.
+        if not all(isinstance(voice.get("custom"), bool) for voice in payload["voices"]):
+            return f"a voice does not say whether it is custom: {str(payload['voices'])[:80]}"
+        return None
+
+    return check
+
+
 def an_upload_count(payload):
     """Why `a_dict` was not enough here. Measured 2026-09-14: flow_uploads was answering `count: null`,
     a doubled tile figure and an empty rpcid list on a project holding 4 uploads, and this gate stayed
@@ -420,6 +451,7 @@ async def run(findings):
                 }
                 scenes = None
                 characters = None
+                listed = None
                 for name in READ_ONLY_PER_PROJECT:
                     status, detail, payload = await call(
                         session, name, {"project_id": project_id}, per_project[name]
@@ -429,6 +461,8 @@ async def run(findings):
                         scenes = payload
                     if name == "flow_characters":
                         characters = payload
+                    if name == "flow_media":
+                        listed = payload
 
                 scene_id = None
                 if isinstance(scenes, list) and scenes and isinstance(scenes[0], dict):
@@ -492,6 +526,33 @@ async def run(findings):
                         f"{len(filtered['versions'])} of {filtered['versions_total']} versions"
                     )
                 findings.append({"name": "flow_media filtered", "status": status, "detail": detail})
+
+                # Taken from the plain listing, so a broken versions read fails its own rows and not this one.
+                grid = listed.get("media") if isinstance(listed, dict) else None
+                video_id = next(
+                    (
+                        row.get("id")
+                        for row in grid or []
+                        if isinstance(row, dict) and row.get("kind") == "video" and row.get("id")
+                    ),
+                    None,
+                )
+                if video_id:
+                    status, detail, _ = await call(
+                        session,
+                        "clip_recipe",
+                        {"project_id": project_id, "media_id": video_id},
+                        recipe_of(video_id),
+                    )
+                    findings.append({"name": "clip_recipe", "status": status, "detail": detail})
+                else:
+                    findings.append(
+                        {
+                            "name": "clip_recipe",
+                            "status": "SKIP",
+                            "detail": "the project holds no video to read a recipe from",
+                        }
+                    )
 
                 # The one spending tool this gate may touch, because the refusal happens before a browser opens and
                 # before a single credit can move: an out_dir outside out/ has to be turned down, not obeyed.

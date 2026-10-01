@@ -75,6 +75,18 @@ def _replies(first=PROJECT, empty=False):
         # The community Tools gallery is the same for every project, empty ones included (62 on both).
         "tools": [{"id": "community-1", "name": "Tool", "author": "a", "path": "p", "tags": ["x"]}],
         "uploads": {"count": 0 if empty else 4},
+        # Shaped like reader.recipe_from's answer for a start-frame clip (plan AL).
+        "recipe": {
+            "media_id": "m1",
+            "workflow_id": "w1",
+            "model_key": "veo_3_1_i2v_lite",
+            "kind": "frames",
+            "frames": [{"slot": "start", "workflow_id": "w0", "media_id": "m0", "title": "key.png"}],
+            "reference_images": [],
+            "voices": [],
+            "characters": [],
+            "source": None,
+        },
         "scenes": [] if empty else [scene],
         "timeline": {
             "scene_id": "s1",
@@ -137,6 +149,10 @@ class _Account(mcp_server.Backend):
     async def uploads(self, project_id):
         return self.replies["uploads"]
 
+    async def clip_recipe(self, project_id, media_id, workflow_id=None):
+        self.replies.setdefault("recipe_asked_for", []).append(media_id)
+        return self.replies["recipe"]
+
     async def scene_list(self, project_id, include_trashed=False):
         return self.replies["scenes"]
 
@@ -159,7 +175,7 @@ def _failing(rows):
 def test_a_healthy_account_passes_every_row(monkeypatch):
     rows = _rows(monkeypatch, _replies())
 
-    assert len(rows) == 16
+    assert len(rows) == 17
     assert _failing(rows) == {}
 
 
@@ -182,6 +198,16 @@ def test_the_smoke_reads_voices_off_a_character_the_listing_named(monkeypatch):
     assert replies["voices_asked_for"] == ["e1"]
 
 
+def test_the_smoke_reads_the_recipe_of_a_clip_the_listing_named(monkeypatch):
+    # clip_recipe needs a media id the way scene_clips needs a scene id, so the gate takes a video the listing named.
+    replies = _replies()
+
+    rows = _rows(monkeypatch, replies)
+
+    assert replies["recipe_asked_for"] == ["m1"]
+    assert rows["clip_recipe"][0] == "PASS"
+
+
 def test_the_smoke_asks_for_the_tools_gallery_without_a_project(monkeypatch):
     # Since 2026-09-15 flow_tools opens the first project itself when given none; the live gate has to walk
     # that path, or it keeps proving only the branch that already worked.
@@ -200,13 +226,15 @@ def test_an_empty_project_passes_every_row(monkeypatch):
 
     rows = _rows(monkeypatch, replies)
 
-    assert len(rows) == 16
+    assert len(rows) == 17
     assert _failing(rows) == {
         "scene_clips": "the project holds no scene to read",
         "flow_voices": "the project holds no character to read voices from",
+        "clip_recipe": "the project holds no video to read a recipe from",
     }
     assert rows["scene_clips"][0] == "SKIP" and rows["flow_voices"][0] == "SKIP"
-    assert "timeline_asked_for" not in replies
+    assert rows["clip_recipe"][0] == "SKIP"
+    assert "timeline_asked_for" not in replies and "recipe_asked_for" not in replies
 
 
 def _signed_out(replies):
@@ -284,6 +312,27 @@ def _unknown_aspect(replies):
     replies["timeline"]["aspect"] = "4:3"
 
 
+def _recipe_of_another_clip(replies):
+    replies["recipe"]["media_id"] = "m2"
+
+
+def _recipe_with_no_model_key(replies):
+    replies["recipe"]["model_key"] = None
+
+
+def _recipe_of_a_kind_nobody_named(replies):
+    replies["recipe"]["kind"] = "video"
+
+
+def _recipe_whose_voices_are_bare_strings(replies):
+    # A voice is a row with what Flow recorded, a name and the custom flag; a bare string hides which it was.
+    replies["recipe"]["voices"] = ["achird"]
+
+
+def _recipe_voice_that_does_not_say_if_it_is_custom(replies):
+    replies["recipe"]["voices"] = [{"voice": "achird", "name": "Achird"}]
+
+
 CORRUPTIONS = [
     ("flow_lane", _signed_out),
     ("flow_projects", _repeated_project_id),
@@ -302,6 +351,11 @@ CORRUPTIONS = [
     ("scene_clips", _timeline_of_another_scene),
     ("scene_clips", _clips_out_of_order),
     ("scene_clips", _unknown_aspect),
+    ("clip_recipe", _recipe_of_another_clip),
+    ("clip_recipe", _recipe_with_no_model_key),
+    ("clip_recipe", _recipe_of_a_kind_nobody_named),
+    ("clip_recipe", _recipe_whose_voices_are_bare_strings),
+    ("clip_recipe", _recipe_voice_that_does_not_say_if_it_is_custom),
 ]
 
 

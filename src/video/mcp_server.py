@@ -475,6 +475,11 @@ class Backend:
     async def uploads(self, project_id: str) -> dict[str, Any]:
         return await self._with(lambda s: uploads_mod.list_uploads(s, project_id))
 
+    async def clip_recipe(
+        self, project_id: str, media_id: str, workflow_id: str | None = None
+    ) -> dict[str, Any]:
+        return await self._with(lambda s: reader.recipe(s, project_id, media_id, workflow_id=workflow_id))
+
     async def clip_extend(
         self,
         project_id: str,
@@ -1298,6 +1303,26 @@ async def clip_reconcile(project_id: str, out_dir: str | None = None) -> str:
 async def flow_uploads(project_id: str) -> str:
     _require(project_id, "project_id")
     return _json(await backend.uploads(project_id))
+
+
+@server.tool(
+    name="clip_recipe",
+    description=(
+        "What one clip was made from, read back off the project listing: the model key Flow ran, the kind of run "
+        "(frames, ingredients, derived for an edit or an upscale, extend), the start and end frame, the reference "
+        "images, the voices and the characters, each with its id and its name, and for a derived or extended clip "
+        "the clip it came from. Use it after a paid generation to check that the clip carried what was asked: Flow "
+        "drops a character typed into a Frames prompt without saying so (measured 2026-10-01), and this is where "
+        "that shows. A voice is listed as Flow recorded it: a preset by its lowercase name, a voice made on this "
+        "account by its id, with `custom` true. Defaults to the newest version of the media, never an upscale; "
+        "pass workflow_id (from flow_media with all_versions=true) to read one specific version. An image keeps no "
+        "recipe and is refused. Free."
+    ),
+)
+async def clip_recipe(project_id: str, media_id: str, workflow_id: str | None = None) -> str:
+    _require(project_id, "project_id")
+    _require(media_id, "media_id")
+    return _json(await backend.clip_recipe(project_id, media_id, workflow_id))
 
 
 @server.tool(

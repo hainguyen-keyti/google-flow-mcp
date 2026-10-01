@@ -271,6 +271,56 @@ def records(payload: Any) -> list[dict[str, Any]]:
     return out
 
 
+# Measured 2026-10-01 on the 169 records of one project: the family of a generation and the role of an input image.
+_RECIPE_KINDS = {2: "frames", 3: "ingredients", 4: "derived", 5: "extend"}
+_FRAME_SLOTS = {1: "start", 2: "end"}
+_REFERENCE_ROLE = 4
+
+
+def _named(items: Any) -> list[str]:
+    return [item[0] for item in items or [] if isinstance(item, list) and item and isinstance(item[0], str)]
+
+
+def _recipe(record: list[Any]) -> dict[str, Any] | None:
+    arm = _at(record, 5, 6, 1)
+    head = _at(arm, 0)
+    key = _at(head, 0)
+    if not isinstance(key, str):
+        return None
+    family = _at(head, 1)
+    inputs = [
+        each
+        for each in _at(arm, 1) or []
+        if isinstance(each, list) and isinstance(_at(each, 1), int) and isinstance(_at(each, 2), str)
+    ]
+    return {
+        "model_key": key,
+        "kind": _RECIPE_KINDS.get(family, "unknown") if isinstance(family, int) else "unknown",
+        "frames": [
+            {"slot": _FRAME_SLOTS[each[1]], "workflow_id": each[2]}
+            for each in inputs
+            if each[1] in _FRAME_SLOTS
+        ],
+        "reference_images": [each[2] for each in inputs if each[1] == _REFERENCE_ROLE],
+        "source_workflow_id": _str(_at(arm, 2, 0, 3)),
+        "voices": _named(_at(arm, 7)),
+        "characters": _named(_at(arm, 8)),
+    }
+
+
+def recipes(payload: Any) -> dict[str, dict[str, Any]]:
+    """What each generation was made from, by workflow id, as the listing keeps it at record[5][6][1].
+
+    Measured 2026-10-01: [model key, family, [mode], ...], then the input images as [None, role, workflow id] (1 the
+    start frame, 2 the end frame, 4 a reference), the source clip of an edit, an upscale or an extend at [2][0][3],
+    the voices at [7] (a custom voice's workflow id or a preset's lowercase name) and the characters at [8] (entity
+    ids). An image record keeps no recipe and is left out.
+    """
+    _, records_ = _split_listing(payload)
+    found = ((record[0], _recipe(record)) for record in records_ if isinstance(_at(record, 0), str))
+    return {workflow: recipe for workflow, recipe in found if recipe is not None}
+
+
 def tools(payload: Any) -> list[dict[str, Any]]:
     entries = _at(payload, 0)
     if not isinstance(entries, list):
