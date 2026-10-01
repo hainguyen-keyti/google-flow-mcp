@@ -28,7 +28,7 @@ from gflow_cli.data.redaction import redact_error_detail
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen
-from video.flow import agent, clips, reader
+from video.flow import agent, clips, overlays, reader
 from video.flow import download as download_mod
 from video.session import PROJECT_READY, FlowSession
 
@@ -432,7 +432,18 @@ async def _open_settings(page: Any, label: str = "settings") -> str:
         await page.wait_for_timeout(800)
         trigger = page.locator(SETTINGS).first
         await trigger.wait_for(state="visible", timeout=20_000)
-        await trigger.click(timeout=8_000)
+        try:
+            await trigger.click(timeout=8_000)
+        except PlaywrightTimeoutError:
+            # Measured 2026-10-01: a bar over the composer's bottom row left only this timeout to read.
+            cover = await overlays.covering(page, SETTINGS)
+            if cover is None:
+                raise
+            where = cover["tag"] + (f"#{cover['id']}" if cover.get("id") else "")
+            raise LookupError(
+                f"the composer's Settings trigger is covered by {where}, which says {cover['text']!r}; "
+                "nothing was clicked"
+            ) from None
         try:
             await page.wait_for_function(_PRICE_VISIBLE_JS, timeout=12_000)
             return await page.evaluate(_OVERLAY_TEXT_JS)

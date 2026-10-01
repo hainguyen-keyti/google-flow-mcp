@@ -1998,8 +1998,40 @@ class _BrowserlessClient:
     async def new_page(self):
         return self
 
+    def locator(self, selector):
+        return self
+
+    async def add_locator_handler(self, locator, handler, **kwargs):
+        pass
+
     async def close(self):
         pass
+
+
+def test_a_notice_the_session_dismissed_is_named_in_the_tools_answer(monkeypatch, tmp_path):
+    """Plan AL: the owner lets the driver press Flow's cookie notice; a tool that did so must say it did."""
+    monkeypatch.setattr(
+        mcp_server,
+        "FlowSession",
+        lambda profile: FlowSession(profile_dir=tmp_path, client_factory=_BrowserlessClient),
+    )
+    backend = mcp_server.Backend()
+    said = "flow.google.com uses cookies from Google ... OK, got it"
+
+    async def pressed_it(session):
+        session.notices.append(said)
+        return {"balance": 75}
+
+    async def saw_none(session):
+        return {"balance": 75}
+
+    async def answers_a_list(session):
+        session.notices.append(said)
+        return [{"id": "P"}]
+
+    assert asyncio.run(backend._with(pressed_it)) == {"balance": 75, "dismissed_notices": [said]}
+    assert asyncio.run(backend._with(saw_none)) == {"balance": 75}
+    assert asyncio.run(backend._with(answers_a_list)) == [{"id": "P"}]
 
 
 def test_a_call_cancelled_while_it_waits_for_the_browser_does_not_wedge_later_calls(monkeypatch, tmp_path):
@@ -2075,6 +2107,12 @@ def test_a_call_cancelled_while_it_holds_the_browser_still_gives_the_profile_bac
     lease = {"held": False}
 
     class _Page:
+        def locator(self, selector):
+            return self
+
+        async def add_locator_handler(self, locator, handler, **kwargs):
+            pass
+
         async def close(self):
             await asyncio.sleep(0.05)
 

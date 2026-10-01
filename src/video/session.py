@@ -18,6 +18,7 @@ from gflow_cli.api.client import FlowApiClient
 
 import video  # noqa: F401
 from video import gen, offscreen
+from video.flow import overlays
 
 _GUARD = threading.Lock()
 _GUARD_POLL_S = 0.05
@@ -56,6 +57,7 @@ class FlowSession:
         self._factory = client_factory or _default_factory
         self.client: Any = None
         self.page: Any = None
+        self.notices: list[str] = []
         self._entered = False
 
     async def __aenter__(self) -> Self:
@@ -69,6 +71,7 @@ class FlowSession:
             await self.client.__aenter__()
             self._entered = True
             self.page = await self.client._context.new_page()
+            await overlays.watch_cookie_notice(self.page, self.notices)
         except BaseException:
             await self._teardown()
             raise

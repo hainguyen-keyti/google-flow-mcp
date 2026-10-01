@@ -3,6 +3,7 @@ import json
 import re
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video.flow import composer
 
@@ -254,6 +255,54 @@ def test_ingredients_is_refused_while_the_panel_stays_on_image_whatever_the_butt
 
     with pytest.raises(RuntimeError, match="Video"):
         asyncio.run(composer.configure(_PanelSession(panel), mode="Ingredients", label="pre"))
+
+
+class _StuckTrigger:
+    """A Settings trigger Playwright never gets to click, as on 2026-10-01 under Flow's cookie notice."""
+
+    def __init__(self, page):
+        self.page = page
+
+    @property
+    def first(self):
+        return self
+
+    async def wait_for(self, **_):
+        return None
+
+    async def click(self, **_):
+        self.page.tried += 1
+        raise PlaywrightTimeoutError("Locator.click: Timeout 8000ms exceeded.")
+
+
+class _StuckPage:
+    def __init__(self, cover):
+        self.cover, self.tried, self.keyboard = cover, 0, _PanelKeys()
+
+    def locator(self, selector):
+        return _StuckTrigger(self)
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, js, *args):
+        return self.cover
+
+
+def test_a_settings_trigger_under_an_unknown_overlay_is_refused_in_the_overlays_own_words():
+    page = _StuckPage({"tag": "div", "id": "promo", "text": "Try the new Flow agent Dismiss"})
+
+    with pytest.raises(LookupError, match="Try the new Flow agent Dismiss"):
+        asyncio.run(composer._open_settings(page, "pre"))
+
+    assert page.tried == 1, "a covered trigger is not clicked a second time"
+
+
+def test_a_settings_trigger_that_times_out_with_nothing_over_it_keeps_its_own_error():
+    page = _StuckPage(None)
+
+    with pytest.raises(PlaywrightTimeoutError):
+        asyncio.run(composer._open_settings(page, "pre"))
 
 
 def _dead_renditions(monkeypatch, tmp_path):

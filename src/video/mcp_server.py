@@ -197,7 +197,11 @@ class Backend:
 
     async def _with(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
         async with FlowSession(self.profile) as session:
-            return await fn(session)
+            result = await fn(session)
+            # The owner lets the driver press Flow's cookie notice (2026-10-01); a call that did so says it did.
+            if session.notices and isinstance(result, dict):
+                result["dismissed_notices"] = list(session.notices)
+            return result
 
     def _editor_out_dir(self, out_dir: str | None) -> Path:
         """Editor jobs ledger where out_dir points, and job ids are looked up only under the out folder."""

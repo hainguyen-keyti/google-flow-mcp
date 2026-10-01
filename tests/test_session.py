@@ -6,12 +6,25 @@ import pytest
 from gflow_cli.errors import ProfileLockedError
 
 from video import session as session_mod
+from video.flow import overlays
 from video.session import FlowSession
+
+
+class FakeLocator:
+    def __init__(self, selector):
+        self.selector = selector
 
 
 class FakePage:
     def __init__(self, log):
         self.log = log
+        self.handlers = []
+
+    def locator(self, selector):
+        return FakeLocator(selector)
+
+    async def add_locator_handler(self, locator, handler, **kwargs):
+        self.handlers.append((locator.selector, handler))
 
     async def close(self):
         self.log.append("page.close")
@@ -58,6 +71,20 @@ def test_enter_opens_client_then_page_and_exit_closes_in_reverse(tmp_path):
 
     asyncio.run(run())
     assert log == ["client.enter", "new_page", "page.close", "client.exit"]
+
+
+def test_a_session_watches_its_page_for_flows_cookie_notice_and_for_nothing_else(tmp_path):
+    """2026-10-01: the notice covered the composer's bottom row and every click there timed out. The owner lets the
+    driver press that one notice's own button; no other overlay is ever handed to a handler."""
+
+    async def run():
+        async with FlowSession(profile_dir=tmp_path, client_factory=factory([])) as session:
+            return [selector for selector, _ in session.page.handlers], session.notices
+
+    watched, notices = asyncio.run(run())
+
+    assert watched == [overlays.COOKIE_BAR]
+    assert notices == []
 
 
 def test_second_session_waits_until_first_exits(tmp_path):
