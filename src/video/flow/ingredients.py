@@ -1,7 +1,22 @@
-"""Characters and project images put into the composer prompt with Flow's @ mention, and a video generated from them.
+"""Characters put into the composer prompt with Flow's @ mention, project images added through the composer's "+"
+dialog, and a video generated from them.
 
 gflow drives the same gesture but still refuses to generate with a character on this host (`_unported_form` in
 migrated_composer.py, v0.76.0), so the repo drives it and spends through the composer's one money path.
+
+Measured 2026-10-01 (plan AL T4, $0 probes out/al/t4.json and t4b.json):
+- the "+" button opens a dialog of categories (Images, Voices, Characters); under Images a search box takes a whole
+  title and narrows a window of rows, each `button.asset-item[role=option]` with a title, a thumbnail and no id, so
+  a row is told by its thumbnail's url, which ends like the image's listing url (before a size suffix);
+- a click adds the ACTIVE row (the first one) and the dialog closes itself; any other row only becomes active, and
+  'Add to prompt' adds it;
+- every ingredient is a chip on `flow-ingredient-bar`, a mentioned character included; an image chip's thumbnail is a
+  signed url whose path ends with the image's WORKFLOW id; a chip Flow refuses carries `.disabled-error-icon`
+  whatever its kind, and its hover card says why ("Maximum image ingredients reached (3 allowed)"), while the price
+  line does not move;
+- the '@' picker is that same dialog and keeps the category it last showed, under which it offers no character, so
+  characters are mentioned before the dialog is opened;
+- one listed image (lily_black_face.png) is offered by no row of the dialog.
 
 Measured 2026-09-16 (plan character-generation T1, out/character_mentions_20260916_175616.json):
 - '@' and a name list `button.asset-item[role=option]`, each carrying only `.asset-title` and a `.type-subtitle`
@@ -27,6 +42,7 @@ from urllib.parse import parse_qs, unquote_plus, urlsplit
 from gflow_cli.api.transports import migrated_composer as mc
 from gflow_cli.api.video import Aspect, GenerateVideoRequest, Mode, VideoModel, reference_cap_for
 from gflow_cli.errors import UiSelectorDriftError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video.flow import agent, composer, parsers
 from video.flow.reader import capture, one
@@ -55,10 +71,30 @@ OPTION = "button.asset-item[role=option]"
 CONFIRM = "button.detail-add-to-prompt-btn"
 CHIP = "flow-prompt-box .mention-chip"
 RADIO = ".cdk-overlay-pane [role=radio]"
+# The exact label: `aria-label*='ngredient'` also matches a bar chip, whose label is "Ingredient", and a click on a chip
+# removes it ($0 probe 2026-10-01).
+ADD = "flow-prompt-box button[aria-label='Add ingredients to the prompt box']"
+DIALOG = ".cdk-overlay-pane, [role=dialog]"
+SEARCH = "input[aria-label='Search assets']"
+BAR = "flow-prompt-box flow-ingredient-bar button.chip-container"
+BACKDROP = ".cdk-overlay-backdrop-showing"
 OPTION_WAIT_MS = 12_000
 COMMIT_WAIT_MS = 2_500
 CHIP_WAIT_MS = 5_000
 RADIO_WAIT_MS = 10_000
+DIALOG_WAIT_MS = 20_000
+ROW_WAIT_MS = 30_000
+ROW_POLL_MS = 1_000
+BAR_WAIT_MS = 12_000
+CARD_WAIT_MS = 3_200
+ESCAPES = 5
+# The icon a bar chip carries, by the ingredient it stands for; an image chip carries a thumbnail instead.
+ICON_KINDS = {"voice_selection": "voice", "accessibility_new": "character"}
+# Flow's own refusal of an image over a model's cap, read off the composer's hover cards on 2026-10-01
+# (out/flow_research/log_caps2.txt): Omni 1.1 Flash 7, Veo 3.1 Lite and Fast 3, Veo 3.1 Quality none.
+CAP_WORDS = "Maximum image ingredients reached ({cap} allowed)"
+NO_IMAGES_WORDS = "You cannot use image ingredients with this model."
+CAPS_MEASURED = "2026-10-01"
 
 _OPTIONS_JS = """(sel) => [...document.querySelectorAll(sel)].map(o => ({
   title: ((o.querySelector('.asset-title') || {}).textContent || '').trim(),
@@ -89,6 +125,23 @@ _CARET_END_JS = """(sel) => {
 
 _BOX_TEXT_JS = "(sel) => ((document.querySelector(sel) || {}).innerText || '').trim()"
 
+_ROWS_JS = """(sel) => [...document.querySelectorAll(sel)].map(o => ({
+  title: ((o.querySelector('.asset-title') || {}).textContent || '').trim(),
+  src: (o.querySelector('img') || {getAttribute: () => ''}).getAttribute('src') || '',
+  visible: !!(o.offsetWidth || o.offsetHeight),
+  active: o.classList.contains('asset-item-active'),
+}))"""
+
+_BAR_JS = """(sel) => [...document.querySelectorAll(sel)].map(c => ({
+  cls: String(c.className),
+  text: (c.innerText || '').replace(/\\s+/g, ' ').trim(),
+  error: !!c.querySelector('.disabled-error-icon'),
+  src: (c.querySelector('img') || {getAttribute: () => ''}).getAttribute('src') || '',
+}))"""
+
+_CARD_JS = """() => [...document.querySelectorAll('.cdk-overlay-pane')].filter(e => e.offsetParent !== null)
+  .map(e => (e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 200)).filter(Boolean)"""
+
 
 def _norm(text: str | None) -> str:
     return re.sub(r"\s+", " ", text or "").strip().casefold()
@@ -100,6 +153,8 @@ class Reference:
     id: str
     title: str
     mention_ids: frozenset[str]
+    # An image only: the end of its listing url, which its row in the "+" dialog carries.
+    tail: str = ""
 
     @property
     def query(self) -> str:
@@ -121,12 +176,22 @@ def resolve(
     model: str,
 ) -> list[Reference]:
     """Name every requested character and image from one listing, refusing anything the picker cannot single out."""
+    from video.flow.video import TAIL
+
     wanted = [*characters, *media_ids]
     if not wanted:
         raise ValueError("at least one character or image is required")
     if len(set(wanted)) != len(wanted):
         raise ValueError(f"each character and image may be named once, got {wanted}")
     cap = reference_cap_for(VideoModel.from_cli(model))
+    if len(wanted) > cap and media_ids:
+        # A mentioned character takes one of the image slots: on Veo 3.1 Lite a character and two images filled it,
+        # and a third image was refused in these words (out/al/t4_live.json, 2026-10-01).
+        words = CAP_WORDS.format(cap=cap) if cap else NO_IMAGES_WORDS
+        raise ValueError(
+            f"{model} takes at most {cap} references, characters and images together, got {len(wanted)}: Flow's "
+            f"composer refuses the next image with {words!r} (read off the composer on {CAPS_MEASURED})"
+        )
     if len(wanted) > cap:
         raise ValueError(f"{model} takes at most {cap} references, got {len(wanted)}")
 
@@ -162,7 +227,6 @@ def resolve(
         references.append(Reference("entity", entity, name, frozenset({entity})))
 
     by_media = {each["id"]: each for each in media}
-    titles = [_norm(each.get("title")) for each in media]
     for media_id in media_ids:
         found = by_media.get(media_id)
         if found is None:
@@ -171,24 +235,32 @@ def resolve(
             raise ValueError(f"{media_id} is a {found.get('kind')}; only images are measured as references")
         title = found.get("title") or ""
         if not _norm(title):
-            raise LookupError(f"image {media_id} has no title to mention")
-        if titles.count(_norm(title)) > 1:
-            raise LookupError(
-                f"{titles.count(_norm(title))} images are titled {title!r}, which the picker cannot tell apart: "
-                "rename the file (a unique name) and flow_upload it again, then pass the new media id"
-            )
-        workflows = frozenset(
-            each["workflow_id"] for each in records if each.get("id") == media_id and each.get("workflow_id")
-        )
+            raise LookupError(f"image {media_id} has no title for the ingredients dialog's search")
+        mine = [each for each in records if each.get("id") == media_id]
+        workflows = frozenset(each["workflow_id"] for each in mine if each.get("workflow_id"))
         if not workflows:
             raise LookupError(
                 f"image {media_id} has no workflow id in the listing, so its chip cannot be checked"
             )
-        references.append(Reference("media", media_id, title, workflows))
-
-    for reference in references:
-        if not reference.query:
-            raise LookupError(f"{reference.title!r} leaves nothing to type after '@'")
+        urls = [str(each["url"]) for each in mine if each.get("url")]
+        if not urls:
+            raise LookupError(
+                f"image {media_id} has no url in the listing, so its row in the ingredients dialog cannot be told"
+            )
+        tail = urls[0][-TAIL:]
+        # The title is only the dialog's search text; the row is told by its url, so images sharing a title
+        # (gen_i2i's own titles repeat, measured 2026-09-30) are refused only when their urls end alike.
+        twins = {
+            each["id"]
+            for each in media
+            if each["id"] != media_id and _norm(each.get("title")) == _norm(title)
+        }
+        if any(str(each.get("url") or "").endswith(tail) for each in records if each.get("id") in twins):
+            raise LookupError(
+                f"another image titled {title!r} ends with the same url, so the dialog cannot tell them apart: "
+                "rename the file (a unique name) and flow_upload it again, then pass the new media id"
+            )
+        references.append(Reference("media", media_id, title, workflows, tail))
     return references
 
 
@@ -310,6 +382,230 @@ async def attach(page: Any, reference: Reference) -> dict[str, str]:
             f"{sorted(reference.mention_ids)}; refusing to generate with the wrong reference"
         )
     return {"kind": chip["kind"], "id": chip["id"], "text": chip.get("text", "")}
+
+
+def _bar_chip(raw: dict[str, Any]) -> dict[str, Any]:
+    """One chip of the ingredient bar from what the page shows of it, the signed url itself left behind.
+
+    Measured 2026-10-01: a voice and a character chip carry their icon, an image chip a thumbnail whose url path ends
+    with the image's workflow id (the thumbnail can land late, and until then the chip is of no known kind); a chip
+    Flow refuses carries the error icon whatever its kind, while its class differs by kind (`chip-container-disabled`
+    on an image, `disabled` on a voice, nothing on a character), so the icon is what is read."""
+    seen = str(raw.get("text") or "")
+    src = str(raw.get("src") or "")
+    kind = next((kind for icon, kind in ICON_KINDS.items() if icon in seen), "image" if src else "other")
+    return {
+        "kind": kind,
+        "id": urlsplit(src).path.rsplit("/", 1)[-1] if kind == "image" else "",
+        "refused": bool(raw.get("error")),
+        "seen": seen,
+    }
+
+
+async def bar_chips(page: Any) -> list[dict[str, Any]]:
+    return [_bar_chip(raw) for raw in await page.evaluate(_BAR_JS, BAR)]
+
+
+async def _settled_bar(page: Any) -> list[dict[str, Any]]:
+    """The bar once every chip shows what it is: an image chip read before its thumbnail lands is of no known kind."""
+    chips = await bar_chips(page)
+    waited = 0
+    while any(chip["kind"] == "other" for chip in chips) and waited < BAR_WAIT_MS:
+        await page.wait_for_timeout(1_000)
+        waited += 1_000
+        chips = await bar_chips(page)
+    return chips
+
+
+def bar_problems(bar: list[dict[str, Any]], references: list[Reference]) -> list[str]:
+    """Everything that sets the ingredient bar apart from what was asked for: each image by the workflow id its chip
+    names, one chip for each character, no chip of any other kind, and none that Flow refuses."""
+    problems = []
+    images = [chip for chip in bar if chip["kind"] == "image"]
+    asked = [reference for reference in references if reference.kind == "media"]
+    for reference in asked:
+        mine = [chip for chip in images if chip["id"] in reference.mention_ids]
+        if len(mine) != 1:
+            problems.append(f"the image {reference.title!r} ({reference.id}) has {len(mine)} chips, not one")
+    known = {mention for reference in asked for mention in reference.mention_ids}
+    problems += [
+        f"an image chip names {chip['id'] or 'nothing'}, which was not asked for"
+        for chip in images
+        if chip["id"] not in known
+    ]
+    characters = sum(chip["kind"] == "character" for chip in bar)
+    entities = sum(reference.kind == "entity" for reference in references)
+    if characters != entities:
+        problems.append(f"{characters} character chips for {entities} characters")
+    problems += ["a voice chip, and no voice was asked for" for chip in bar if chip["kind"] == "voice"]
+    problems += [
+        f"a chip showing {chip['seen']!r} is none of image, character, voice"
+        for chip in bar
+        if chip["kind"] == "other"
+    ]
+    problems += [f"Flow refuses the {chip['kind']} chip" for chip in bar if chip["refused"]]
+    return problems
+
+
+async def _refusal_words(page: Any, index: int) -> str:
+    """Flow's own words for the refused chip at `index`, read off the card its hover opens ('' when none shows)."""
+    await page.locator(BAR).nth(index).hover(timeout=3_000, force=True)
+    words: list[str] = []
+    waited = 0
+    while not words and waited < CARD_WAIT_MS:
+        await page.wait_for_timeout(400)
+        waited += 400
+        words = await page.evaluate(_CARD_JS)
+    # The card sits over the composer for as long as the pointer stays on the chip.
+    await page.mouse.move(5, 5)
+    await page.wait_for_timeout(600)
+    return " / ".join(words)
+
+
+async def check_bar(
+    page: Any, references: list[Reference], *, at_click: bool = False
+) -> list[dict[str, Any]]:
+    """The settled bar, or a refusal naming what is wrong with it, in Flow's own words for a chip Flow refuses.
+
+    The price line reads the same with a refused chip on the bar (10 on Veo 3.1 Lite beside a refused fourth image,
+    measured 2026-10-01), so this read is what keeps a refused or missing ingredient from being paid for."""
+    bar = await _settled_bar(page)
+    problems = bar_problems(bar, references)
+    if not problems:
+        return bar
+    said = [await _refusal_words(page, index) for index, chip in enumerate(bar) if chip["refused"]]
+    flow = "; Flow says: " + " / ".join(sorted({words for words in said if words})) if any(said) else ""
+    raise LookupError(
+        f"{'right before the click ' if at_click else ''}the ingredient bar is not what was asked for: "
+        f"{'; '.join(problems)}{flow}; {'refusing to spend' if at_click else 'refusing to generate'}"
+    )
+
+
+async def close_dialog(page: Any) -> None:
+    """Escape until no overlay backdrop is left: with a search typed, the first Escape only empties the search box
+    (measured 2026-10-01). Escape is pressed only while a backdrop shows."""
+    for _ in range(ESCAPES):
+        if not await page.locator(BACKDROP).count():
+            return
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(900)
+    if await page.locator(BACKDROP).count():
+        raise LookupError(f"the ingredients dialog did not close after {ESCAPES} Escapes; refusing to go on")
+
+
+async def _bar_after(page: Any, before: list[dict[str, Any]], wait_ms: int) -> list[dict[str, Any]]:
+    after = await bar_chips(page)
+    waited = 0
+    while len(after) <= len(before) and waited < wait_ms:
+        await page.wait_for_timeout(500)
+        waited += 500
+        after = await bar_chips(page)
+    return after
+
+
+async def attach_image(page: Any, reference: Reference) -> dict[str, str]:
+    """Add one project image through the composer's "+" dialog and prove the chip that landed is that image.
+
+    The title is only the search text. The row is the one whose thumbnail ends like the image's listing url, read
+    twice alike before its index is trusted, since the first read after typing can still show the unfiltered rows.
+    A click adds only the ACTIVE row, so when it adds no chip 'Add to prompt' is pressed only once the wanted row is
+    the active one. Never Enter. The chip that landed must name the image's workflow id and must not be refused.
+    """
+    from video.flow.video import _bare_src
+
+    if reference.kind != "media" or not reference.tail:
+        raise ValueError(f"{reference.title!r} carries no listing url to tell its row in the dialog by")
+
+    def mine_in(rows: list[dict[str, Any]]) -> list[int]:
+        return [
+            index
+            for index, row in enumerate(rows)
+            if row.get("visible") and _bare_src(row.get("src")).endswith(reference.tail)
+        ]
+
+    before = await _settled_bar(page)
+    await close_dialog(page)
+    await page.locator(ADD).first.click(timeout=8_000)
+    category = page.locator(DIALOG).get_by_text("Images", exact=True).first
+    try:
+        await category.wait_for(state="visible", timeout=DIALOG_WAIT_MS)
+    except PlaywrightTimeoutError:
+        await close_dialog(page)
+        raise LookupError("the ingredients dialog showed no Images category; nothing was attached") from None
+    await category.click(timeout=8_000)
+    search = page.locator(DIALOG).locator(SEARCH).first
+    await search.wait_for(state="visible", timeout=DIALOG_WAIT_MS)
+    await search.fill(reference.title)
+    # An image uploaded a moment ago reaches a picker's results late (measured 2026-09-29), so look for a while.
+    rows: list[dict[str, Any]] = []
+    previous: list[dict[str, Any]] | None = None
+    waited = 0
+    while True:
+        await page.wait_for_timeout(ROW_POLL_MS)
+        waited += ROW_POLL_MS
+        rows = await page.evaluate(_ROWS_JS, OPTION)
+        if (mine_in(rows) and rows == previous) or waited >= ROW_WAIT_MS:
+            break
+        previous = rows
+    mine = mine_in(rows)
+    if len(mine) != 1:
+        shown = [row.get("title") for row in rows if row.get("visible")]
+        await close_dialog(page)
+        if mine:
+            raise LookupError(
+                f"{len(mine)} rows of the ingredients dialog carry the url of {reference.title!r} "
+                f"({reference.id}); not guessing"
+            )
+        raise LookupError(
+            f"the ingredients dialog offers no image {reference.title!r} ({reference.id}): it shows "
+            f"{len(shown)} row{'' if len(shown) == 1 else 's'} for that title ({shown[:8]}), none carrying this "
+            "image's url. Flow lists the image in the project and still does not offer it as an ingredient; "
+            "nothing was attached"
+        )
+    await page.locator(OPTION).nth(mine[0]).click(timeout=8_000)
+    after = await _bar_after(page, before, COMMIT_WAIT_MS)
+    if len(after) <= len(before):
+        now = await page.evaluate(_ROWS_JS, OPTION)
+        if any(row.get("visible") for row in now):
+            active = [index for index, row in enumerate(now) if row.get("visible") and row.get("active")]
+            if len(active) != 1 or active != mine_in(now):
+                await close_dialog(page)
+                raise LookupError(
+                    f"clicking the image {reference.title!r} left another row active; refusing to add another image"
+                )
+            confirm = page.locator(CONFIRM)
+            visible = [
+                index for index in range(await confirm.count()) if await confirm.nth(index).is_visible()
+            ]
+            if len(visible) != 1:
+                await close_dialog(page)
+                raise LookupError(
+                    f"{len(visible)} visible 'Add to prompt' buttons while {reference.title!r} is active; not guessing"
+                )
+            await confirm.nth(visible[0]).click(timeout=8_000)
+            after = await _bar_after(page, before, CHIP_WAIT_MS)
+    await close_dialog(page)
+    after = await _settled_bar(page)
+    added = _added(before, after)
+    if len(added) != 1:
+        raise LookupError(
+            f"adding the image {reference.title!r} added {len(added)} ingredient chips, not one; refusing to "
+            "generate"
+        )
+    chip = added[0]
+    if chip["kind"] != "image" or chip["id"] not in reference.mention_ids:
+        raise LookupError(
+            f"adding the image {reference.title!r} put a {chip['kind']} chip naming {chip['id'] or 'nothing'} on "
+            f"the bar, not an image chip naming {sorted(reference.mention_ids)}; refusing to generate with the "
+            "wrong image"
+        )
+    if chip["refused"]:
+        words = await _refusal_words(page, len(after) - 1 - after[::-1].index(chip))
+        raise LookupError(
+            f"Flow refuses the image {reference.title!r} ({reference.id}) on this model"
+            f"{': ' + words if words else ''}; refusing to generate"
+        )
+    return {"kind": "media", "id": chip["id"], "text": reference.title}
 
 
 async def apply_settings(page: Any, model: str, aspect: str, references: list[Reference]) -> None:
@@ -484,7 +780,10 @@ async def generate(
         model,
     )
 
-    attached: list[dict[str, str]] = []
+    entities = [reference for reference in references if reference.kind == "entity"]
+    images = [reference for reference in references if reference.kind == "media"]
+    mentioned: list[dict[str, str]] = []
+    added: list[dict[str, str]] = []
 
     async def setup(active: FlowSession) -> dict[str, Any]:
         page = active.page
@@ -499,12 +798,16 @@ async def generate(
         if resolution is not None:
             await pin_resolution(page, resolution)
         await page.locator(BOX).first.click(timeout=8_000)
-        attached[:] = [await attach(page, reference) for reference in references]
+        # Characters first: the '@' picker is the "+" dialog and keeps the category that dialog last showed, under
+        # which it offers no character (measured 2026-10-01, twice).
+        mentioned[:] = [await attach(page, reference) for reference in entities]
         on_page = await chips_on(page)
-        if len(on_page) != len(references):
+        if len(on_page) != len(entities):
             raise LookupError(
-                f"the prompt holds {len(on_page)} chips for {len(references)} references; refusing to generate"
+                f"the prompt holds {len(on_page)} mention chips for {len(entities)} characters; refusing to generate"
             )
+        added[:] = [await attach_image(page, reference) for reference in images]
+        await check_bar(page, references)
         # The prompt goes in after the chips without a click, which could land on a chip (review F1, 2026-09-16).
         if not await page.evaluate(_CARET_END_JS, BOX):
             raise LookupError("could not put the caret at the end of the prompt box; refusing to generate")
@@ -515,16 +818,17 @@ async def generate(
             "duration_row": duration_row,
             **({"resolution": resolution} if resolution is not None else {}),
             **({"count": count} if count != 1 else {}),
-            "chips": attached,
+            "chips": [*mentioned, *added],
         }
 
     async def verify(active: FlowSession) -> dict[str, Any]:
-        """Read the chips and the prompt box again right before the price check, after typing and the confirm pass:
-        the chips must be the ones attached, and the box must read exactly their names, then the prompt."""
+        """Read the chips, the prompt box and the ingredient bar again right before the price check, after typing and
+        the confirm pass: the mention chips must be the ones attached, the box must read exactly their names, then
+        the prompt, and the bar must hold every image and character asked for, nothing else, none refused."""
         page = active.page
         on_page = await chips_on(page)
         text = await page.evaluate(_BOX_TEXT_JS, BOX)
-        wanted = sorted((chip["kind"], chip["id"]) for chip in attached)
+        wanted = sorted((chip["kind"], chip["id"]) for chip in mentioned)
         found = sorted((chip.get("kind", ""), chip.get("id", "")) for chip in on_page)
         unbound = [
             chip for chip in on_page if chip.get("kind") == "entity" and chip.get("entity") != chip.get("id")
@@ -536,10 +840,19 @@ async def generate(
                 f"right before the click the prompt holds {found} and reads {text[:160]!r}, not {wanted} and "
                 f"{expected[:160]!r}; refusing to spend"
             )
+        bar = await check_bar(page, references, at_click=True)
+        titles = {mention: reference.title for reference in images for mention in reference.mention_ids}
         return {
             "chips": [
-                {"kind": chip.get("kind", ""), "id": chip.get("id", ""), "text": chip.get("text", "")}
-                for chip in on_page
+                *(
+                    {"kind": chip.get("kind", ""), "id": chip.get("id", ""), "text": chip.get("text", "")}
+                    for chip in on_page
+                ),
+                *(
+                    {"kind": "media", "id": chip["id"], "text": titles.get(chip["id"], "")}
+                    for chip in bar
+                    if chip["kind"] == "image"
+                ),
             ],
             "prompt_text": text,
         }

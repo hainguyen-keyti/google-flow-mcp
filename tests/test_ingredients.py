@@ -10,6 +10,7 @@ from gflow_cli.api.video import Aspect, Mode, VideoModel
 from gflow_cli.errors import UiSelectorDriftError
 from mcp.server.mcpserver.exceptions import ToolError
 from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen, mcp_server
 from video.flow import clips, composer, ingredients
@@ -18,10 +19,19 @@ ENTITY = "47e5150d-9c4b-4165-a937-4852e9abd194"
 OTHER = "11111111-2222-3333-4444-555555555555"
 MEDIA = "53a8930b-fe54-40a0-a9c2-a59859ff126f"
 WORKFLOW = "02a43d09-76e6-463c-8765-f9ce8df34592"
+OTHER_IMAGE_WORKFLOW = "9b1c7e52-3d4f-4a6b-8c9d-0e1f2a3b4c5d"
 PROMPT = "stands in a sunny bakery and smiles at the camera"
+# Measured 2026-10-01 (out/al/t4.json, t4b.json): a listing url ends on the image's bare token; the "+" dialog shows the
+# same token on another host with a size suffix; a chip on the ingredient bar shows a signed url whose path ends with
+# the image's workflow id.
+TOKEN = "AJx9Qm3TzK7LpW2bN8cRv5YhD4fG6sUe1oXtZa0i"
+TWIN_TOKEN = "Bq4Wn8ErT2yU6iO0pA3sD5fG7hJ9kL1zX3cV5bN7"
+URL = f"https://lh3.googleusercontent.com/asb/{TOKEN}"
+TAIL = TOKEN[-24:]
+FLOW_SAYS = "Maximum image ingredients reached (3 allowed)"
 
 THU = ingredients.Reference("entity", ENTITY, "Thu", frozenset({ENTITY}))
-IMAGE = ingredients.Reference("media", MEDIA, "peobj1.png", frozenset({WORKFLOW}))
+IMAGE = ingredients.Reference("media", MEDIA, "peobj1.png", frozenset({WORKFLOW}), TAIL)
 
 
 def _character(entity=ENTITY, name="Thu"):
@@ -32,8 +42,8 @@ def _image(media=MEDIA, title="peobj1.png", kind="image"):
     return {"id": media, "title": title, "kind": kind}
 
 
-def _record(media=MEDIA, workflow=WORKFLOW):
-    return {"id": media, "workflow_id": workflow}
+def _record(media=MEDIA, workflow=WORKFLOW, url=URL):
+    return {"id": media, "workflow_id": workflow, "url": url}
 
 
 # resolve
@@ -50,6 +60,8 @@ def test_resolve_names_each_character_then_each_image_with_the_ids_their_chips_c
     assert references[0].mention_ids == {ENTITY}
     # An image chip names the image's workflow id, never its media id (measured in T1).
     assert references[1].mention_ids == {WORKFLOW, "w-older"}
+    # The "+" dialog's row is told by the end of the image's listing url (plan AL, 2026-10-01).
+    assert references[1].tail == TAIL and references[0].tail == ""
 
 
 def test_resolve_names_an_image_by_its_own_workflows_only():
@@ -85,16 +97,40 @@ def test_resolve_refuses_a_character_with_no_name_to_type():
         ([_image(title=" ")], [_record()], LookupError, "no title"),
         (
             [_image(), _image(media=OTHER, title="PEOBJ1.png")],
-            [_record()],
+            [
+                _record(),
+                _record(
+                    media=OTHER, workflow="w-twin", url=f"https://lh3.googleusercontent.com/asb/zz{TAIL}"
+                ),
+            ],
             LookupError,
-            "2 images are titled",
+            "ends with the same url",
         ),
         ([_image()], [_record(media=OTHER)], LookupError, "no workflow id"),
+        ([_image()], [_record(url=None)], LookupError, "no url"),
     ],
 )
-def test_resolve_refuses_an_image_it_cannot_mention(media, records, error, message):
+def test_resolve_refuses_an_image_the_dialog_could_not_single_out(media, records, error, message):
+    # Plan AL (2026-10-01): an image is attached through the "+" dialog and told by its url, so two images sharing a
+    # title are refused only when their urls end alike; until then any shared title was refused.
     with pytest.raises(error, match=message):
         ingredients.resolve([_character()], media, records, [ENTITY], [MEDIA], "omni-flash")
+
+
+def test_resolve_takes_images_sharing_a_title_when_their_urls_end_differently():
+    twin = _image(media=OTHER, title="PEOBJ1.png")
+    records = [
+        _record(),
+        _record(media=OTHER, workflow="w-twin", url=f"https://lh3.googleusercontent.com/asb/{TWIN_TOKEN}"),
+    ]
+    references = ingredients.resolve([], [_image(), twin], records, [], [MEDIA, OTHER], "omni-flash")
+    assert [(r.id, r.tail) for r in references] == [(MEDIA, TAIL), (OTHER, TWIN_TOKEN[-24:])]
+
+
+def test_resolve_takes_an_image_whose_title_would_leave_nothing_to_type_after_an_at_sign():
+    # The title is the dialog's search text now, typed whole; only a character's name is still typed after '@'.
+    references = ingredients.resolve([], [_image(title=" .png")], [_record()], [], [MEDIA], "omni-flash")
+    assert references[0].title == " .png"
 
 
 def test_resolve_refuses_more_references_than_the_model_takes():
@@ -103,6 +139,45 @@ def test_resolve_refuses_more_references_than_the_model_takes():
     with pytest.raises(ValueError, match="at most 3"):
         ingredients.resolve(characters, [_image()], [_record()], ids, [MEDIA], "veo-lite")
     assert len(ingredients.resolve(characters, [_image()], [_record()], ids, [MEDIA], "omni-flash")) == 4
+
+
+@pytest.mark.parametrize(
+    ("model", "images", "flow_says"),
+    [
+        ("veo-lite", 4, "Maximum image ingredients reached (3 allowed)"),
+        ("omni-flash", 8, "Maximum image ingredients reached (7 allowed)"),
+        ("veo-quality", 1, "You cannot use image ingredients with this model."),
+    ],
+)
+def test_resolve_refuses_more_images_than_the_model_takes_in_the_words_flow_shows(model, images, flow_says):
+    # Read off the composer's own refusal cards on 2026-10-01 (out/flow_research/log_caps2.txt).
+    listed = [_image(media=f"m{index}", title=f"i{index}.png") for index in range(images)]
+    records = [_record(media=f"m{index}", workflow=f"w{index}") for index in range(images)]
+    with pytest.raises(ValueError, match=re.escape(flow_says)) as refused:
+        ingredients.resolve([], listed, records, [], [each["id"] for each in listed], model)
+    assert "2026-10-01" in str(refused.value)
+
+
+def test_resolve_counts_a_character_against_the_image_slots_in_the_words_flow_shows():
+    # Measured 2026-10-01 (out/al/t4_live.json): on Veo 3.1 Lite a mentioned character and two images filled the three
+    # slots, and the third image was refused with the sentence below.
+    images = [_image(media=f"m{index}", title=f"i{index}.png") for index in range(3)]
+    records = [_record(media=f"m{index}", workflow=f"w{index}") for index in range(3)]
+    with pytest.raises(ValueError, match=re.escape(FLOW_SAYS)):
+        ingredients.resolve(
+            [_character()], images, records, [ENTITY], [each["id"] for each in images], "veo-lite"
+        )
+    assert (
+        len(ingredients.resolve([_character()], images[:2], records, [ENTITY], ["m0", "m1"], "veo-lite")) == 3
+    )
+
+
+def test_resolve_never_puts_flows_image_refusal_in_the_mouth_of_a_character_overflow():
+    # Flow's sentence was measured for images; four characters over veo-lite's three were never shown to it.
+    characters = [_character(entity=f"e{index}", name=f"n{index}") for index in range(4)]
+    with pytest.raises(ValueError, match="at most 3") as refused:
+        ingredients.resolve(characters, [], [], [c["entity_id"] for c in characters], [], "veo-lite")
+    assert "image ingredients" not in str(refused.value)
 
 
 def test_resolve_refuses_no_reference_at_all_and_a_repeated_id():
@@ -392,6 +467,525 @@ def test_attach_waits_for_options_that_render_late_and_gives_up_after_its_bound(
     with pytest.raises(LookupError, match="0 picker options"):
         asyncio.run(ingredients.attach(never, THU))
     assert never.clock <= ingredients.OPTION_WAIT_MS + 5_000
+
+
+# the "+" dialog
+
+
+def _row(title="peobj1.png", token=TOKEN, workflow=WORKFLOW, **more):
+    return {
+        "title": title,
+        "src": f"https://flow.google.com/asb/{token}=s512-rw",
+        "workflow": workflow,
+        **more,
+    }
+
+
+def _bar_raw(workflow=WORKFLOW, *, refused=False):
+    """A bar chip as the page shows it (out/al/t4.json): a refused image chip is `chip-container-disabled`, never the
+    bare class `disabled`, and carries the error icon."""
+    return {
+        "cls": "chip-container chip-container-disabled" if refused else "chip-container",
+        "text": "error cancel" if refused else "cancel",
+        "error": refused,
+        "src": f"https://flow-content.google/image/{workflow}?Expires=1790000000&KeyName=k&Signature=s",
+    }
+
+
+VOICE_RAW = {"cls": "chip-container", "text": "cancel voice_selection", "error": False, "src": ""}
+CHARACTER_RAW = {
+    "cls": "chip-container",
+    "text": "cancel accessibility_new",
+    "error": False,
+    "src": "https://flow-content.google/image/c0ffee00-0000-4000-8000-000000000000?Expires=1&KeyName=k&Signature=s",
+}
+
+
+class _DialogKeyboard:
+    def __init__(self, page):
+        self.page = page
+        self.pressed = []
+
+    async def press(self, key):
+        self.pressed.append(key)
+        if key == "Escape":
+            self.page.escape()
+
+
+class _Mouse:
+    def __init__(self, page):
+        self.page = page
+
+    async def move(self, x, y):
+        self.page.hovered = None
+
+
+class _DialogLocator:
+    def __init__(self, page, selector, index=0):
+        self.page, self.selector, self.index = page, selector, index
+
+    @property
+    def first(self):
+        return self
+
+    def nth(self, index):
+        return _DialogLocator(self.page, self.selector, index)
+
+    def locator(self, selector):
+        return _DialogLocator(self.page, selector)
+
+    def get_by_text(self, text, exact=False):
+        assert exact, "a category is chosen by its whole label"
+        return _DialogLocator(self.page, f"category {text}")
+
+    async def count(self):
+        return self.page.count(self.selector)
+
+    async def is_visible(self):
+        return True
+
+    async def wait_for(self, state=None, timeout=None):
+        if not self.page.count(self.selector):
+            raise PlaywrightTimeoutError(f"Timeout {timeout}ms exceeded.")
+
+    async def click(self, timeout=None):
+        self.page.click(self.selector, self.index)
+
+    async def fill(self, text):
+        assert self.selector == ingredients.SEARCH, self.selector
+        self.page.query = text
+        self.page.searched_at = self.page.clock
+
+    async def hover(self, timeout=None, force=False):
+        assert self.selector == ingredients.BAR, self.selector
+        self.page.hovered = self.index
+
+
+class _DialogPage:
+    """The "+" dialog as measured on 2026-10-01 (out/al/t4.json, t4b.json): Images is a category, the search box takes
+    a whole title and narrows the rows, a row carries a title and a thumbnail and no id; a click adds the ACTIVE row
+    (the first one) and the dialog closes itself, any other row only becomes active and 'Add to prompt' then adds it;
+    the first Escape after a search only empties the search box."""
+
+    def __init__(
+        self,
+        rows,
+        *,
+        bar=(),
+        confirms=1,
+        active_sticks=False,
+        rows_after_ms=0,
+        unfiltered_ms=0,
+        thumb_after_ms=0,
+        stays_open=False,
+        categories=("Images", "Voices", "Characters"),
+        refused=None,
+        never_closes=False,
+    ):
+        self.rows = [dict(row) for row in rows]
+        self.bar = [dict(chip) for chip in bar]
+        self.confirms = confirms
+        self.active_sticks = active_sticks
+        self.rows_after_ms = rows_after_ms
+        self.unfiltered_ms = unfiltered_ms
+        self.thumb_after_ms = thumb_after_ms
+        self.stays_open = stays_open
+        self.categories = categories
+        self.refused = refused
+        self.never_closes = never_closes
+        self.open = False
+        self.category = None
+        self.query = ""
+        self.searched_at = 0
+        self.active = 0
+        self.hovered = None
+        self.clicked = []
+        self.clock = 0
+        self.keyboard = _DialogKeyboard(self)
+        self.mouse = _Mouse(self)
+
+    def shown(self):
+        if not self.open or self.category != "Images" or self.clock < self.searched_at + self.rows_after_ms:
+            return []
+        if self.clock < self.searched_at + self.unfiltered_ms:
+            return self.rows
+        return [row for row in self.rows if self.query.casefold() in row["title"].casefold()]
+
+    def count(self, selector):
+        if selector == ingredients.BACKDROP:
+            return int(self.open)
+        if selector == ingredients.OPTION:
+            return len(self.shown())
+        if selector == ingredients.CONFIRM:
+            return self.confirms if self.shown() else 0
+        if selector == ingredients.SEARCH:
+            return int(self.open)
+        if selector == ingredients.BAR:
+            return len(self.bar)
+        if selector.startswith("category "):
+            return int(self.open and selector.removeprefix("category ") in self.categories)
+        raise AssertionError(f"unexpected locator {selector}")
+
+    def click(self, selector, index):
+        if selector == ingredients.ADD:
+            assert not self.open, "the + button sits under the open dialog's backdrop"
+            self.open, self.category, self.query, self.active = True, None, "", 0
+            self.clicked.append("+")
+        elif selector.startswith("category "):
+            self.category = selector.removeprefix("category ")
+            self.clicked.append(self.category)
+        elif selector == ingredients.OPTION:
+            row = self.shown()[index]
+            self.clicked.append((row["title"], row["workflow"]))
+            if index == self.active:
+                self.commit(index)
+            elif not self.active_sticks:
+                self.active = index
+        elif selector == ingredients.CONFIRM:
+            self.clicked.append("Add to prompt")
+            self.commit(self.active)
+        else:
+            raise AssertionError(f"unexpected click on {selector}")
+
+    def commit(self, index):
+        row = self.shown()[index]
+        chip = row["chip"] if "chip" in row else _bar_raw(row["workflow"], refused=self.refused is not None)
+        if chip is not None:
+            self.bar.append({**chip, "landed_at": self.clock})
+        if not self.stays_open:
+            self.open = False
+
+    def escape(self):
+        if not self.open or self.never_closes:
+            return
+        if self.query:
+            self.query, self.searched_at = "", self.clock
+        else:
+            self.open = False
+
+    async def wait_for_timeout(self, ms):
+        self.clock += ms
+
+    def locator(self, selector):
+        if selector == ingredients.DIALOG:
+            return _DialogLocator(self, "the dialog")
+        return _DialogLocator(self, selector)
+
+    async def evaluate(self, script, arg=None):
+        if script == ingredients._ROWS_JS:
+            assert arg == ingredients.OPTION
+            return [
+                {
+                    "title": row["title"],
+                    "src": row["src"],
+                    "visible": row.get("visible", True),
+                    "active": index == self.active,
+                }
+                for index, row in enumerate(self.shown())
+            ]
+        if script == ingredients._BAR_JS:
+            assert arg == ingredients.BAR
+            return [
+                {
+                    **{key: value for key, value in chip.items() if key != "landed_at"},
+                    "src": ""
+                    if "landed_at" in chip and self.clock < chip["landed_at"] + self.thumb_after_ms
+                    else chip["src"],
+                }
+                for chip in self.bar
+            ]
+        if script == ingredients._CARD_JS:
+            hovered = self.bar[self.hovered] if self.hovered is not None else None
+            return [self.refused] if hovered is not None and hovered["error"] and self.refused else []
+        raise AssertionError(f"unexpected script {script[:40]!r}")
+
+
+def test_attach_image_searches_the_whole_title_under_images_and_adds_the_row_carrying_the_images_url():
+    page = _DialogPage([_row()])
+    chip = asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert chip == {"kind": "media", "id": WORKFLOW, "text": "peobj1.png"}
+    assert page.clicked == ["+", "Images", ("peobj1.png", WORKFLOW)]
+    assert [each["src"] for each in page.bar] == [_bar_raw()["src"]]
+    assert page.open is False
+    # A submit here would spend with no ledger row: the dialog is driven by clicks and Escape alone.
+    assert "Enter" not in page.keyboard.pressed
+
+
+def test_attach_image_tells_twins_apart_by_the_url_and_adds_a_row_that_is_not_the_active_one_with_add_to_prompt():
+    # Measured 2026-10-01 (t4b.json): the second of two rows titled alike only became active on its click, the preview
+    # showed it, and 'Add to prompt' put it on the bar.
+    twin = _row(token=TWIN_TOKEN, workflow=OTHER_IMAGE_WORKFLOW)
+    page = _DialogPage([twin, _row()])
+    chip = asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert chip["id"] == WORKFLOW
+    assert page.clicked == ["+", "Images", ("peobj1.png", WORKFLOW), "Add to prompt"]
+    assert [each["src"] for each in page.bar] == [_bar_raw()["src"]]
+
+
+def test_attach_image_waits_for_the_search_to_narrow_the_rows_before_it_trusts_an_index():
+    # The first read after typing can still show the unfiltered window, where the image sits at another index.
+    others = [
+        _row(title=f"other{index}.png", token=f"{index}" * 40, workflow=f"w-{index}") for index in range(3)
+    ]
+    page = _DialogPage([*others, _row()], unfiltered_ms=1_500)
+    assert asyncio.run(ingredients.attach_image(page, IMAGE))["id"] == WORKFLOW
+    assert page.clicked == ["+", "Images", ("peobj1.png", WORKFLOW)]
+
+
+def test_attach_image_never_presses_add_to_prompt_while_another_row_is_active():
+    twin = _row(token=TWIN_TOKEN, workflow=OTHER_IMAGE_WORKFLOW)
+    page = _DialogPage([twin, _row()], active_sticks=True)
+    with pytest.raises(LookupError, match="active"):
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert "Add to prompt" not in page.clicked
+    assert page.bar == [] and page.open is False
+
+
+@pytest.mark.parametrize("confirms", [0, 2])
+def test_attach_image_refuses_to_guess_between_add_to_prompt_buttons(confirms):
+    twin = _row(token=TWIN_TOKEN, workflow=OTHER_IMAGE_WORKFLOW)
+    page = _DialogPage([twin, _row()], confirms=confirms)
+    with pytest.raises(LookupError, match=f"{confirms} visible 'Add to prompt' buttons"):
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert page.bar == [] and page.open is False
+
+
+def test_attach_image_refuses_an_image_the_dialog_does_not_offer_and_closes_the_dialog():
+    # Measured 2026-10-01: lily_black_face.png is listed in the project and no row of the dialog carries it.
+    twin = _row(token=TWIN_TOKEN, workflow=OTHER_IMAGE_WORKFLOW)
+    page = _DialogPage([twin])
+    with pytest.raises(LookupError, match="offers no image") as refused:
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert MEDIA in str(refused.value) and "1 row" in str(refused.value)
+    assert page.clicked == ["+", "Images"]
+    assert page.bar == [] and page.open is False
+    assert page.clock <= ingredients.ROW_WAIT_MS + 10_000
+
+
+def test_attach_image_refuses_two_rows_carrying_the_same_url():
+    page = _DialogPage([_row(), _row()])
+    with pytest.raises(LookupError, match="2 rows"):
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert page.clicked == ["+", "Images"] and page.open is False
+
+
+def test_attach_image_never_counts_a_row_it_cannot_see():
+    hidden = {**_row(), "visible": False}
+    page = _DialogPage([hidden, _row()])
+    assert asyncio.run(ingredients.attach_image(page, IMAGE))["id"] == WORKFLOW
+
+
+def test_attach_image_waits_for_rows_that_arrive_late():
+    # An image uploaded a moment ago reaches a picker's results late (measured 2026-09-29 on the frame picker).
+    page = _DialogPage([_row()], rows_after_ms=9_000)
+    assert asyncio.run(ingredients.attach_image(page, IMAGE))["id"] == WORKFLOW
+
+
+def test_attach_image_refuses_a_chip_that_names_another_image():
+    wrong = _row(chip=_bar_raw(OTHER_IMAGE_WORKFLOW))
+    page = _DialogPage([wrong])
+    with pytest.raises(LookupError, match="refusing to generate with the wrong image"):
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+
+
+def test_attach_image_refuses_a_click_that_adds_no_chip():
+    page = _DialogPage([_row(chip=None)])
+    with pytest.raises(LookupError, match="added 0 ingredient chips"):
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+
+
+def test_attach_image_judges_only_the_chip_its_own_click_added():
+    page = _DialogPage([_row()], bar=[_bar_raw(OTHER_IMAGE_WORKFLOW)])
+    assert asyncio.run(ingredients.attach_image(page, IMAGE))["id"] == WORKFLOW
+    assert len(page.bar) == 2
+
+
+def test_attach_image_waits_for_the_thumbnail_before_it_judges_the_chip():
+    # Measured 2026-10-01 (plan AK): read too early, three image chips looked like unknown chips.
+    page = _DialogPage([_row()], thumb_after_ms=4_000)
+    assert asyncio.run(ingredients.attach_image(page, IMAGE))["id"] == WORKFLOW
+    never = _DialogPage([_row()], thumb_after_ms=10**9)
+    with pytest.raises(LookupError, match="refusing to generate with the wrong image"):
+        asyncio.run(ingredients.attach_image(never, IMAGE))
+    assert never.clock <= ingredients.ROW_WAIT_MS + ingredients.BAR_WAIT_MS
+
+
+def test_attach_image_says_in_flows_own_words_why_a_chip_is_refused():
+    # Measured 2026-10-01 (t4.json): a fourth image on Veo 3.1 Lite lands as a chip, greyed, and its hover card reads
+    # the sentence below; the price line still shows 10.
+    page = _DialogPage([_row()], refused=FLOW_SAYS)
+    with pytest.raises(LookupError, match=re.escape(FLOW_SAYS)) as refused:
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert "peobj1.png" in str(refused.value)
+    assert page.hovered is None, "the pointer is moved off the chip, so its card does not cover the composer"
+
+
+def test_attach_image_closes_a_dialog_that_stays_open_after_the_chip_landed():
+    page = _DialogPage([_row()], stays_open=True)
+    assert asyncio.run(ingredients.attach_image(page, IMAGE))["id"] == WORKFLOW
+    assert page.open is False
+    # With a search typed the first Escape only empties the search box (measured 2026-10-01).
+    assert page.keyboard.pressed == ["Escape", "Escape"]
+
+
+def test_attach_image_says_so_when_the_dialog_shows_no_images_category():
+    page = _DialogPage([_row()], categories=("Voices",))
+    with pytest.raises(LookupError, match="no Images category"):
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert page.open is False
+
+
+def test_attach_image_refuses_a_reference_that_carries_no_url_to_match():
+    # An empty tail would match every row.
+    page = _DialogPage([_row()])
+    with pytest.raises(ValueError, match="url"):
+        asyncio.run(ingredients.attach_image(page, THU))
+    with pytest.raises(ValueError, match="url"):
+        asyncio.run(
+            ingredients.attach_image(page, ingredients.Reference("media", MEDIA, "x.png", frozenset({"w"})))
+        )
+    assert page.clicked == []
+
+
+def test_close_dialog_gives_up_on_a_dialog_that_will_not_close():
+    page = _DialogPage([_row()], never_closes=True)
+    page.open = True
+    with pytest.raises(LookupError, match="did not close"):
+        asyncio.run(ingredients.close_dialog(page))
+    assert 1 <= page.keyboard.pressed.count("Escape") <= 6
+
+
+def test_close_dialog_presses_nothing_when_no_dialog_is_open():
+    page = _DialogPage([_row()])
+    asyncio.run(ingredients.close_dialog(page))
+    assert page.keyboard.pressed == []
+
+
+# the ingredient bar
+
+
+@pytest.mark.parametrize(
+    ("raw", "chip"),
+    [
+        (_bar_raw(), {"kind": "image", "id": WORKFLOW, "refused": False}),
+        (_bar_raw(refused=True), {"kind": "image", "id": WORKFLOW, "refused": True}),
+        (VOICE_RAW, {"kind": "voice", "id": "", "refused": False}),
+        # A refused voice chip is the one kind whose class is the bare `disabled` (measured 2026-10-01).
+        (
+            {
+                **VOICE_RAW,
+                "cls": "chip-container disabled",
+                "text": "error cancel voice_selection",
+                "error": True,
+            },
+            {"kind": "voice", "id": "", "refused": True},
+        ),
+        (CHARACTER_RAW, {"kind": "character", "id": "", "refused": False}),
+        # A refused character chip keeps the plain class; only its wrapper turns inactive, and the error icon shows.
+        (
+            {**CHARACTER_RAW, "text": "error cancel accessibility_new", "error": True},
+            {"kind": "character", "id": "", "refused": True},
+        ),
+        ({"cls": "chip-container", "text": "cancel", "error": False, "src": ""}, None),
+        ({"cls": "chip-container", "text": "cancel movie", "error": False, "src": ""}, None),
+    ],
+    ids=[
+        "image",
+        "refused image",
+        "voice",
+        "refused voice",
+        "character",
+        "refused character",
+        "thumbnail not there yet",
+        "a kind this driver does not attach",
+    ],
+)
+def test_a_bar_chip_is_read_by_its_icon_its_thumbnail_and_the_error_icon(raw, chip):
+    read = ingredients._bar_chip(raw)
+    if chip is None:
+        assert read["kind"] == "other" and read["refused"] is False
+    else:
+        assert {key: read[key] for key in chip} == chip
+
+
+def test_a_bar_chip_never_carries_the_signed_url_it_was_read_from():
+    assert "Signature" not in json.dumps(ingredients._bar_chip(_bar_raw()))
+
+
+def _on_bar(kind, mention="", refused=False):
+    return {"kind": kind, "id": mention, "refused": refused, "seen": "cancel"}
+
+
+GOOD_BAR = [_on_bar("character"), _on_bar("image", WORKFLOW)]
+
+
+def test_the_bar_is_right_when_every_reference_has_its_one_chip_and_nothing_else_is_on_it():
+    assert ingredients.bar_problems(GOOD_BAR, [THU, IMAGE]) == []
+    assert ingredients.bar_problems([GOOD_BAR[1]], [IMAGE]) == []
+    assert ingredients.bar_problems([GOOD_BAR[0]], [THU]) == []
+
+
+@pytest.mark.parametrize(
+    ("bar", "says"),
+    [
+        ([GOOD_BAR[0]], "peobj1.png"),
+        ([GOOD_BAR[0], _on_bar("image", OTHER_IMAGE_WORKFLOW)], OTHER_IMAGE_WORKFLOW),
+        ([*GOOD_BAR, _on_bar("image", OTHER_IMAGE_WORKFLOW)], OTHER_IMAGE_WORKFLOW),
+        ([*GOOD_BAR, GOOD_BAR[1]], "2 chips"),
+        ([GOOD_BAR[1]], "0 character chips for 1"),
+        ([GOOD_BAR[0], *GOOD_BAR], "2 character chips for 1"),
+        ([*GOOD_BAR, _on_bar("voice")], "voice"),
+        ([*GOOD_BAR, _on_bar("other")], "none of"),
+        ([GOOD_BAR[0], _on_bar("image", WORKFLOW, refused=True)], "refuses"),
+        ([_on_bar("character", refused=True), GOOD_BAR[1]], "refuses"),
+    ],
+    ids=[
+        "the image chip is gone",
+        "another image in its place",
+        "an image nobody asked for",
+        "the image twice",
+        "the character chip is gone",
+        "a character twice",
+        "a voice nobody asked for",
+        "a chip of no known kind",
+        "Flow refuses the image",
+        "Flow refuses the character",
+    ],
+)
+def test_the_bar_is_wrong_when_it_differs_from_what_was_asked(bar, says):
+    problems = ingredients.bar_problems(bar, [THU, IMAGE])
+    assert problems and says in " ".join(problems), problems
+
+
+def test_check_bar_waits_for_thumbnails_and_then_passes_a_bar_that_is_right():
+    page = _DialogPage([], bar=[{**_bar_raw(), "landed_at": 0}], thumb_after_ms=5_000)
+    chips = asyncio.run(ingredients.check_bar(page, [IMAGE]))
+    assert [(chip["kind"], chip["id"]) for chip in chips] == [("image", WORKFLOW)]
+    assert 5_000 <= page.clock <= ingredients.BAR_WAIT_MS
+
+
+def test_check_bar_refuses_a_refused_chip_in_flows_own_words():
+    page = _DialogPage([], bar=[_bar_raw(refused=True)], refused=FLOW_SAYS)
+    with pytest.raises(LookupError, match=re.escape(FLOW_SAYS)):
+        asyncio.run(ingredients.check_bar(page, [IMAGE]))
+    assert page.hovered is None
+
+
+def test_check_bar_still_refuses_a_refused_chip_whose_card_never_shows():
+    page = _DialogPage([], bar=[_bar_raw(refused=True)], refused=None)
+    with pytest.raises(LookupError, match="refuses"):
+        asyncio.run(ingredients.check_bar(page, [IMAGE]))
+
+
+def test_the_dialog_and_bar_scripts_read_what_was_measured():
+    assert ".asset-title" in ingredients._ROWS_JS and "asset-item-active" in ingredients._ROWS_JS
+    # The error icon marks a refused chip of every kind; the class differs by kind (measured 2026-10-01).
+    assert ".disabled-error-icon" in ingredients._BAR_JS
+    assert ingredients.BAR == "flow-prompt-box flow-ingredient-bar button.chip-container"
+    # The exact label: `aria-label*='ngredient'` also matches a chip, whose label is "Ingredient", and a click on a
+    # chip removes it ($0 probe 2026-10-01).
+    assert ingredients.ADD == "flow-prompt-box button[aria-label='Add ingredients to the prompt box']"
+    assert ingredients.SEARCH == "input[aria-label='Search assets']"
 
 
 # the submit body
@@ -2079,6 +2673,10 @@ class _GeneratePage:
         self.log = log
         self.box_text = box_text
         self.caret_lands = caret_lands
+        self.clock = 0
+
+    async def wait_for_timeout(self, ms):
+        self.clock += ms
 
     def locator(self, selector):
         log = self.log
@@ -2108,6 +2706,30 @@ def _generate_world(monkeypatch, log, *, was=False, chips_on_page=None):
     monkeypatch.setattr(ingredients.parsers, "characters_from_listing", lambda payload: [_character()])
     monkeypatch.setattr(ingredients.parsers, "media", lambda payload: [_image()])
     monkeypatch.setattr(ingredients.parsers, "records", lambda payload: [_record()])
+
+    resolved = []
+    really_resolve = ingredients.resolve
+
+    def resolve(*args):
+        resolved[:] = really_resolve(*args)
+        return list(resolved)
+
+    async def attach_image(page, reference):
+        log.append(f"attach_image {reference.id}")
+        return {"kind": "media", "id": min(reference.mention_ids), "text": reference.title}
+
+    async def bar_chips(page):
+        """The bar as Flow shows it once everything asked for is attached: a mention puts its character there too."""
+        return [
+            _on_bar("character")
+            if reference.kind == "entity"
+            else _on_bar("image", min(reference.mention_ids))
+            for reference in resolved
+        ]
+
+    monkeypatch.setattr(ingredients, "resolve", resolve)
+    monkeypatch.setattr(ingredients, "attach_image", attach_image)
+    monkeypatch.setattr(ingredients, "bar_chips", bar_chips)
 
     async def set_mode(session, project_id, enabled):
         log.append(f"agent {enabled}")
@@ -2245,7 +2867,7 @@ def test_generate_setup_sets_the_model_pins_8s_and_attaches_every_reference_in_o
         return {"kind": reference.kind, "id": min(reference.mention_ids), "text": reference.title}
 
     async def chips_on(page):
-        return [{}, {}]
+        return [{}]
 
     monkeypatch.setattr(ingredients, "apply_settings", apply_settings)
     monkeypatch.setattr(ingredients, "pin_duration", pin_duration)
@@ -2264,12 +2886,14 @@ def test_generate_setup_sets_the_model_pins_8s_and_attaches_every_reference_in_o
     )
     session = type("Session", (), {"page": _GeneratePage(log)})()
     extra = asyncio.run(captured["setup"](session))
+    # The character is mentioned first: the '@' picker is the "+" dialog and keeps the category that dialog last
+    # showed, under which it offers no character (measured 2026-10-01, twice). The image goes in through the dialog.
     assert log[3:] == [
         f"settings omni-flash 9:16 {[ENTITY, MEDIA]}",
         "pin",
         f"click {ingredients.BOX}",
         f"attach {ENTITY}",
-        f"attach {MEDIA}",
+        f"attach_image {MEDIA}",
         "caret end",
     ]
     assert extra == {
@@ -2303,11 +2927,11 @@ def test_generate_setup_refuses_a_prompt_holding_more_chips_than_references(monk
     monkeypatch.setattr(ingredients, "chips_on", chips_on)
     asyncio.run(ingredients.generate(object(), "p-1", prompt=PROMPT, characters=[ENTITY], dry_run=True))
     session = type("Session", (), {"page": _GeneratePage(log)})()
-    with pytest.raises(LookupError, match="2 chips for 1 references"):
+    with pytest.raises(LookupError, match="2 mention chips for 1 characters"):
         asyncio.run(captured["setup"](session))
 
 
-def _prepared(monkeypatch, log, on_page, *, box_text=f"Thu peobj1.png {PROMPT}", caret_lands=True):
+def _prepared(monkeypatch, log, on_page, *, box_text=f"Thu {PROMPT}", caret_lands=True, bar=None):
     """Run generate as a dry run against a stubbed _submit, then return its setup, verify and a page to run them on."""
     captured = _generate_world(monkeypatch, log)
 
@@ -2320,10 +2944,16 @@ def _prepared(monkeypatch, log, on_page, *, box_text=f"Thu peobj1.png {PROMPT}",
     async def chips_on(page):
         return [dict(chip) for chip in on_page]
 
+    async def words(page, index):
+        return FLOW_SAYS
+
     monkeypatch.setattr(ingredients, "apply_settings", nothing)
     monkeypatch.setattr(ingredients, "pin_duration", nothing)
     monkeypatch.setattr(ingredients, "attach", attach)
     monkeypatch.setattr(ingredients, "chips_on", chips_on)
+    monkeypatch.setattr(ingredients, "_refusal_words", words)
+    if bar is not None:
+        monkeypatch.setattr(ingredients, "bar_chips", lambda page: _async([dict(chip) for chip in bar]))
     asyncio.run(
         ingredients.generate(
             object(), "p-1", prompt=PROMPT, characters=[ENTITY], media_ids=[MEDIA], dry_run=True
@@ -2333,21 +2963,43 @@ def _prepared(monkeypatch, log, on_page, *, box_text=f"Thu peobj1.png {PROMPT}",
     return captured["setup"], captured["verify"], type("Session", (), {"page": page})()
 
 
-ON_PAGE = [
-    {"kind": "entity", "id": ENTITY, "entity": ENTITY, "text": "Thu"},
-    {"kind": "media", "id": WORKFLOW, "entity": "", "text": "peobj1.png"},
-]
+# What the prompt box holds: the character's mention chip. The image is a chip on the ingredient bar (GOOD_BAR).
+ON_PAGE = [{"kind": "entity", "id": ENTITY, "entity": ENTITY, "text": "Thu"}]
 
 
 def test_generate_setup_refuses_a_prompt_holding_fewer_chips_than_references(monkeypatch):
-    setup, _, session = _prepared(monkeypatch, [], ON_PAGE[:1])
-    with pytest.raises(LookupError, match="1 chips for 2 references"):
+    setup, _, session = _prepared(monkeypatch, [], [])
+    with pytest.raises(LookupError, match="0 mention chips for 1 characters"):
         asyncio.run(setup(session))
 
 
 def test_generate_setup_refuses_a_box_it_cannot_put_the_caret_at_the_end_of(monkeypatch):
     setup, _, session = _prepared(monkeypatch, [], ON_PAGE, caret_lands=False)
     with pytest.raises(LookupError, match="caret"):
+        asyncio.run(setup(session))
+
+
+@pytest.mark.parametrize(
+    "bar",
+    [
+        [GOOD_BAR[0]],
+        [GOOD_BAR[0], _on_bar("image", WORKFLOW, refused=True)],
+        [*GOOD_BAR, _on_bar("voice")],
+    ],
+    ids=["the image never reached the bar", "Flow refuses the image", "a chip nobody asked for"],
+)
+def test_generate_setup_refuses_a_bar_that_is_not_what_was_asked(monkeypatch, bar):
+    log = []
+    setup, _, session = _prepared(monkeypatch, log, ON_PAGE, bar=bar)
+    with pytest.raises(LookupError, match="refusing to generate"):
+        asyncio.run(setup(session))
+    assert "caret end" not in log
+
+
+def test_generate_setup_says_in_flows_own_words_why_a_chip_on_the_bar_is_refused(monkeypatch):
+    bar = [GOOD_BAR[0], _on_bar("image", WORKFLOW, refused=True)]
+    setup, _, session = _prepared(monkeypatch, [], ON_PAGE, bar=bar)
+    with pytest.raises(LookupError, match=re.escape(FLOW_SAYS)):
         asyncio.run(setup(session))
 
 
@@ -2359,27 +3011,27 @@ def test_generate_verify_passes_the_chips_setup_attached_and_reports_the_prompt_
             {"kind": "entity", "id": ENTITY, "text": "Thu"},
             {"kind": "media", "id": WORKFLOW, "text": "peobj1.png"},
         ],
-        "prompt_text": f"Thu peobj1.png {PROMPT}",
+        "prompt_text": f"Thu {PROMPT}",
     }
 
 
 @pytest.mark.parametrize(
     ("at_click", "box_text"),
     [
-        (ON_PAGE[1:], f"peobj1.png {PROMPT}"),
-        ([{**ON_PAGE[0], "id": OTHER, "entity": OTHER}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
-        ([{**ON_PAGE[0], "entity": ""}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
-        ([{**ON_PAGE[0], "entity": OTHER}, ON_PAGE[1]], f"Thu peobj1.png {PROMPT}"),
+        ([], PROMPT),
+        ([{**ON_PAGE[0], "id": OTHER, "entity": OTHER}], f"Thu {PROMPT}"),
+        ([{**ON_PAGE[0], "entity": ""}], f"Thu {PROMPT}"),
+        ([{**ON_PAGE[0], "entity": OTHER}], f"Thu {PROMPT}"),
         (
             [*ON_PAGE, {"kind": "media", "id": "w-stray", "entity": "", "text": "x.png"}],
-            f"Thu peobj1.png x.png {PROMPT}",
+            f"Thu x.png {PROMPT}",
         ),
-        ([*ON_PAGE, ON_PAGE[0]], f"Thu peobj1.png Thu {PROMPT}"),
-        (ON_PAGE, "Thu peobj1.png stands in a sunny"),
-        (ON_PAGE, f"Thu peobj1.png {PROMPT[: -len(' camera')]}"),
-        (ON_PAGE, f"Thu peobj1.png {PROMPT} {PROMPT}"),
-        (ON_PAGE, f"words an earlier run left Thu peobj1.png {PROMPT}"),
-        (ON_PAGE, f"Thu peobj1.png @peobj1 {PROMPT}"),
+        ([*ON_PAGE, ON_PAGE[0]], f"Thu Thu {PROMPT}"),
+        (ON_PAGE, "Thu stands in a sunny"),
+        (ON_PAGE, f"Thu {PROMPT[: -len(' camera')]}"),
+        (ON_PAGE, f"Thu {PROMPT} {PROMPT}"),
+        (ON_PAGE, f"words an earlier run left Thu {PROMPT}"),
+        (ON_PAGE, f"Thu @Thu {PROMPT}"),
     ],
     ids=[
         "a chip went missing",
@@ -2406,7 +3058,7 @@ def test_generate_verify_refuses_a_prompt_that_changed_after_setup(monkeypatch, 
 
 
 def test_generate_verify_compares_the_box_text_with_its_whitespace_collapsed(monkeypatch):
-    box_text = f"Thu  peobj1.png\n{PROMPT} "
+    box_text = f"Thu  \n{PROMPT} "
     setup, verify, session = _prepared(monkeypatch, [], ON_PAGE, box_text=box_text)
     asyncio.run(setup(session))
     assert asyncio.run(verify(session))["prompt_text"] == box_text
@@ -2414,10 +3066,80 @@ def test_generate_verify_compares_the_box_text_with_its_whitespace_collapsed(mon
 
 def test_generate_verify_ignores_letter_case(monkeypatch):
     # innerText applies CSS text-transform while a chip's textContent does not.
-    box_text = f"THU PEOBJ1.PNG {PROMPT}"
+    box_text = f"THU {PROMPT}"
     setup, verify, session = _prepared(monkeypatch, [], ON_PAGE, box_text=box_text)
     asyncio.run(setup(session))
     assert asyncio.run(verify(session))["prompt_text"] == box_text
+
+
+@pytest.mark.parametrize(
+    "at_click",
+    [
+        [GOOD_BAR[0]],
+        [GOOD_BAR[0], _on_bar("image", OTHER_IMAGE_WORKFLOW)],
+        [*GOOD_BAR, _on_bar("image", OTHER_IMAGE_WORKFLOW)],
+        [*GOOD_BAR, GOOD_BAR[1]],
+        [GOOD_BAR[1]],
+        [*GOOD_BAR, _on_bar("voice")],
+        [*GOOD_BAR, _on_bar("other")],
+        [GOOD_BAR[0], _on_bar("image", WORKFLOW, refused=True)],
+        [_on_bar("character", refused=True), GOOD_BAR[1]],
+    ],
+    ids=[
+        "the image chip is gone",
+        "another image in its place",
+        "an image nobody asked for",
+        "the image twice",
+        "the character chip is gone",
+        "a voice nobody asked for",
+        "a chip of no known kind",
+        "Flow refuses the image",
+        "Flow refuses the character",
+    ],
+)
+def test_generate_verify_refuses_a_bar_that_changed_after_setup(monkeypatch, at_click):
+    # I3 (plan AL): the price line reads the same with a refused chip on the bar (10 on Veo 3.1 Lite with a fourth
+    # image, measured 2026-10-01), so only this read stands between a refused or missing ingredient and the click.
+    setup, verify, session = _prepared(monkeypatch, [], ON_PAGE)
+    asyncio.run(setup(session))
+    monkeypatch.setattr(ingredients, "bar_chips", lambda page: _async([dict(chip) for chip in at_click]))
+    with pytest.raises(LookupError, match="refusing to spend"):
+        asyncio.run(verify(session))
+
+
+def test_generate_verify_says_in_flows_own_words_why_a_chip_is_refused_at_the_click(monkeypatch):
+    setup, verify, session = _prepared(monkeypatch, [], ON_PAGE)
+    asyncio.run(setup(session))
+    refused = [GOOD_BAR[0], _on_bar("image", WORKFLOW, refused=True)]
+    monkeypatch.setattr(ingredients, "bar_chips", lambda page: _async([dict(chip) for chip in refused]))
+    with pytest.raises(LookupError, match=re.escape(FLOW_SAYS)):
+        asyncio.run(verify(session))
+
+
+def test_generate_from_images_alone_types_the_prompt_into_a_box_holding_no_chip(monkeypatch):
+    log = []
+    captured = _generate_world(monkeypatch, log)
+
+    async def nothing(*args):
+        return "pinned"
+
+    async def mention(page, reference):
+        raise AssertionError("an image is never mentioned with '@'")
+
+    monkeypatch.setattr(ingredients, "apply_settings", nothing)
+    monkeypatch.setattr(ingredients, "pin_duration", nothing)
+    monkeypatch.setattr(ingredients, "attach", mention)
+    monkeypatch.setattr(ingredients, "chips_on", lambda page: _async([]))
+    asyncio.run(
+        ingredients.generate(object(), "p-1", prompt=PROMPT, characters=[], media_ids=[MEDIA], dry_run=True)
+    )
+    session = type("Session", (), {"page": _GeneratePage(log, box_text=PROMPT)})()
+    extra = asyncio.run(captured["setup"](session))
+    assert extra["chips"] == [{"kind": "media", "id": WORKFLOW, "text": "peobj1.png"}]
+    assert asyncio.run(captured["verify"](session)) == {
+        "chips": [{"kind": "media", "id": WORKFLOW, "text": "peobj1.png"}],
+        "prompt_text": PROMPT,
+    }
 
 
 async def _async(value):
@@ -3076,8 +3798,10 @@ def test_generate_from_images_alone_still_submits_in_ingredients_mode_under_the_
     assert [r.id for r in captured["watch"].references] == [MEDIA]
 
 
-def test_two_images_with_one_title_are_refused_with_the_way_out():
-    """Plan AE: the refusal named the problem but not the fix, and the fix is a rename before flow_upload."""
+def test_two_images_the_dialog_cannot_tell_apart_are_refused_with_the_way_out():
+    """Plan AE: the refusal named the problem but not the fix, and the fix is a rename before flow_upload. Since plan AL
+    the dialog tells images apart by their url, so only twins whose urls end alike are refused."""
     twin = _image(media="m-twin")
+    records = [_record(), _record(media="m-twin", workflow="w-twin")]
     with pytest.raises(LookupError, match="rename the file"):
-        ingredients.resolve([_character()], [_image(), twin], [_record()], [], [MEDIA], "omni-flash")
+        ingredients.resolve([_character()], [_image(), twin], records, [], [MEDIA], "omni-flash")

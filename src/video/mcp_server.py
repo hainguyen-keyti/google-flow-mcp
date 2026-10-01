@@ -1513,8 +1513,10 @@ def _longer_lengths() -> str:
     description=(
         "Video starring the project's characters (entity ids from flow_characters), with or without images already "
         "in the project (media ids from flow_media, images only), or from those images alone, which is the way to a "
-        "10 s reference video since gen_r2v runs 8 s only. Each goes into the prompt as a Flow @ mention, and "
-        "every chip is checked against its id before anything is spent. It spends credits and is ledgered, at x1: "
+        "10 s reference video since gen_r2v runs 8 s only. A character goes into the prompt as a Flow @ mention and "
+        "an image through the composer's '+' dialog, and every chip is checked against its id before anything is "
+        "spent; a chip Flow refuses (an image over the model's cap, a character taking one of its image slots) stops "
+        "the run before the click, in Flow's own words. It spends credits and is ledgered, at x1: "
         "8 s by default, omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 "
         "credits by Flow's own price table, unmeasured. "
         + _longer_lengths()
