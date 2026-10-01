@@ -287,6 +287,28 @@ def test_the_recipe_of_a_clip_names_its_inputs_the_way_the_other_tools_do():
     ]
 
 
+def test_a_voice_is_told_custom_by_the_id_flow_recorded_not_by_what_the_listing_happens_to_name():
+    # Flow records a voice of your own by its workflow id and a preset by its lowercase name (measured 2026-10-01).
+    # Review of plan AL: read as "not among the listed presets", a preset came out custom, and nameless, whenever a
+    # listing carried no preset section.
+    no_presets = [LISTING[0], LISTING[1], LISTING[2]]
+    no_voice_asset = [
+        LISTING[0],
+        [entry for entry in LISTING[1] if entry[0] != VOICE_MEDIA],
+        LISTING[2],
+        LISTING[3],
+    ]
+
+    assert reader.recipe_from(no_presets, TWO_VOICES[2])["voices"] == [
+        {"voice": VOICE_WF, "name": "LilyVoice", "custom": True},
+        {"voice": "achird", "name": None, "custom": False},
+    ]
+    assert reader.recipe_from(no_voice_asset, TWO_VOICES[2])["voices"] == [
+        {"voice": VOICE_WF, "name": None, "custom": True},
+        {"voice": "achird", "name": "Achird", "custom": False},
+    ]
+
+
 def test_frames_and_characters_are_named_too():
     turn = reader.recipe_from(LISTING, FIRST_AND_LAST[2])
     bakery = reader.recipe_from(

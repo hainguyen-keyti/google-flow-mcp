@@ -46,6 +46,32 @@ def test_ingredients_mode_is_recognised_and_an_unchecked_mode_passes():
     assert composer.mode_visible(["Agent"], "Video")
 
 
+def test_ingredients_mode_is_told_by_its_add_button_never_by_a_chip_or_a_pinned_frame():
+    # Measured 2026-10-02 (out/al/t7_mode.json): the "+" button exists in Ingredients mode only. A chip on the bar is
+    # labelled "Ingredient", and once the composer is put in Frames the same image becomes the start frame, labelled
+    # "Image ingredient": read loosely, a Frames composer holding one image passed for Ingredients, and only the
+    # request check, after the money, would have told (review of plan AL).
+    with_a_chip = [
+        "Ingredient",
+        "Clear prompt",
+        "Add ingredients to the prompt box",
+        "Agent",
+        "Settings trigger",
+    ]
+    in_frames = [
+        "Image ingredient",
+        "Swap first and last frames",
+        "End",
+        "Clear prompt",
+        "Agent",
+        "Settings trigger",
+    ]
+    assert composer.mode_visible(with_a_chip, "Ingredients")
+    assert not composer.mode_visible(in_frames, "Ingredients")
+    assert composer.mode_visible(in_frames, "Frames")
+    assert not composer.mode_visible(["Ingredient", "Agent", "Start generation"], "Ingredients")
+
+
 def test_start_slot_is_only_filled_once_it_carries_an_image():
     assert not composer.start_slot_filled(["Start", "Swap first and last frames", "End"])
     assert composer.start_slot_filled(["Image ingredient, tryon2-02_start.png", "End"])

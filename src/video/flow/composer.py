@@ -532,6 +532,10 @@ def mode_visible(labels: list[str], mode: str) -> bool:
     slot renames itself. Ingredients renders the add-ingredient button. "Start generation" is the submit
     button and never counts: measured 2026-09-13, matching on an exact aria-label declared a working
     Frames composer broken, and matching loosely on "start" would hide a composer with no slots at all.
+
+    Ingredients is told by its add button alone (measured 2026-10-02, out/al/t7_mode.json: "Add ingredients to the
+    prompt box", absent in Frames). A chip on the bar is labelled "Ingredient" and a pinned frame "Image ingredient",
+    so any label holding "ingredient" let a Frames composer with one image pass for Ingredients.
     """
     names = _names(labels)
     if mode == "Frames":
@@ -541,7 +545,7 @@ def mode_visible(labels: list[str], mode: str) -> bool:
             or start_slot_filled(labels)
         )
     if mode == "Ingredients":
-        return any("ingredient" in name for name in names)
+        return any(name.startswith("add ingredient") for name in names)
     return True
 
 
@@ -724,6 +728,7 @@ async def attach_character(session: FlowSession, name: str) -> bool:
 
 _LEFT_JS = """() => ({
   mentions: document.querySelectorAll('flow-prompt-box .mention-chip').length,
+  bar: document.querySelectorAll('flow-prompt-box flow-ingredient-bar button.chip-container').length,
   text: [...document.querySelectorAll("flow-prompt-box [contenteditable='true']")]
     .map(e => e.innerText || '').join('').trim(),
 })"""

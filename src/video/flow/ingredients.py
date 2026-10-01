@@ -48,7 +48,7 @@ from gflow_cli.api.video import Aspect, GenerateVideoRequest, Mode, VideoModel, 
 from gflow_cli.errors import UiSelectorDriftError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from video.flow import agent, composer, parsers, reader
+from video.flow import agent, composer, overlays, parsers, reader
 from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
@@ -91,7 +91,10 @@ ROW_WAIT_MS = 30_000
 ROW_POLL_MS = 1_000
 BAR_WAIT_MS = 12_000
 CARD_WAIT_MS = 3_200
+CARD_GONE_MS = 3_000
 ESCAPES = 5
+# The rows the "+" dialog renders at a time (measured 2026-10-01: 15 of the project's 67 images).
+ROWS_WINDOW = 15
 # The icon a bar chip carries, by the ingredient it stands for; an image chip carries a thumbnail instead.
 ICON_KINDS = {"voice_selection": "voice", "accessibility_new": "character"}
 # Flow's own refusal of an image over a model's cap, read off the composer's hover cards on 2026-10-01
@@ -516,30 +519,50 @@ def bar_problems(bar: list[dict[str, Any]], references: list[Reference]) -> list
     return problems
 
 
-async def _card(page: Any, index: int) -> str:
-    """The card the bar chip at `index` opens on hover, '' when none shows."""
+async def _card(page: Any, index: int) -> list[str]:
+    """What the bar chip at `index` shows on hover: the panes that came up with the pointer on it, none when no card
+    shows. A pane already on the page (a toast is a `.cdk-overlay-pane` too) is not the chip's card.
+
+    Measured 2026-10-02 (out/al/t7_card.json): no pane shows before a hover, a voice's card is up within 0.4 s, an
+    image chip that is not refused shows none, and a card is gone 0.2 s after the pointer leaves. A card that stays
+    is refused here, before any click: left over the composer it could take the click on Start generation."""
+    standing = await page.evaluate(_CARD_JS)
     await page.locator(BAR).nth(index).hover(timeout=3_000, force=True)
-    words: list[str] = []
+    cards: list[str] = []
     waited = 0
-    while not words and waited < CARD_WAIT_MS:
+    while not cards and waited < CARD_WAIT_MS:
         await page.wait_for_timeout(400)
         waited += 400
-        words = await page.evaluate(_CARD_JS)
-    # The card sits over the composer for as long as the pointer stays on the chip.
+        cards = [pane for pane in await page.evaluate(_CARD_JS) if pane not in standing]
     await page.mouse.move(5, 5)
-    await page.wait_for_timeout(600)
-    return " / ".join(words)
+    waited = 0
+    while cards and waited < CARD_GONE_MS:
+        await page.wait_for_timeout(200)
+        waited += 200
+        if not [pane for pane in await page.evaluate(_CARD_JS) if pane in cards]:
+            return cards
+    if cards:
+        raise LookupError(
+            f"the hover card of an ingredient chip stayed open after the pointer left it ({cards[0][:80]!r}); "
+            "refusing to go on with it over the composer"
+        )
+    return cards
 
 
-def _card_voice(card: str) -> str:
-    """The voice a card names: 'play_arrow 0:06 voice_selection Achird' (measured 2026-10-01)."""
-    found = re.search(r"voice_selection\s+(.+)$", card)
-    return found.group(1).strip() if found else ""
+def _card_voice(cards: list[str]) -> str:
+    """The voice a chip's card names: 'play_arrow 0:06 voice_selection Achird' (measured 2026-10-01). Only a pane
+    holding `voice_selection` is a voice's card, and two of them name nothing."""
+    named = [
+        found.group(1).strip() for pane in cards if (found := re.search(r"voice_selection\s+(.+)$", pane))
+    ]
+    return named[0] if len(named) == 1 else ""
 
 
-def _card_refusal(card: str) -> str:
-    """Flow's refusal on a card, which comes before a voice's player when the chip is a voice (measured 2026-10-01)."""
-    return re.split(r"\s*\bplay_arrow\b", card, maxsplit=1)[0].strip()
+def _card_refusal(cards: list[str]) -> str:
+    """Flow's refusal on a chip's card, which comes before a voice's player when the chip is a voice (measured
+    2026-10-01)."""
+    said = [re.split(r"\s*\bplay_arrow\b", pane, maxsplit=1)[0].strip() for pane in cards]
+    return " / ".join(each for each in said if each)
 
 
 async def check_bar(
@@ -553,9 +576,9 @@ async def check_bar(
     bar = await _settled_bar(page)
     for index, chip in enumerate(bar):
         if chip["kind"] == "voice" or chip["refused"]:
-            card = await _card(page, index)
-            chip["name"] = _card_voice(card) if chip["kind"] == "voice" else ""
-            chip["said"] = _card_refusal(card) if chip["refused"] else ""
+            cards = await _card(page, index)
+            chip["name"] = _card_voice(cards) if chip["kind"] == "voice" else ""
+            chip["said"] = _card_refusal(cards) if chip["refused"] else ""
     problems = bar_problems(bar, references)
     if not problems:
         return bar
@@ -596,16 +619,32 @@ async def _add_from_dialog(
     landed on the bar with its place there.
 
     The title is the search text. The rows are read twice alike before an index is trusted, since the first read after
-    typing can still show the unfiltered rows. A click adds only the ACTIVE row, so when it adds no chip 'Add to
-    prompt' is pressed only once the wanted row is the active one. Never Enter.
+    typing can still show the unfiltered rows; rows that never come to rest are refused. A click adds only the ACTIVE
+    row, so when it adds no chip 'Add to prompt' is pressed only once the wanted row is the active one. Never Enter.
+    An overlay this driver did not open is named and left alone (plan AL, I5): Escape would dismiss it unnamed.
     """
 
     def mine_in(rows: list[dict[str, Any]]) -> list[int]:
         return [index for index, row in enumerate(rows) if row.get("visible") and is_mine(row)]
 
     before = await _settled_bar(page)
-    await close_dialog(page)
-    await page.locator(ADD).first.click(timeout=8_000)
+    if await page.locator(BACKDROP).count():
+        if not await page.locator(DIALOG).locator(SEARCH).count():
+            said = " ".join(str(await page.evaluate(composer._OVERLAY_TEXT_JS)).split())[:200]
+            raise LookupError(
+                f"an overlay this driver did not open stands over the composer, saying {said!r}; nothing was pressed"
+            )
+        await close_dialog(page)
+    try:
+        await page.locator(ADD).first.click(timeout=8_000)
+    except PlaywrightTimeoutError:
+        cover = await overlays.covering(page, ADD)
+        if cover is None:
+            raise
+        where = cover["tag"] + (f"#{cover['id']}" if cover.get("id") else "")
+        raise LookupError(
+            f"the composer's '+' button is covered by {where}, which says {cover['text']!r}; nothing was clicked"
+        ) from None
     tab = page.locator(DIALOG).get_by_text(category, exact=True).first
     try:
         await tab.wait_for(state="visible", timeout=DIALOG_WAIT_MS)
@@ -630,6 +669,12 @@ async def _add_from_dialog(
             break
         previous = rows
     mine = mine_in(rows)
+    if mine and rows != previous:
+        await close_dialog(page)
+        raise LookupError(
+            f"the rows of the ingredients dialog never settled while looking for the {what} {reference.title!r} "
+            f"({reference.id}); nothing was attached"
+        )
     if len(mine) != 1:
         shown = [row.get("title") for row in rows if row.get("visible")]
         await close_dialog(page)
@@ -637,6 +682,12 @@ async def _add_from_dialog(
             raise LookupError(
                 f"{len(mine)} rows of the ingredients dialog are the {what} {reference.title!r} ({reference.id}); "
                 "not guessing"
+            )
+        if len(shown) >= ROWS_WINDOW:
+            # Whether a search can match more rows than the dialog renders was never measured.
+            unseen = (
+                f"and the dialog renders a window of {ROWS_WINDOW} rows at a time, so this one may sit below them: "
+                "give it a title of its own (rename the file and flow_upload it again)"
             )
         raise LookupError(
             f"the ingredients dialog offers no {what} {reference.title!r} ({reference.id}): it shows "
@@ -727,17 +778,18 @@ async def attach_voice(page: Any, reference: Reference) -> dict[str, str]:
         "voice",
         f"none of that name {'with' if reference.custom else 'without'} the badge of a voice of your own",
     )
-    card = await _card(page, index)
-    named = _card_voice(card)
+    cards = await _card(page, index)
+    # A refused chip stops the run whatever it names, and Flow's own words are what the caller can act on.
+    if chip["refused"]:
+        raise LookupError(
+            f"Flow refuses the voice {reference.title!r} on this model: {_card_refusal(cards) or 'no reason shown'}; "
+            "refusing to generate"
+        )
+    named = _card_voice(cards)
     if chip["kind"] != "voice" or _norm(named) != _norm(reference.title):
         raise LookupError(
             f"adding the voice {reference.title!r} put a {chip['kind']} chip whose card names {named or 'nothing'!r} "
             "on the bar; refusing to generate with the wrong voice"
-        )
-    if chip["refused"]:
-        raise LookupError(
-            f"Flow refuses the voice {reference.title!r} on this model: {_card_refusal(card) or 'no reason shown'}; "
-            "refusing to generate"
         )
     return {"kind": "voice", "id": reference.id, "text": reference.title}
 
@@ -832,12 +884,13 @@ def _submit_frames(node: Any) -> Any:
             yield from _submit_frames(each)
 
 
-def request_voices(post_data: str) -> list[str] | None:
-    """The voices a submit carries, read off their own field and never off a word of the prompt.
+def request_voices(post_data: str) -> list[list[str]] | None:
+    """The voices each item of a submit carries, read off their own field and never off a word of the prompt.
 
     Measured 2026-10-01 on the submit bodies of plan AK (out/flow_research/body_ak-*.txt): an Ingredients item (rpc
     MZZa6b) carries the voices at [7] as [["<voice of your own: workflow id>"], ["achird"]] and leaves [7] out when no
-    voice rides; a Frames item carries none. None when the body is no submit this can read."""
+    voice rides; a Frames item carries none. Each of them held one item; the items are kept apart so that several,
+    should Flow send one per clip, each answer for themselves. None when the body is no submit this can read."""
     try:
         outer = json.loads(parse_qs(post_data).get("f.req", [""])[0])
     except ValueError:
@@ -849,13 +902,13 @@ def request_voices(post_data: str) -> list[str] | None:
             return None
         if not (isinstance(inner, list) and inner and isinstance(inner[0], list)):
             return None
-        voices: list[str] = []
-        for item in inner[0]:
-            arm = item[7] if isinstance(item, list) and len(item) > 7 and isinstance(item[7], list) else []
-            voices += [
-                each[0] for each in arm if isinstance(each, list) and each and isinstance(each[0], str)
-            ]
-        return voices
+        return [
+            [each[0] for each in arm if isinstance(each, list) and each and isinstance(each[0], str)]
+            for arm in (
+                item[7] if isinstance(item, list) and len(item) > 7 and isinstance(item[7], list) else []
+                for item in inner[0]
+            )
+        ]
     return None
 
 
@@ -1067,6 +1120,7 @@ async def generate(
             "prompt_text": text,
         }
 
+    watch = body_check_for(references) if body_check_for is not None else SubmitBodyCheck(references)
     was = (await agent.set_mode(session, project_id, False)).get("was")
     try:
         result = await composer._submit(
@@ -1083,18 +1137,28 @@ async def generate(
             mode="Ingredients",
             wait=wait,
             dry_run=dry_run,
-            watch=body_check_for(references) if body_check_for is not None else SubmitBodyCheck(references),
+            watch=watch,
             count=count,
             max_credits=max_credits,
             strict_output=True,
             verify=verify,
             click_box=False,
         )
-    except BaseException:
+    except BaseException as failed:
         # A restore that fails must never replace why the run failed, which may say credits were spent.
         if was:
             with contextlib.suppress(Exception):
                 await agent.set_mode(session, project_id, True)
+        # The money path raises for a clip that is paid and still rendering, and the request check below is never
+        # reached: a request heard leaving without a reference is said here, after the advice the error opens with
+        # (review of plan AL, 2026-10-02).
+        heard = getattr(watch, "seen", None)
+        if isinstance(failed, Exception) and not dry_run and heard and not heard.get("ok"):
+            raise RuntimeError(
+                f"{failed}; and Flow's submit request did not carry the references: model keys "
+                f"{heard.get('model_keys')}, missing {heard.get('missing')}, rpc {heard.get('rpcid')}, so the clip "
+                "may not show them"
+            ) from failed
         raise
     if was:
         try:

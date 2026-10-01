@@ -58,6 +58,7 @@ class FlowSession:
         self.client: Any = None
         self.page: Any = None
         self.notices: list[str] = []
+        self.unpressed: list[str] = []
         self._entered = False
 
     async def __aenter__(self) -> Self:
@@ -71,7 +72,7 @@ class FlowSession:
             await self.client.__aenter__()
             self._entered = True
             self.page = await self.client._context.new_page()
-            await overlays.watch_cookie_notice(self.page, self.notices)
+            await overlays.watch_cookie_notice(self.page, self.notices, self.unpressed)
         except BaseException:
             await self._teardown()
             raise

@@ -307,9 +307,10 @@ class VideoBodyCheck:
         if self.seen is not None or "batchexecute" not in url:
             return
         try:
-            body = unquote_plus(request.post_data or "")
+            raw = request.post_data or ""
         except Exception:  # noqa: BLE001
-            body = ""
+            raw = ""
+        body = unquote_plus(raw)
         # The start+end submit (nprQif) names itself only inside f.req (review of plan AB, B1).
         rpcids = parse_qs(urlsplit(url).query).get("rpcids", [""])[0].split(",") + [
             mc._body_rpcid(body) or ""
@@ -319,23 +320,28 @@ class VideoBodyCheck:
             return
         keys = sorted(set(mc.MODEL_KEY.findall(body)))
         lengths = sorted({int(m) for key in keys for m in KEY_LENGTH.findall(key)})
-        sent = ingredients.request_voices(getattr(request, "post_data", "") or "")
+        # The voice field is read off the body as it was sent: decoded first, a prompt holding '&' cuts the form.
+        sent = ingredients.request_voices(raw)
+        # Every item the submit carries must hold every voice asked. A voice nobody asked for is said and is no
+        # error: an unasked chip is refused before the click, and whether Flow names a character's own voice here
+        # was never measured (review of plan AL, 2026-10-02).
+        lacking = [voice for voice in self.voices if not sent or any(voice not in item for item in sent)]
         missing = [
             r.id
             for r in self.references
             if getattr(r, "kind", "") != "voice" and not any(m in body for m in r.mention_ids)
-        ] + [voice for voice in self.voices if voice not in (sent or [])]
-        voices_ok = sorted(sent) == sorted(self.voices) if sent is not None else not self.voices
+        ] + lacking
+        unasked = sorted({voice for item in sent or [] for voice in item if voice not in self.voices})
         self.seen = {
             "rpcid": submit[0],
             "model_keys": keys,
             "lengths": lengths,
             "missing": missing,
             **({"voices": sent} if sent is not None else {}),
+            **({"unasked_voices": unasked} if unasked else {}),
             "ok": bool(body)
             and _mode_matches(self.kind, keys)
             and not missing
-            and voices_ok
             and (self.duration is None or not lengths or lengths == [self.duration])
             and _resolution_matches(self.resolution, keys),
         }

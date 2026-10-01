@@ -440,26 +440,74 @@ def _voice_submit(body):
     return type("Request", (), {"url": url, "post_data": body})()
 
 
+def _judged(body, references):
+    check = video.VideoBodyCheck("r2v", references, None)
+    check.on_request(_voice_submit(body))
+    return check.report()
+
+
 def test_the_body_check_holds_the_voices_to_the_ones_asked_read_off_their_own_field():
     # Plan AL I4: the request names a preset by its lowercase id and a custom voice by its workflow id, at item[7]
     # (measured on the 2026-10-01 bodies). A prompt that names a voice carries none, so the field itself is read.
     from test_ingredients import ACHIRD, IMAGE, LILY, LILY_VOICE, _submit_body
 
-    def judged(body, references):
-        check = video.VideoBodyCheck("r2v", references, None)
-        check.on_request(_voice_submit(body))
-        return check.report()
-
     both = [IMAGE, ACHIRD, LILY]
-    assert judged(_submit_body([LILY_VOICE, "achird"]), both)["ok"] is True
-    assert judged(_submit_body([LILY_VOICE, "achird"]), both)["voices"] == [LILY_VOICE, "achird"]
-    one = judged(_submit_body(["achird"]), both)
+    assert _judged(_submit_body([LILY_VOICE, "achird"]), both)["ok"] is True
+    assert _judged(_submit_body([LILY_VOICE, "achird"]), both)["voices"] == [[LILY_VOICE, "achird"]]
+    one = _judged(_submit_body(["achird"]), both)
     assert one["ok"] is False and one["missing"] == [LILY_VOICE]
-    assert judged(_submit_body([LILY_VOICE, "achird", "leda"]), both)["ok"] is False
-    named_only = judged(_submit_body([], prompt=f"achird and LilyVoice {LILY_VOICE}"), both)
+    named_only = _judged(_submit_body([], prompt=f"achird and LilyVoice {LILY_VOICE}"), both)
     assert named_only["ok"] is False and named_only["missing"] == ["achird", LILY_VOICE]
-    assert judged(_submit_body(["leda"]), [IMAGE])["ok"] is False
-    assert judged(_submit_body(), [IMAGE])["ok"] is True
+    assert _judged(_submit_body(), [IMAGE])["ok"] is True
+    assert "unasked_voices" not in _judged(_submit_body(), [IMAGE])
+
+
+def test_the_body_check_wants_the_voices_in_every_item_the_submit_carries():
+    # Every saved body holds one item. Should Flow send one per clip, each has to carry the voices.
+    from test_ingredients import ACHIRD, IMAGE, LILY_VOICE, _submit_body
+
+    asked = [IMAGE, ACHIRD]
+    assert _judged(_submit_body(["achird"], then=[["achird"]]), asked)["ok"] is True
+    half = _judged(_submit_body(["achird"], then=[[LILY_VOICE]]), asked)
+    assert half["ok"] is False and half["missing"] == ["achird"]
+    bare = _judged(_submit_body(["achird"], then=[None]), asked)
+    assert bare["ok"] is False and bare["missing"] == ["achird"]
+
+
+def test_a_voice_nobody_asked_for_is_reported_and_is_no_error():
+    # Review of plan AL, 2026-10-02: whether Flow names a character's own voice in the request was never measured
+    # (the five clips made with a voiced character keep no voice in their recipe). An unasked voice chip cannot reach
+    # the click, the bar read refuses it, so what rides beside the asked voices is said and is not held against a
+    # clip that carried everything asked.
+    from test_ingredients import ACHIRD, IMAGE, LILY_VOICE, _submit_body
+
+    more = _judged(_submit_body(["achird", LILY_VOICE]), [IMAGE, ACHIRD])
+    assert more["ok"] is True and more["missing"] == [] and more["unasked_voices"] == [LILY_VOICE]
+    alone = _judged(_submit_body([LILY_VOICE]), [IMAGE])
+    assert alone["ok"] is True and alone["unasked_voices"] == [LILY_VOICE]
+
+
+def test_the_body_check_reads_the_voice_field_off_the_body_as_it_was_sent():
+    # Decoded first, a prompt holding '&' cuts the form in two and the voices read as missing after the money.
+    from test_ingredients import ACHIRD, IMAGE, _submit_body
+
+    told = _judged(_submit_body(["achird"], prompt="tea & cake + 100% fun = joy"), [IMAGE, ACHIRD])
+    assert told["ok"] is True and told["voices"] == [["achird"]]
+
+
+def test_a_request_whose_body_cannot_be_read_never_breaks_the_check():
+    from test_ingredients import ACHIRD, IMAGE
+
+    class _Unreadable:
+        url = "https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=MZZa6b"
+
+        @property
+        def post_data(self):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    check = video.VideoBodyCheck("r2v", [IMAGE, ACHIRD], None)
+    check.on_request(_Unreadable())
+    assert check.report()["ok"] is False and "achird" in check.report()["missing"]
 
 
 def test_a_dry_run_needs_no_cap_and_no_job_id(monkeypatch):
@@ -506,6 +554,31 @@ def test_the_ingredients_driver_builds_the_body_check_from_the_references_it_res
     )
     assert captured["watch"] == ("built", [MEDIA])
     assert captured["count"] == 2 and captured["max_credits"] == 10
+
+
+def test_the_ingredients_driver_holds_the_live_price_to_the_surveyed_one_under_a_cap(monkeypatch, tmp_path):
+    """Review of plan AL (and of plan AB before it): under a cap alone, a pin that slips to a cheaper cell passes,
+    and the cheaper clip is paid for. The surveyed price gen_video hands down must reach the money path as the price
+    the live line has to equal; nothing pinned that hand-off on the Ingredients side."""
+    from test_ingredients import MEDIA, _generate_world
+
+    log = []
+    captured = _generate_world(monkeypatch, log)
+    asyncio.run(
+        video.ingredients.generate(
+            object(),
+            "p-1",
+            prompt=PROMPT,
+            characters=[],
+            media_ids=[MEDIA],
+            model="omni-flash",
+            job_id="job-1",
+            out_dir=tmp_path,
+            max_credits=20,
+            table_credits=12,
+        )
+    )
+    assert captured["expected_credits"] == 12 and captured["max_credits"] == 20
 
 
 def test_the_start_and_end_submit_is_heard_though_its_rpc_name_rides_in_the_body():

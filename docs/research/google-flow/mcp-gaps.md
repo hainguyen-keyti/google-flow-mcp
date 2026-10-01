@@ -47,7 +47,15 @@ repo's source at `615bcac`.
     check parses that field rather than searching the body, since a prompt may name a voice;
   - a character that has a voice takes the one voice place of Veo Lite: refused live in Flow's words ("Maximum audio
     ingredients reached (1 allowed)"); only the count of named voices is refused before the browser opens;
-  - after a paid run the clip's recipe is read back and compared (voices, images, characters);
+  - the request check wants every voice asked in every item the submit carries; a voice nobody asked for is said
+    (`unasked_voices`) and is no error, since an unasked chip is refused before the click and whether Flow names a
+    character's own voice in the request was never measured (the five clips made with a voiced character keep no
+    voice in their recipe);
+  - once a paid clip is fetched its recipe is read back and compared (voices, images, characters); a clip still
+    rendering when the wait ends is reported with what the request check heard;
+  - the owner's ear, the same day: every clip made with a voice ingredient sounds less real than `ak-a3`, which
+    carried none (Omni, Frames, one short line). A voice ingredient holds one voice across clips; it is not the
+    way to the most lifelike one;
   - paid once each: Veo 3.1 Lite, one image, LilyVoice, 10 credits; Omni 1.1 Flash 8 s, one image, LilyVoice and
     Achird, 12 credits; request and recipe carried exactly those voices.
   - Not built: `flow_voices` without a character (its signature was a non-goal).
@@ -130,9 +138,15 @@ repo's source at `615bcac`.
   (`glue-cookie-notification-bar`) is dismissed with its own button and the click is recorded in the tool's answer;
   any other overlay fails the call at once with its text and its buttons, and is never clicked.
 - Tier 2.
-- **Closed by plan AL (`f6d2725`)**: Playwright's locator handler presses the notice's own button whenever the bar
-  shows and the tool's answer names it under `dismissed_notices`; anything else covering the Settings trigger is
-  named in the error and never clicked. The dismissed state lives in localStorage `glue.CookieNotificationBar`.
+- **Closed by plan AL (`f6d2725`, tightened after its review)**: Playwright's locator handler presses the notice's
+  own button whenever the bar shows, waits for the bar to leave, and only then records it. An answer that is an
+  object names it under `dismissed_notices`; one an answer cannot carry (a list) rides on the next answer that can,
+  and a failing call carries it as a note. A notice the handler could not press is never clicked, is named under
+  `notices_left_standing` or beside the error of the call that failed, and no longer holds a call to its timeout.
+  What exists for any other overlay is narrower than proposed: it is named, with its text and without its buttons,
+  when it covers the Settings trigger or the "+" button, and when it stands open before the "+" dialog is opened;
+  it is never clicked and never dismissed with Escape. A covered prompt box, dialog row or Start generation still
+  ends in a timeout. The dismissed state lives in localStorage `glue.CookieNotificationBar`.
 
 ### G7. A generation blocks the call for minutes
 
@@ -183,6 +197,13 @@ repo's source at `615bcac`.
 | `scripts/gen_tool_docs.py` `GROUPS` | the groups are typed by hand, so a new tool lands under "Ungrouped" (`clip_recipe` does) | plan AL T3; the script was outside that plan's radius |
 | `docs/mcp-manual-test.md` | written for 44 tools; `clip_recipe` and `gen_video`'s `voices` are not in it | plan AL T6; the file was outside that plan's radius |
 | the `@` picker | it is the "+" dialog and keeps the category that dialog last showed, under which it offers no character; `ingredients.generate` mentions characters before it opens the dialog, any new caller must do the same | $0 probes `out/al/t4.json`, `t4b.json`, 2026-10-01 |
+| `src/video/flow/ingredients.py` `generate`, after `composer._submit` returns | the recipe verdict of a paid clip is raised to the caller and never written to the ledger, whose `done` row is written before the read | review of plan AL, 2026-10-02; the ledger was a non-goal of that plan |
+| `src/video/flow/composer.py` `_submit`, the click on Start generation | a click that times out because something covers the button is recorded `unknown` with "credits may already be spent", though no click was made | review of plan AL; a card left by a hover is now refused before the click, any other cover is not |
+| `src/video/flow/composer.py` `_submit`, price read then `verify` | the live price is read in the confirm pass, then `verify` reads the bar and hovers each voice chip (0.4 s to show, 0.2 s to leave, measured), then the click: a few seconds with no second price read | review of plan AL; `verify` changes no setting |
+| x2 to x4 with ingredients | only the first clip's recipe is read back, and the request's shape for several clips was never measured (the check reads each item on its own) | review of plan AL; no paid x2 run in that plan |
+| the "+" dialog's window of rows | it renders 15 rows at a time; whether a search can match more than it renders was never measured, so a full window is said and the image is not scrolled to | $0 probe 2026-10-01 (15 of 67 images rendered) |
+| `composer._open_settings`, `composer.configure`, `ingredients.pin_duration`, `pin_resolution` | Escape is pressed without looking at what is open; harmless on both paid runs of plan AL | review of plan AL, not in that plan's diff |
+| an image with several records | its row in the "+" dialog is told by the url of the first one listed, while any of its workflow ids passes the chip check | review of plan AL; none of 67 images holds two records |
 
 ## 4. Proposed order (plans to write after approval)
 

@@ -33,7 +33,8 @@ def _replies(first=PROJECT, empty=False):
         "kind": "video",
         "title": "t",
         "created": 1,
-        "model": None,
+        # Measured 2026-10-01 on 69 listed videos: the 68 generated clips carry a model, the saved voice none.
+        "model": "veo_3_1_i2v_lite",
         "prompt": None,
         "size_bytes": 1,
         "status": None,
@@ -208,6 +209,30 @@ def test_the_smoke_reads_the_recipe_of_a_clip_the_listing_named(monkeypatch):
     assert rows["clip_recipe"][0] == "PASS"
 
 
+def test_the_smoke_never_takes_a_saved_voice_for_a_clip(monkeypatch):
+    # Measured 2026-10-01: flow_media lists a voice saved on the account as kind "video", with no model. Taken as
+    # the first video, it would fail this row with "keeps no recipe" on a healthy account (review of plan AL).
+    replies = _replies()
+    voice = {
+        **replies["media"]["media"][0],
+        "id": "voice-1",
+        "title": "LilyVoice",
+        "model": None,
+        "url": None,
+    }
+    replies["media"]["media"].insert(0, voice)
+
+    rows = _rows(monkeypatch, replies)
+
+    assert replies["recipe_asked_for"] == ["m1"]
+    assert rows["clip_recipe"][0] == "PASS"
+
+    only_a_voice = _replies()
+    only_a_voice["media"]["media"] = [voice]
+    rows = _rows(monkeypatch, only_a_voice)
+    assert rows["clip_recipe"][:2] == ("SKIP", "the project holds no generated video to read a recipe from")
+
+
 def test_the_smoke_asks_for_the_tools_gallery_without_a_project(monkeypatch):
     # Since 2026-09-15 flow_tools opens the first project itself when given none; the live gate has to walk
     # that path, or it keeps proving only the branch that already worked.
@@ -230,7 +255,7 @@ def test_an_empty_project_passes_every_row(monkeypatch):
     assert _failing(rows) == {
         "scene_clips": "the project holds no scene to read",
         "flow_voices": "the project holds no character to read voices from",
-        "clip_recipe": "the project holds no video to read a recipe from",
+        "clip_recipe": "the project holds no generated video to read a recipe from",
     }
     assert rows["scene_clips"][0] == "SKIP" and rows["flow_voices"][0] == "SKIP"
     assert rows["clip_recipe"][0] == "SKIP"

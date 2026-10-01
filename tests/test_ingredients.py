@@ -13,7 +13,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen, mcp_server
-from video.flow import clips, composer, ingredients
+from video.flow import clips, composer, ingredients, overlays
 
 ENTITY = "47e5150d-9c4b-4165-a937-4852e9abd194"
 OTHER = "11111111-2222-3333-4444-555555555555"
@@ -227,6 +227,21 @@ def test_resolve_refuses_a_voice_the_project_does_not_offer_and_names_the_ones_i
     with pytest.raises(LookupError, match="no voice named 'Zeus'") as refused:
         _voices("Zeus")
     assert "Leda" in str(refused.value) and "LilyVoice" in str(refused.value)
+
+
+def test_resolve_takes_a_voice_by_its_whole_name_only():
+    # The dialog's search matches inside a name ('Lily' found LilyVoice, measured 2026-10-01), and every later check
+    # reads the voice that was found: a part of a name would buy a voice the caller never named (review of plan AL).
+    with pytest.raises(LookupError, match="no voice named 'Lily'") as refused:
+        _voices("Lily")
+    assert "LilyVoice" in str(refused.value)
+
+
+def test_resolve_tells_an_image_by_its_first_listed_record_as_the_frame_picker_does():
+    # None of the 67 images measured holds two records; the rule only keeps the two pickers telling one image alike.
+    older = _record(workflow="w-older", url=f"https://lh3.googleusercontent.com/asb/{TWIN_TOKEN}")
+    references = ingredients.resolve([], [_image()], [_record(), older], [], [MEDIA], "omni-flash")
+    assert references[0].tail == TAIL
 
 
 @pytest.mark.parametrize(
@@ -621,6 +636,8 @@ class _Mouse:
         self.page = page
 
     async def move(self, x, y):
+        if self.page.hovered is not None:
+            self.page.left = (self.page.hovered, self.page.clock)
         self.page.hovered = None
 
 
@@ -653,16 +670,19 @@ class _DialogLocator:
             raise PlaywrightTimeoutError(f"Timeout {timeout}ms exceeded.")
 
     async def click(self, timeout=None):
+        if self.selector == ingredients.ADD and self.page.add_times_out:
+            raise PlaywrightTimeoutError(f"Locator.click: Timeout {timeout}ms exceeded.")
         self.page.click(self.selector, self.index)
 
     async def fill(self, text):
         assert self.selector == ingredients.SEARCH, self.selector
         self.page.query = text
+        self.page.searched.append(text)
         self.page.searched_at = self.page.clock
 
     async def hover(self, timeout=None, force=False):
         assert self.selector == ingredients.BAR, self.selector
-        self.page.hovered = self.index
+        self.page.hovered, self.page.hovered_at = self.index, self.page.clock
 
 
 class _DialogPage:
@@ -685,6 +705,13 @@ class _DialogPage:
         categories=("Images", "Voices", "Characters"),
         refused=None,
         never_closes=False,
+        card_after_ms=0,
+        card_lingers_ms=0,
+        standing=(),
+        foreign_overlay=None,
+        add_times_out=False,
+        add_covered=None,
+        rows_flicker=False,
     ):
         self.rows = [dict(row) for row in rows]
         self.bar = [dict(chip) for chip in bar]
@@ -697,12 +724,27 @@ class _DialogPage:
         self.categories = categories
         self.refused = refused
         self.never_closes = never_closes
+        # A card shows this long after the pointer reaches its chip and stays this long after it leaves.
+        self.card_after_ms = card_after_ms
+        self.card_lingers_ms = card_lingers_ms
+        # Panes that are on the page whatever is hovered (a toast).
+        self.standing = list(standing)
+        # The text of an overlay nobody here opened, standing with its backdrop over the composer.
+        self.foreign_overlay = foreign_overlay
+        # A click on the "+" button that times out, and what `overlays.covering` then reads over it.
+        self.add_times_out = add_times_out
+        self.add_covered = add_covered
+        self.rows_flicker = rows_flicker
+        self.reads = 0
         self.open = False
         self.category = None
         self.query = ""
+        self.searched = []
         self.searched_at = 0
         self.active = 0
         self.hovered = None
+        self.hovered_at = 0
+        self.left = None
         self.clicked = []
         self.clock = 0
         self.keyboard = _DialogKeyboard(self)
@@ -716,9 +758,22 @@ class _DialogPage:
             return rows
         return [row for row in rows if self.query.casefold() in row["title"].casefold()]
 
+    def card(self):
+        """The hover card on the page now: the hovered chip's once it has shown, or the last one while it lingers."""
+        index = self.hovered
+        if index is not None and self.clock < self.hovered_at + self.card_after_ms:
+            index = None
+        if index is None and self.left is not None and self.clock < self.left[1] + self.card_lingers_ms:
+            index = self.left[0]
+        if index is None:
+            return []
+        chip = self.bar[index]
+        text = chip["card"] if "card" in chip else (self.refused if chip["error"] else None)
+        return [text] if text else []
+
     def count(self, selector):
         if selector == ingredients.BACKDROP:
-            return int(self.open)
+            return int(self.open or self.foreign_overlay is not None)
         if selector == ingredients.OPTION:
             return len(self.shown())
         if selector == ingredients.CONFIRM:
@@ -754,19 +809,24 @@ class _DialogPage:
 
     def commit(self, index):
         row = self.shown()[index]
-        if "chip" in row:
-            chip = row["chip"]
+        if "chips" in row:
+            chips = row["chips"]
+        elif "chip" in row:
+            chips = [row["chip"]]
         elif row.get("category") == "Voices":
-            chip = _voice_raw(row["title"], refused=self.refused)
+            chips = [_voice_raw(row["title"], refused=self.refused)]
         else:
-            chip = _bar_raw(row["workflow"], refused=self.refused is not None)
-        if chip is not None:
-            self.bar.append({**chip, "landed_at": self.clock})
+            chips = [_bar_raw(row["workflow"], refused=self.refused is not None)]
+        self.bar += [{**chip, "landed_at": self.clock} for chip in chips if chip is not None]
         if not self.stays_open:
             self.open = False
 
     def escape(self):
-        if not self.open or self.never_closes:
+        if self.never_closes:
+            return
+        if not self.open:
+            # Escape reaches whatever else is open: an overlay nobody here opened is dismissed by it.
+            self.foreign_overlay = None
             return
         if self.query:
             self.query, self.searched_at = "", self.clock
@@ -784,7 +844,8 @@ class _DialogPage:
     async def evaluate(self, script, arg=None):
         if script == ingredients._ROWS_JS:
             assert arg == ingredients.OPTION
-            return [
+            self.reads += 1
+            rows = [
                 {
                     "title": row["title"],
                     "src": row["src"],
@@ -794,6 +855,13 @@ class _DialogPage:
                 }
                 for index, row in enumerate(self.shown())
             ]
+            # A list that never comes to rest: every read shows the rows in another order.
+            return rows[::-1] if self.rows_flicker and self.reads % 2 else rows
+        if script == composer._OVERLAY_TEXT_JS:
+            return self.foreign_overlay or ""
+        if script == overlays._COVERING_JS:
+            assert arg == ingredients.ADD
+            return self.add_covered
         if script == ingredients._BAR_JS:
             assert arg == ingredients.BAR
             return [
@@ -806,11 +874,7 @@ class _DialogPage:
                 for chip in self.bar
             ]
         if script == ingredients._CARD_JS:
-            if self.hovered is None:
-                return []
-            hovered = self.bar[self.hovered]
-            card = hovered["card"] if "card" in hovered else (self.refused if hovered["error"] else None)
-            return [card] if card else []
+            return [*self.standing, *self.card()]
         raise AssertionError(f"unexpected script {script[:40]!r}")
 
 
@@ -902,6 +966,78 @@ def test_attach_image_refuses_a_chip_that_names_another_image():
         asyncio.run(ingredients.attach_image(page, IMAGE))
 
 
+def test_attach_image_types_the_whole_title_into_the_search_box():
+    page = _DialogPage([_row()])
+    asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert page.searched == ["peobj1.png"]
+
+
+def test_attach_image_refuses_an_add_that_lands_two_chips():
+    page = _DialogPage([_row(chips=[_bar_raw(), _bar_raw(OTHER_IMAGE_WORKFLOW)])])
+    with pytest.raises(LookupError, match="added 2 ingredient chips"):
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+
+
+def test_attach_image_waits_for_an_earlier_chips_thumbnail_before_it_counts_what_it_added():
+    # An earlier chip still without its thumbnail would turn into "another chip" while this one is being added.
+    page = _DialogPage(
+        [_row()], bar=[{**_bar_raw(OTHER_IMAGE_WORKFLOW), "landed_at": 0}], thumb_after_ms=3_000
+    )
+    assert asyncio.run(ingredients.attach_image(page, IMAGE))["id"] == WORKFLOW
+
+
+def test_attach_image_names_an_overlay_it_did_not_open_and_presses_nothing():
+    # Plan AL I5: Escape would dismiss it unnamed, so an overlay that is not the ingredients dialog stops the call.
+    page = _DialogPage([_row()], foreign_overlay="What's new in Flow Try it now Got it")
+    with pytest.raises(LookupError, match="What's new in Flow") as refused:
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert "nothing was pressed" in str(refused.value)
+    assert page.keyboard.pressed == [] and page.clicked == []
+    assert page.foreign_overlay is not None
+
+
+def test_attach_image_closes_its_own_dialog_left_open_before_it_starts():
+    page = _DialogPage([_row()])
+    page.open, page.category = True, "Voices"
+    assert asyncio.run(ingredients.attach_image(page, IMAGE))["id"] == WORKFLOW
+    assert page.keyboard.pressed == ["Escape"]
+    assert page.clicked == ["+", "Images", ("peobj1.png", WORKFLOW)]
+
+
+def test_attach_image_names_what_covers_the_plus_button_instead_of_timing_out():
+    cover = {"tag": "div", "id": "", "text": "Rate your experience"}
+    page = _DialogPage([_row()], add_times_out=True, add_covered=cover)
+    with pytest.raises(LookupError, match="covered by div, which says 'Rate your experience'"):
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    uncovered = _DialogPage([_row()], add_times_out=True)
+    with pytest.raises(PlaywrightTimeoutError):
+        asyncio.run(ingredients.attach_image(uncovered, IMAGE))
+
+
+def test_attach_image_refuses_rows_that_never_settle():
+    twin = _row(token=TWIN_TOKEN, workflow=OTHER_IMAGE_WORKFLOW)
+    page = _DialogPage([twin, _row()], rows_flicker=True)
+    with pytest.raises(LookupError, match="never settled"):
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert page.clicked == ["+", "Images"] and page.open is False
+
+
+def test_attach_image_says_so_when_the_dialogs_window_of_rows_is_full():
+    # Measured 2026-10-01: the dialog renders 15 rows of 67 images. Whether a search can match more than it renders
+    # was never measured, so a full window is said, not passed off as "Flow does not offer it".
+    crowd = [
+        _row(token=f"{index:02d}" + "q" * 38, workflow=f"w-{index}")
+        for index in range(ingredients.ROWS_WINDOW)
+    ]
+    page = _DialogPage(crowd)
+    with pytest.raises(LookupError, match="window") as refused:
+        asyncio.run(ingredients.attach_image(page, IMAGE))
+    assert "still does not offer" not in str(refused.value)
+    few = _DialogPage(crowd[:2])
+    with pytest.raises(LookupError, match="still does not offer"):
+        asyncio.run(ingredients.attach_image(few, IMAGE))
+
+
 def test_attach_image_refuses_a_click_that_adds_no_chip():
     page = _DialogPage([_row(chip=None)])
     with pytest.raises(LookupError, match="added 0 ingredient chips"):
@@ -981,6 +1117,50 @@ def test_attach_voice_adds_the_voice_of_your_own_and_never_the_preset_it_shadows
     twins = _DialogPage([_voice_row("Achird", custom=True), _voice_row("Achird")])
     assert asyncio.run(ingredients.attach_voice(twins, ACHIRD))["id"] == "achird"
     assert twins.clicked[-2:] == [("Achird", "Achird"), "Add to prompt"]
+    mirrored = _DialogPage([_voice_row("LilyVoice"), _voice_row("LilyVoice", custom=True)])
+    assert asyncio.run(ingredients.attach_voice(mirrored, LILY))["id"] == LILY_VOICE
+    assert mirrored.clicked[-2:] == [("LilyVoice", "LilyVoice"), "Add to prompt"]
+    assert [chip["card"] for chip in mirrored.bar] == ["play_arrow 0:06 voice_selection LilyVoice"]
+
+
+def test_attach_voice_takes_the_row_with_that_exact_title():
+    # The search matches inside a title ('Lily' found LilyVoice, measured 2026-10-01), so the row's own title decides.
+    page = _DialogPage([_voice_row("LilyVoice 2", custom=True), _voice_row("LilyVoice", custom=True)])
+    assert asyncio.run(ingredients.attach_voice(page, LILY))["id"] == LILY_VOICE
+    assert page.clicked[-2:] == [("LilyVoice", "LilyVoice"), "Add to prompt"]
+
+
+def test_attach_voice_reads_the_card_of_the_chip_its_own_click_added():
+    # Two voice chips look alike on the bar; only the place of the new one tells which card to read.
+    page = _DialogPage([_voice_row("Achird")], bar=[_voice_raw("Leda")])
+    assert asyncio.run(ingredients.attach_voice(page, ACHIRD)) == {
+        "kind": "voice",
+        "id": "achird",
+        "text": "Achird",
+    }
+
+
+def test_attach_voice_waits_for_a_card_that_shows_late_and_gives_up_after_its_bound():
+    late = _DialogPage([_voice_row("Achird")], card_after_ms=1_500)
+    assert asyncio.run(ingredients.attach_voice(late, ACHIRD))["id"] == "achird"
+    never = _DialogPage([_voice_row("Achird")], card_after_ms=10**9)
+    with pytest.raises(LookupError, match="names 'nothing'"):
+        asyncio.run(ingredients.attach_voice(never, ACHIRD))
+
+
+def test_attach_voice_reads_its_card_beside_a_pane_that_is_not_one():
+    # A toast is a `.cdk-overlay-pane` too.
+    page = _DialogPage([_voice_row("Achird")], standing=["Image added to your project"])
+    assert asyncio.run(ingredients.attach_voice(page, ACHIRD))["id"] == "achird"
+
+
+def test_attach_voice_keeps_flows_refusal_when_the_card_names_no_voice():
+    # A refused chip stops the run whatever it is; Flow's own words are worth more than "wrong voice".
+    refused = {**_voice_raw("Achird", refused=AUDIO_CAP_SAYS), "card": AUDIO_CAP_SAYS}
+    page = _DialogPage([_voice_row("Achird", chip=refused)])
+    with pytest.raises(LookupError, match=re.escape(AUDIO_CAP_SAYS)) as failed:
+        asyncio.run(ingredients.attach_voice(page, ACHIRD))
+    assert "wrong voice" not in str(failed.value)
 
 
 def test_attach_voice_refuses_a_voice_the_dialog_does_not_offer():
@@ -1043,8 +1223,38 @@ def test_attach_image_never_takes_a_voice_row_for_its_image():
 )
 def test_a_hover_card_gives_the_voices_name_and_flows_refusal_apart(card, name, said):
     # The cards as read on 2026-10-01 (out/al/t5.json, t1b.json, t4.json).
-    assert ingredients._card_voice(card) == name
-    assert ingredients._card_refusal(card) == said
+    cards = [card] if card else []
+    assert ingredients._card_voice(cards) == name
+    assert ingredients._card_refusal(cards) == said
+
+
+@pytest.mark.parametrize(
+    ("cards", "name"),
+    [
+        (["play_arrow 0:06 voice_selection Lily Night Voice"], "Lily Night Voice"),
+        (["Image added to your project", "play_arrow 0:06 voice_selection Achird"], "Achird"),
+        (["play_arrow 0:06 voice_selection Achird", "Image added to your project"], "Achird"),
+        (["play_arrow 0:06 voice_selection play_arrow girl"], "play_arrow girl"),
+        (["play_arrow 0:06 voice_selection Achird", "play_arrow 0:04 voice_selection Leda"], ""),
+        (["Image added to your project"], ""),
+    ],
+    ids=[
+        "a name of several words",
+        "a toast before the card",
+        "a toast after the card",
+        "a name holding an icon's word",
+        "two cards naming two voices",
+        "no card names a voice",
+    ],
+)
+def test_a_voice_is_named_by_the_one_pane_that_is_a_voice_card(cards, name):
+    assert ingredients._card_voice(cards) == name
+
+
+def test_a_refusal_is_read_off_every_pane_and_never_holds_a_voices_player():
+    cards = ["Maximum audio ingredients reached (1 allowed) play_arrow 0:06 voice_selection play_arrow girl"]
+    assert ingredients._card_refusal(cards) == "Maximum audio ingredients reached (1 allowed)"
+    assert ingredients._card_refusal(["play_arrow 0:06 voice_selection Achird"]) == ""
 
 
 def test_close_dialog_gives_up_on_a_dialog_that_will_not_close():
@@ -1126,7 +1336,11 @@ def _on_bar(kind, mention="", refused=False, name=""):
 def _show_bar(monkeypatch, chips):
     """The ingredient bar a generate test reads from here on, its hover cards included."""
     monkeypatch.setattr(ingredients, "bar_chips", lambda page: _async([dict(chip) for chip in chips]))
-    monkeypatch.setattr(ingredients, "_card", lambda page, index: _async(chips[index].get("card", "")))
+    monkeypatch.setattr(
+        ingredients,
+        "_card",
+        lambda page, index: _async([chips[index]["card"]] if "card" in chips[index] else []),
+    )
 
 
 GOOD_BAR = [_on_bar("character"), _on_bar("image", WORKFLOW)]
@@ -1171,6 +1385,31 @@ def test_check_bar_refuses_a_voice_flow_refuses_in_its_own_words():
     with pytest.raises(LookupError, match=re.escape(AUDIO_CAP_SAYS)) as refused:
         asyncio.run(ingredients.check_bar(page, [IMAGE, ACHIRD]))
     assert "play_arrow" not in str(refused.value)
+
+
+def test_check_bar_reads_one_card_at_a_time_while_the_last_one_lingers():
+    # Measured 2026-10-02 (out/al/t7_card.json): a card is gone 0.2 s after the pointer leaves its chip.
+    page = _DialogPage(
+        [], bar=[_bar_raw(), _voice_raw("Achird"), _voice_raw("LilyVoice")], card_lingers_ms=400
+    )
+    chips = asyncio.run(ingredients.check_bar(page, [IMAGE, ACHIRD, LILY]))
+    assert [chip["name"] for chip in chips if chip["kind"] == "voice"] == ["Achird", "LilyVoice"]
+    assert page.card() == [], "no card is left over the composer"
+
+
+def test_check_bar_refuses_to_go_on_under_a_card_that_stays_open():
+    # A card left over the composer could take the click on Start generation, and a click that never happened would
+    # then be reported as "credits may already be spent" (review of plan AL, 2026-10-02). Before the click it is a
+    # plain refusal.
+    page = _DialogPage([], bar=[_bar_raw(), _voice_raw("Achird")], card_lingers_ms=10**9)
+    with pytest.raises(LookupError, match="stayed open"):
+        asyncio.run(ingredients.check_bar(page, [IMAGE, ACHIRD]))
+
+
+def test_check_bar_reads_a_voices_card_beside_a_toast():
+    page = _DialogPage([], bar=[_bar_raw(), _voice_raw("Achird")], standing=["Image added to your project"])
+    chips = asyncio.run(ingredients.check_bar(page, [IMAGE, ACHIRD]))
+    assert [chip["name"] for chip in chips if chip["kind"] == "voice"] == ["Achird"]
 
 
 def test_the_bar_is_right_when_every_reference_has_its_one_chip_and_nothing_else_is_on_it():
@@ -1240,6 +1479,12 @@ def test_the_dialog_and_bar_scripts_read_what_was_measured():
     # chip removes it ($0 probe 2026-10-01).
     assert ingredients.ADD == "flow-prompt-box button[aria-label='Add ingredients to the prompt box']"
     assert ingredients.SEARCH == "input[aria-label='Search assets']"
+    # No test runs these scripts in a page, so what each must look at is pinned by name: the badge that tells a voice
+    # of your own, only panes that are on screen, and the element really under a control's middle.
+    assert ".custom-voice-badge-icon')" in ingredients._ROWS_JS
+    assert ".cdk-overlay-pane" in ingredients._CARD_JS and "offsetParent !== null" in ingredients._CARD_JS
+    assert "elementFromPoint" in overlays._COVERING_JS and "top.contains(el)" in overlays._COVERING_JS
+    assert "flow-ingredient-bar button.chip-container" in composer._LEFT_JS
 
 
 # the submit body
@@ -1281,28 +1526,41 @@ def test_body_check_judges_the_first_submit_and_ignores_a_later_one():
     assert check.report()["ok"] is True and check.report()["missing"] == []
 
 
-def _submit_body(voices=None, images=(WORKFLOW,), key="veo_3_1_r2v_lite", prompt=PROMPT, rpcid="MZZa6b"):
+def _submit_body(
+    voices=None, images=(WORKFLOW,), key="veo_3_1_r2v_lite", prompt=PROMPT, rpcid="MZZa6b", then=()
+):
     """An Ingredients submit in its measured shape (out/flow_research/body_ak-*.txt, 2026-10-01): the item carries the
-    prompt, the images as [None, workflow id], the model key, and at [7] the voices when any ride."""
-    item = [
-        [None, None, [[[prompt]]]],
-        [[None, w] for w in images],
-        key,
-        1,
-        None,
-        [None, None, None, None, "s" * 36],
-    ]
-    if voices is not None:
-        item += [None, [[voice] for voice in voices]]
-    inner = json.dumps([[item], [None, 22, None, None, None, "p-1"], ["x" * 36, 2]])
+    prompt, the images as [None, workflow id], the model key, and at [7] the voices when any ride. `then` adds one
+    more item for each voice list in it: every measured body held one item, and several were never seen."""
+
+    def item(spoken):
+        made = [
+            [None, None, [[[prompt]]]],
+            [[None, w] for w in images],
+            key,
+            1,
+            None,
+            [None, None, None, None, "s" * 36],
+        ]
+        return made if spoken is None else [*made, None, [[voice] for voice in spoken]]
+
+    items = [item(voices), *(item(spoken) for spoken in then)]
+    inner = json.dumps([items, [None, 22, None, None, None, "p-1"], ["x" * 36, 2]])
     return "f.req=" + quote_plus(json.dumps([[[rpcid, inner, None, "generic"]]])) + "&at=AJpMio%3A1790000000"
 
 
 def test_request_voices_reads_the_voices_a_submit_carries_off_their_own_field():
-    assert ingredients.request_voices(_submit_body([LILY_VOICE, "achird"])) == [LILY_VOICE, "achird"]
-    assert ingredients.request_voices(_submit_body()) == []
+    assert ingredients.request_voices(_submit_body([LILY_VOICE, "achird"])) == [[LILY_VOICE, "achird"]]
+    assert ingredients.request_voices(_submit_body()) == [[]]
     # A prompt that names a voice carries no voice.
-    assert ingredients.request_voices(_submit_body(prompt="achird and LilyVoice speak")) == []
+    assert ingredients.request_voices(_submit_body(prompt="achird and LilyVoice speak")) == [[]]
+
+
+def test_request_voices_keeps_each_item_of_a_submit_apart():
+    # Review of plan AL: every saved body holds one item. Should Flow send one per clip for x2, a list summed over
+    # the items would count each voice twice, so each item answers for itself.
+    body = _submit_body(["achird"], then=[["achird"], None])
+    assert ingredients.request_voices(body) == [["achird"], ["achird"], []]
 
 
 @pytest.mark.parametrize(
@@ -1595,7 +1853,7 @@ class _SubmitPage:
     async def evaluate(self, script, arg=None):
         assert script == composer._LEFT_JS
         self.log.append("left read")
-        return {"mentions": self.mentions, "text": ""}
+        return {"mentions": self.mentions, "bar": 0, "text": ""}
 
 
 class _SubmitSession:
@@ -1768,7 +2026,8 @@ def test_submit_dry_run_never_clicks_never_reads_the_balance_and_writes_no_ledge
         "quoted_credits": 12,
         "expected_credits": 12,
         "price_ok": True,
-        "composer_left": {"mentions": 0, "text": ""},
+        # The bar is read too: images and voices are chips there, not mentions (review of plan AL, 2026-10-02).
+        "composer_left": {"mentions": 0, "bar": 0, "text": ""},
         "chips": [{"kind": "entity", "id": ENTITY, "text": "Thu"}],
     }
     assert "click" not in log and "snapshot" not in log and "credits" not in log
@@ -3031,7 +3290,7 @@ def _generate_world(monkeypatch, log, *, was=False, chips_on_page=None):
         return [dict(chip) for chip in shown]
 
     async def card(page, index):
-        return shown[index].get("card", "")
+        return [shown[index]["card"]] if "card" in shown[index] else []
 
     monkeypatch.setattr(ingredients, "resolve", resolve)
     monkeypatch.setattr(ingredients, "attach_image", attach_image)
@@ -4183,6 +4442,11 @@ def test_the_recipe_check_passes_a_clip_that_kept_everything_it_was_given():
         ),
         ({**KEPT, "characters": []}, [ENTITY], []),
         ({**KEPT, "characters": [{"entity_id": ENTITY}, {"entity_id": OTHER}]}, [], [OTHER]),
+        (
+            {**KEPT, "reference_images": [], "frames": [{"slot": "start", "workflow_id": WORKFLOW}]},
+            [MEDIA],
+            [],
+        ),
     ],
     ids=[
         "a voice dropped",
@@ -4191,6 +4455,7 @@ def test_the_recipe_check_passes_a_clip_that_kept_everything_it_was_given():
         "an image nobody asked for",
         "the character dropped",
         "a character nobody asked for",
+        "the image kept as a frame, which is another kind of run",
     ],
 )
 def test_the_recipe_check_names_what_the_clip_dropped_or_gained(recipe, missing, unexpected):
@@ -4286,8 +4551,7 @@ def test_a_dry_run_reads_no_recipe(monkeypatch, tmp_path):
     assert "recipe_check" not in result and not [line for line in log if line.startswith("recipe")]
 
 
-def test_a_paid_run_whose_request_carried_other_voices_says_which_it_sent(monkeypatch, tmp_path):
-    # A voice nobody asked for leaves `missing` empty, so the error names the voices the request carried.
+def test_a_paid_run_whose_request_lacked_a_voice_says_which_voices_it_did_send(monkeypatch, tmp_path):
     log = []
     _paid_world(monkeypatch, log, recipe=KEPT_ONE_VOICE)
 
@@ -4298,12 +4562,62 @@ def test_a_paid_run_whose_request_carried_other_voices_says_which_it_sent(monkey
             "body_check": {
                 "rpcid": "MZZa6b",
                 "model_keys": ["veo_3_1_r2v_lite"],
-                "missing": [],
-                "voices": ["achird", "leda"],
+                "missing": ["achird"],
+                "voices": [["leda"]],
                 "ok": False,
             },
         }
 
     monkeypatch.setattr(ingredients.composer, "_submit", submit)
-    with pytest.raises(RuntimeError, match=re.escape("voices sent ['achird', 'leda']")):
+    with pytest.raises(RuntimeError, match=re.escape("voices sent [['leda']]")) as caught:
         _paid_run(tmp_path)
+    assert "missing ['achird']" in str(caught.value)
+
+
+STILL_RENDERING = (
+    "do not run this job again: the clip m-new exists but no file came back (still rendering after 360s); fetch it "
+    "with flow_download once it has finished; spent 10 credits; job job-1"
+)
+
+
+@pytest.mark.parametrize(
+    ("seen", "told"),
+    [
+        ({"rpcid": "MZZa6b", "model_keys": ["veo_3_1_r2v_lite"], "missing": ["achird"], "ok": False}, True),
+        ({"rpcid": "MZZa6b", "model_keys": ["veo_3_1_r2v_lite"], "missing": [], "ok": True}, False),
+        (None, False),
+    ],
+    ids=["the request dropped a voice", "the request carried everything", "no request was heard"],
+)
+def test_a_clip_still_rendering_never_hides_a_request_that_dropped_a_voice(monkeypatch, tmp_path, seen, told):
+    # Review of plan AL, 2026-10-02: the money path raises for a clip that is paid and not fetched yet, and the
+    # request check sat behind that raise, so a clip made without its voice reached the caller as one to go and
+    # download. The advice still leads: an agent reads the head of an error.
+    log = []
+    _paid_world(monkeypatch, log, recipe=KEPT_ONE_VOICE)
+
+    async def submit(session, project_id, **kwargs):
+        kwargs["watch"].seen = seen
+        raise RuntimeError(STILL_RENDERING)
+
+    monkeypatch.setattr(ingredients.composer, "_submit", submit)
+    with pytest.raises(RuntimeError) as caught:
+        _paid_run(tmp_path)
+    said = str(caught.value)
+    assert said.startswith(STILL_RENDERING)
+    assert ("did not carry" in said and "achird" in said) is told, said
+    assert "agent True" in log
+
+
+def test_a_failure_before_any_click_is_passed_on_as_it_is(monkeypatch, tmp_path):
+    log = []
+    _paid_world(monkeypatch, log, recipe=KEPT_ONE_VOICE)
+    refused = LookupError("Flow refuses the voice 'Achird' on this model; refusing to generate")
+
+    async def submit(session, project_id, **kwargs):
+        raise refused
+
+    monkeypatch.setattr(ingredients.composer, "_submit", submit)
+    with pytest.raises(LookupError) as caught:
+        _paid_run(tmp_path)
+    assert caught.value is refused

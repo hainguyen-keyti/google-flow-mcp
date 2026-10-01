@@ -140,11 +140,13 @@ def recipe_from(
         "kind": recipe["kind"],
         "frames": [{"slot": frame["slot"], **image(frame["workflow_id"])} for frame in recipe["frames"]],
         "reference_images": [image(workflow) for workflow in recipe["reference_images"]],
+        # Flow records a voice of your own by its workflow id and a preset by its lowercase name (measured
+        # 2026-10-01), so the id itself tells which it is, whatever this listing happens to name.
         "voices": [
             {
                 "voice": voice,
                 "name": presets.get(voice) or voice_media.get(voice),
-                "custom": voice not in presets,
+                "custom": parsers._uuid(voice),
             }
             for voice in recipe["voices"]
         ],

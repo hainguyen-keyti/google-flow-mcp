@@ -38,6 +38,7 @@ from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 
 from video import mcp_server
+from video.flow import parsers
 
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
 
@@ -55,7 +56,8 @@ READ_ONLY_PER_SCENE = ("scene_clips",)
 READ_ONLY_PER_CHARACTER = ("flow_voices",)
 # Reads what one clip was made from, so it needs a video the project's own listing named.
 READ_ONLY_PER_MEDIA = ("clip_recipe",)
-RECIPE_KINDS = ("frames", "ingredients", "derived", "extend", "unknown")
+# The kinds the parser itself can answer, read from it so the two never drift apart.
+RECIPE_KINDS = (*parsers._RECIPE_KINDS.values(), "unknown")
 
 # Free but they CHANGE things. Never called here; see I4 in the plan.
 MUTATING = (
@@ -527,13 +529,17 @@ async def run(findings):
                     )
                 findings.append({"name": "flow_media filtered", "status": status, "detail": detail})
 
-                # Taken from the plain listing, so a broken versions read fails its own rows and not this one.
+                # Taken from the plain listing, so a broken versions read fails its own rows and not this one. A voice
+                # saved on the account is listed as a video too, with no model (measured 2026-10-01), and has no recipe.
                 grid = listed.get("media") if isinstance(listed, dict) else None
                 video_id = next(
                     (
                         row.get("id")
                         for row in grid or []
-                        if isinstance(row, dict) and row.get("kind") == "video" and row.get("id")
+                        if isinstance(row, dict)
+                        and row.get("kind") == "video"
+                        and row.get("model")
+                        and row.get("id")
                     ),
                     None,
                 )
@@ -550,7 +556,7 @@ async def run(findings):
                         {
                             "name": "clip_recipe",
                             "status": "SKIP",
-                            "detail": "the project holds no video to read a recipe from",
+                            "detail": "the project holds no generated video to read a recipe from",
                         }
                     )
 

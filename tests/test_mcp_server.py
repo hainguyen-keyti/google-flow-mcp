@@ -2034,7 +2034,69 @@ def test_a_notice_the_session_dismissed_is_named_in_the_tools_answer(monkeypatch
 
     assert asyncio.run(backend._with(pressed_it)) == {"balance": 75, "dismissed_notices": [said]}
     assert asyncio.run(backend._with(saw_none)) == {"balance": 75}
+    # A list answer has no room for it, and Flow shows the notice once: the next answer that can carry it does
+    # (review of plan AL, 2026-10-02: a press met by flow_projects went unreported for good).
     assert asyncio.run(backend._with(answers_a_list)) == [{"id": "P"}]
+    assert asyncio.run(backend._with(saw_none)) == {"balance": 75, "dismissed_notices": [said]}
+    assert asyncio.run(backend._with(saw_none)) == {"balance": 75}
+
+
+def _browserless_backend(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        mcp_server,
+        "FlowSession",
+        lambda profile: FlowSession(profile_dir=tmp_path, client_factory=_BrowserlessClient),
+    )
+    return mcp_server.Backend()
+
+
+def test_a_call_that_fails_still_says_which_notice_the_driver_pressed(monkeypatch, tmp_path):
+    backend = _browserless_backend(monkeypatch, tmp_path)
+    said = "flow.google.com uses cookies from Google ... OK, got it"
+
+    async def pressed_then_failed(session):
+        session.notices.append(said)
+        raise RuntimeError("Start generation was clicked, so credits may already be spent")
+
+    with pytest.raises(RuntimeError) as failed:
+        asyncio.run(backend._with(pressed_then_failed))
+    # The error's own words stay first and untouched: an agent reads at most the head of it.
+    assert str(failed.value) == "Start generation was clicked, so credits may already be spent"
+    assert failed.value.__notes__ == [f"the driver pressed Flow's cookie notice: {said}"]
+
+
+def test_a_notice_the_driver_could_not_press_is_named_beside_whatever_failed_after_it(monkeypatch, tmp_path):
+    # Review of plan AL, 2026-10-02: the handler's own error never reaches a caller, so the session keeps what it
+    # could not press and the failing call carries it.
+    backend = _browserless_backend(monkeypatch, tmp_path)
+    left = "Flow's cookie notice shows 2 accept buttons, not one; nothing was clicked: 'uses cookies'"
+
+    async def left_standing_then_failed(session):
+        session.unpressed.append(left)
+        raise TimeoutError("Locator.click: Timeout 8000ms exceeded.")
+
+    async def left_standing_and_read_anyway(session):
+        session.unpressed.append(left)
+        return {"balance": 75}
+
+    with pytest.raises(TimeoutError) as failed:
+        asyncio.run(backend._with(left_standing_then_failed))
+    assert failed.value.__notes__ == [left]
+    assert asyncio.run(backend._with(left_standing_and_read_anyway)) == {
+        "balance": 75,
+        "notices_left_standing": [left],
+    }
+
+
+def test_the_agent_is_shown_what_a_failed_call_noted_about_flows_notice(monkeypatch, tmp_path):
+    left = "Flow's cookie notice shows 2 accept buttons, not one; nothing was clicked: 'uses cookies'"
+    failure = TimeoutError("Locator.click: Timeout 8000ms exceeded.\nCall log:\n  - cookie: SID=sid-secret")
+    failure.add_note(left)
+
+    text = _error_text_of_a_failing_generation(monkeypatch, tmp_path, failure)
+
+    assert text.index("Timeout 8000ms exceeded") < text.index("2 accept buttons"), text
+    assert "sid-secret" not in text and "Call log" not in text, text
 
 
 def test_a_call_cancelled_while_it_waits_for_the_browser_does_not_wedge_later_calls(monkeypatch, tmp_path):

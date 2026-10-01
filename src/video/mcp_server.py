@@ -194,13 +194,31 @@ class Backend:
         self.profile = profile
         self.out_dir = out_dir
         self._running: set[str] = set()
+        self._unreported: list[str] = []
 
     async def _with(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
+        """Run one call in its own session and say what the session did to Flow's cookie notice.
+
+        The owner lets the driver press that notice (2026-10-01), and a call that did so says it did. Flow shows the
+        notice once, so a press that an answer cannot carry (a list) is kept for the next answer that can, and a
+        failing call carries it as a note, as it does a notice that was left standing (review of plan AL)."""
         async with FlowSession(self.profile) as session:
-            result = await fn(session)
-            # The owner lets the driver press Flow's cookie notice (2026-10-01); a call that did so says it did.
-            if session.notices and isinstance(result, dict):
-                result["dismissed_notices"] = list(session.notices)
+            try:
+                result = await fn(session)
+            except Exception as exc:
+                for said in [*self._unreported, *session.notices]:
+                    exc.add_note(f"the driver pressed Flow's cookie notice: {said}")
+                self._unreported.clear()
+                for left in session.unpressed:
+                    exc.add_note(left)
+                raise
+            self._unreported += session.notices
+            if isinstance(result, dict):
+                if self._unreported:
+                    result["dismissed_notices"] = list(self._unreported)
+                    self._unreported.clear()
+                if session.unpressed:
+                    result["notices_left_standing"] = list(session.unpressed)
             return result
 
     def _editor_out_dir(self, out_dir: str | None) -> Path:
@@ -701,7 +719,9 @@ class TellingServer(MCPServer):
             cause = exc.__cause__ or exc
             # A Playwright error appends a call log listing request headers, cookies included: drop it whole.
             text = str(cause).split("\nCall log:")[0]
-            detail = redact_error_detail(gen_mod._scrub(f"{type(cause).__name__}: {text}"))
+            # What Backend._with noted about Flow's cookie notice comes after the error's own words.
+            notes = "".join(f"; {note}" for note in getattr(cause, "__notes__", []))
+            detail = redact_error_detail(gen_mod._scrub(f"{type(cause).__name__}: {text}{notes}"))
             # Only the scrubbed line is logged: the raw traceback would put the same cookies in the server's stderr.
             logging.getLogger(__name__).error("tool %s failed: %s", name, detail)
             raise ToolError(f"Error executing tool {name}: {detail}") from cause
@@ -1314,9 +1334,10 @@ async def flow_uploads(project_id: str) -> str:
         "the clip it came from. Use it after a paid generation to check that the clip carried what was asked: Flow "
         "drops a character typed into a Frames prompt without saying so (measured 2026-10-01), and this is where "
         "that shows. A voice is listed as Flow recorded it: a preset by its lowercase name, a voice made on this "
-        "account by its id, with `custom` true. Defaults to the newest version of the media, never an upscale; "
-        "pass workflow_id (from flow_media with all_versions=true) to read one specific version. An image keeps no "
-        "recipe and is refused. Free."
+        "account by its id (a uuid), which is what `custom` true means; `name` is null when this project's listing "
+        "does not name it. Defaults to the newest version of the media, passing over the upscale a 1080p download "
+        "leaves beside it; pass workflow_id (from flow_media with all_versions=true) to read one specific version. "
+        "An image keeps no recipe and is refused. Free."
     ),
 )
 async def clip_recipe(project_id: str, media_id: str, workflow_id: str | None = None) -> str:
@@ -1519,7 +1540,9 @@ def _longer_lengths() -> str:
         "10 s reference video since gen_r2v runs 8 s only. A character goes into the prompt as a Flow @ mention and "
         "an image through the composer's '+' dialog, and every chip is checked against its id before anything is "
         "spent; a chip Flow refuses (an image over the model's cap, a character taking one of its image slots) stops "
-        "the run before the click, in Flow's own words. It spends credits and is ledgered, at x1: "
+        "the run before the click, in Flow's own words. Once a paid clip is fetched its recipe is read back off the "
+        "listing, and a clip that dropped or gained a reference is an error even though it was paid. It spends "
+        "credits and is ledgered, at x1: "
         "8 s by default, omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 "
         "credits by Flow's own price table, unmeasured. "
         + _longer_lengths()
@@ -1612,9 +1635,10 @@ def _video_options() -> str:
         "saved): each rides as an audio ingredient beside at least one image or character, and a character that "
         "has a voice takes one of the model's voice places. "
         + ingredients_mod.voice_caps_text()
-        + " Every chip is read back before the click, the request's own voice field is checked as it leaves, and the "
-        "clip's recipe is read back after a paid run: a voice or image Flow dropped is an error even though it was "
-        "paid. "
+        + " In an Ingredients run every chip is read back before the click, the request's own voice field is checked "
+        "as it leaves (every voice asked must ride; one nobody asked for is said under unasked_voices in body_check "
+        "and is no error), and once the clip is fetched its recipe is read back: a voice, image or character Flow "
+        "dropped is an error even though it was paid. "
         + _video_options()
         + " resolution and duration apply to omni-flash only (defaults 720p and 8 s). The money guard is Flow's own "
         "price line, read right before the single click: a real run needs max_credits and is refused when the live "

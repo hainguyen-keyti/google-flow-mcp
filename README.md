@@ -122,11 +122,12 @@ These are not suggestions; they are enforced in code and pinned by tests.
 - **Outputs stay inside `out/`.** Every tool that writes a file or a ledger forces its target inside `out/`.
 - **Click once, then wait.** Flow submits late, about 20 s after the click. Leaving the page early cancels the
   request in flight and looks exactly like a dead button; clicking again submits a second, paid job.
-- **Every ingredient is read back before the click, and the clip's recipe after it.** Flow's price line does not
-  move for a chip it has greyed out (an image over the model's cap, a voice with nothing beside it), so the
-  ingredient bar itself is read: each image by the workflow id its thumbnail names, each voice by the name on its
-  hover card, and a refused chip stops the run in Flow's own words. After a paid run the request's own voice field
-  and the clip's recipe are checked; an input Flow dropped is reported as an error even though it was paid.
+- **Every ingredient is read back before the click, and the clip's recipe after it.** Flow's price line did not
+  move when it greyed out an image over the model's cap (measured: still 10), so the ingredient bar itself is
+  read: each image by the workflow id its thumbnail names, each voice by the name on its hover card, and a chip
+  Flow refuses (an image over the cap, a voice with nothing beside it) stops the run in Flow's own words. After
+  the click the request's own voice field is checked, and once the clip is fetched its recipe is read back; an
+  input Flow dropped is reported as an error even though it was paid.
 - **Prices live in the tool description**, and a tool refuses a cell whose price nobody has measured.
 
 ## Risk, read this before the first run

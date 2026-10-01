@@ -79,12 +79,13 @@ def test_a_session_watches_its_page_for_flows_cookie_notice_and_for_nothing_else
 
     async def run():
         async with FlowSession(profile_dir=tmp_path, client_factory=factory([])) as session:
-            return [selector for selector, _ in session.page.handlers], session.notices
+            return [selector for selector, _ in session.page.handlers], session.notices, session.unpressed
 
-    watched, notices = asyncio.run(run())
+    watched, notices, unpressed = asyncio.run(run())
 
     assert watched == [overlays.COOKIE_BAR]
-    assert notices == []
+    # What it pressed and what it could not press are kept apart: the second is a reason a later click may fail.
+    assert notices == [] and unpressed == []
 
 
 def test_second_session_waits_until_first_exits(tmp_path):
