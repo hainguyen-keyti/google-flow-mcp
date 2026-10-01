@@ -8,6 +8,7 @@ on disk stops matching what is actually served.
 
 import asyncio
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -98,3 +99,25 @@ def test_a_served_tool_with_no_schema_at_all_stops_the_generator():
 
     with pytest.raises(AttributeError, match="mystery_tool"):
         gen._arguments(_Schemaless())
+
+
+# Each place a README states how many tools the server serves. A sentence reworded out of its pattern fails here
+# too, so the count is never left without a check (2026-10-01: README.md said 44 and README.vi.md 43, with 45 served).
+README_COUNTS = [
+    ("README.md", r"(\d+) MCP tools plus a CLI"),
+    ("README.md", r"serves \*\*(\d+) tools\*\*"),
+    ("README.vi.md", r"(?m)^(\d+) tool, chia theo"),
+]
+
+
+@pytest.mark.parametrize(("name", "pattern"), README_COUNTS)
+def test_a_readme_states_the_number_of_tools_the_server_really_serves(name, pattern):
+    served = len(asyncio.run(gen.tools()))
+    stated = re.findall(pattern, (ROOT / name).read_text(encoding="utf-8"))
+
+    assert stated, (
+        f"{name} no longer states its tool count as /{pattern}/; update this pattern with the sentence"
+    )
+    assert {int(count) for count in stated} == {served}, (
+        f"{name} says {stated} tools, the server serves {served}"
+    )

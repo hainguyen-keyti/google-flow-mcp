@@ -1,8 +1,12 @@
 # What Flow offers against what the MCP exposes (2026-10-01)
 
-The MCP today: 44 tools (`docs/tools.md`): 11 reads, 3 downloads, 20 free account changes, 9 that spend, and
-`gen_video`. This file lists what Flow can do, or what a production needs from Flow, that those tools do not give,
-each with its evidence and a proposed surface. Nothing here is built: plan AK forbids source changes.
+The MCP when this was written: 44 tools (`docs/tools.md`): 11 reads, 3 downloads, 20 free account changes, 9 that
+spend, and `gen_video`. This file lists what Flow can do, or what a production needs from Flow, that those tools do
+not give, each with its evidence and a proposed surface. Plan AK built none of it: it forbade source changes.
+
+**Status after plan AL (2026-10-01, the same day): 45 tools. G6, G3, G2, G1 and G4 are closed**, each marked below
+with its commit and with what closing it measured. G5, G7, G8, sections 2 and 3 stand as written, except the rows
+marked done.
 
 Scope line, unchanged: the MCP exposes Flow and guards the money. How a film is made (script, shots, QA, edit) is the
 skill set's job (`skill-design.md`).
@@ -34,6 +38,19 @@ repo's source at `615bcac`.
   - `flow_voices` without a character: the "+" dialog lists the same voices.
 - Tier 1 (money path). Proof: validator and fake-page tests red first; `dry_run` live for $0; one paid Veo Lite run
   with a voice (10) and one Omni run with two voices (12).
+- **Closed by plan AL (`97d3c7f`)**: `gen_video(..., voices=[names])`, names as `flow_voices` lists them. Built as
+  proposed, with what the build measured:
+  - a voice chip carries no name; its hover card does ("play_arrow 0:06 voice_selection Achird"), so the read-back
+    hovers each voice chip, and Flow's refusal is the part of the card before the player;
+  - a voice of your own is a listing record with a speech arm (`audio/wav`, the preset it is built on, its name); the
+    request names it by its workflow id and a preset by its lowercase id, at item `[7]` of the `MZZa6b` body, and the
+    check parses that field rather than searching the body, since a prompt may name a voice;
+  - a character that has a voice takes the one voice place of Veo Lite: refused live in Flow's words ("Maximum audio
+    ingredients reached (1 allowed)"); only the count of named voices is refused before the browser opens;
+  - after a paid run the clip's recipe is read back and compared (voices, images, characters);
+  - paid once each: Veo 3.1 Lite, one image, LilyVoice, 10 credits; Omni 1.1 Flash 8 s, one image, LilyVoice and
+    Achird, 12 credits; request and recipe carried exactly those voices.
+  - Not built: `flow_voices` without a character (its signature was a non-goal).
 
 ### G2. Images reach a generation only as title mentions
 
@@ -45,6 +62,19 @@ repo's source at `615bcac`.
 - Proposed: attach `media_ids` through the "+" dialog, search by title, pick the tile whose url tail is the image's
   (the rule `video.pin_frame` already uses for frames), and report an image the dialog does not offer by name.
 - Tier 2. Proof: fake picker with twin titles and a missing image; live `dry_run` with three images.
+- **Closed by plan AL (`002402e`)**: images go in through the "+" dialog, characters stay `@` mentions. Measured on
+  the way:
+  - the dialog's search takes a whole title; a click adds only the ACTIVE row (the first), any other row becomes
+    active and "Add to prompt" adds it;
+  - a bar chip's thumbnail is a signed url whose path ends with the image's WORKFLOW id, so each image chip is
+    checked against the image asked for before the click;
+  - the price line does not move for a refused chip (10 on Veo Lite beside a refused fourth image), so the bar is
+    read in `setup` and again right before the price check;
+  - the `@` picker is the same dialog and keeps the category it last showed, under which it offers no character:
+    characters are mentioned first;
+  - on Veo 3.1 Lite a mentioned character takes one of the three image places (a character and two images fill it);
+  - twin titles are refused only when their urls end alike; `lily_black_face.png` is still offered by no row, and
+    the tool says so.
 
 ### G3. Nothing reads back what a clip carried
 
@@ -57,6 +87,10 @@ repo's source at `615bcac`.
 - Proposed: `clip_recipe(project_id, media_id, workflow_id=None)` answering `{model_key, frames, reference_images,
   voices, entities, source_clip}`; and the spending tools compare that recipe with what was asked before they answer.
 - Tier 3 for the read, tier 1 where it joins the money path's verdict.
+- **Closed by plan AL (`a5753d8` the tool, `97d3c7f` the verdict)**: `clip_recipe(project_id, media_id,
+  workflow_id=None)` answers `{model_key, kind, frames, reference_images, voices, characters, source}`, each input
+  named; an upscale left by a download is not taken for the newest version. `gen_video` and `gen_character` read it
+  back after a paid Ingredients run and report a clip that dropped or gained an input as an error.
 
 ### G4. Inputs Flow silently drops are refused without the reason
 
@@ -68,6 +102,10 @@ repo's source at `615bcac`.
 - Proposed: say what Flow would do ("Flow sends a Frames request without the character: use Ingredients, or a start
   frame alone"); `clip_edit`'s description states that speech cannot be changed.
 - Tier 3 (wording and one validator).
+- **Closed by plan AL (the commit that carries this line)**: the refusal of a character beside frames says Flow would
+  send the request without the character at full price; `clip_edit` says an edit cannot change what is said;
+  `clip_extend` says 8 + 7 s; a voice with nothing beside it is refused with Flow's sentence "An audio ingredient
+  requires other ingredients to function."
 
 ### G5. A failed generation is one opaque error
 
@@ -92,6 +130,9 @@ repo's source at `615bcac`.
   (`glue-cookie-notification-bar`) is dismissed with its own button and the click is recorded in the tool's answer;
   any other overlay fails the call at once with its text and its buttons, and is never clicked.
 - Tier 2.
+- **Closed by plan AL (`f6d2725`)**: Playwright's locator handler presses the notice's own button whenever the bar
+  shows and the tool's answer names it under `dismissed_notices`; anything else covering the Settings trigger is
+  named in the error and never clicked. The dismissed state lives in localStorage `glue.CookieNotificationBar`.
 
 ### G7. A generation blocks the call for minutes
 
@@ -117,7 +158,7 @@ repo's source at `615bcac`.
 |---|---|---|
 | Voice preview audio | the voice maker's Preview answers a pending record and the page then fetches a wav from `flow-content.google/audio/<id>`; 16 previews and one saved sample were captured for 0 credits | `voice_preview(preset, performance, sample)` answering a wav, so a voice is heard and measured before it is used |
 | 360p draft, then upscale | a 360p clip's Download menu offers "720p Upscaled" (url tail `_720p_upsampled`, 0 credits) and no 1080p; `clip_download` knows only the 1080p tail (`ak-d1`) | `clip_download` takes the upscale the clip offers; `gen_video` says what a draft is good for |
-| Extend with speech | 8 + 7 = 15.0 s, the words asked for, the voice not held, the extension's own file downloadable this time (`ak-x1`) | say so in `clip_extend`; correct "overlapping the source's last second" |
+| Extend with speech | 8 + 7 = 15.0 s, the words asked for, the voice not held, the extension's own file downloadable this time (`ak-x1`) | done in plan AL for the length: `clip_extend` says 8 + 7 s and no longer "overlapping the source's last second"; what the voice does is left out until the owner has judged it by ear |
 | Video as an ingredient | `ak-n3`: rpc `jIps6`, 20 credits, an edit | keep it out of `gen_video`; it is `clip_edit` under another door |
 | Delete media | lane 4 (one other MCP, one proxy) | `media_delete` |
 | Character update | lane 4 | rename, regenerate the portrait, add the second body image |
@@ -138,12 +179,16 @@ repo's source at `615bcac`.
 | 720p and gif downloads | still go through Chrome's own download, after which Chrome 154 crashes on this Mac (eight crash reports on 2026-10-01); `clip_download` knows the 1080p url tail only, not `_720p_upsampled` | plan AJ, `ak-d1`; possibly playwright issue 42506, whose reports name Windows only |
 | gflow pin | repo 0.78.0, `uv tool` 0.73.1, upstream 0.81.0 | lane 4 section 1 |
 | Whisper on a silent clip | not MCP code, but any QA tool must know: it returns a stock sentence | `ak-c1`, `ak-n2a` |
+| `src/video/flow/parsers.py` `_record_fields` | a voice saved with `character_make_voice` is listed by `flow_media` as `kind: "video"` (any record of eight or more fields is one); `parsers.custom_voices` now tells it by its speech arm, the `kind` is unchanged | found in plan AL T5, 2026-10-01 |
+| `scripts/gen_tool_docs.py` `GROUPS` | the groups are typed by hand, so a new tool lands under "Ungrouped" (`clip_recipe` does) | plan AL T3; the script was outside that plan's radius |
+| `docs/mcp-manual-test.md` | written for 44 tools; `clip_recipe` and `gen_video`'s `voices` are not in it | plan AL T6; the file was outside that plan's radius |
+| the `@` picker | it is the "+" dialog and keeps the category that dialog last showed, under which it offers no character; `ingredients.generate` mentions characters before it opens the dialog, any new caller must do the same | $0 probes `out/al/t4.json`, `t4b.json`, 2026-10-01 |
 
 ## 4. Proposed order (plans to write after approval)
 
 | Plan | Holds | Tier | Paid proof |
 |---|---|---|---|
-| AL | G6 overlays first (the bar blocks every composer tool today), then G1 voices, G2 picker attach, G3 recipe read-back, G4 wording | 1 | 22 credits planned, ceiling 40 |
+| AL (done 2026-10-01) | G6 overlays first (the bar blocked every composer tool), then G3 recipe read-back, G2 picker attach, G1 voices, G4 wording | 1 | 22 credits spent of a ceiling of 40 |
 | AM | G5 typed outcomes and `retry_of` | 1 | 0 to 10 |
 | AN | G7 submit, status, collect | 1 | about 20 |
 | AO | G8 capability map, section 2 rows, section 3 hazards | 2 to 3 | 0 |
@@ -151,7 +196,7 @@ repo's source at `615bcac`.
 Each plan follows the repo's rules: red test first, mutants on every guard, a live run of the exact case that failed,
 one commit per task.
 
-## 5. Plan AL in outline (to be written with `/kt:plan` once approved)
+## 5. Plan AL in outline (written, approved and done on 2026-10-01; kept as the outline it was)
 
 - Goal: a generation can carry voices and images the way the composer's "+" dialog attaches them, what it carried
   can be read back, and a page overlay is named instead of timing out.

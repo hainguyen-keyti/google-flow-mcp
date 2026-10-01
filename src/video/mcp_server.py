@@ -1333,7 +1333,8 @@ async def clip_recipe(project_id: str, media_id: str, workflow_id: str | None = 
         "upscale); the call is then refused before the click, at no cost. The extension is a new clip inside a new "
         "scene (the source is copied in first): its own file answered HTTP 400 and clip_download could not open it "
         "(measured 2026-09-29), so fetch it with scene_download on the scene_id this tool returns; that film's video "
-        "stream ran 15.0 s for an 8 s source, the extension overlapping the source's last second. "
+        "stream ran 15.0 s for an 8 s source, 8 + 7: the extension is a 7.0 s clip, though the listing calls it 8 "
+        "(measured on the file, 2026-10-01). "
         "Takes about 2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out "
         "folder. " + _BALANCE_MOVED + _JOB_ID_RULE
     ),
@@ -1356,7 +1357,9 @@ async def clip_extend(
         "on this account cost 20 credits, while Flow's own price table lists Omni Flash Edit at 40, so budget for "
         "40 and expect 20. This tool does not read the live price line before it clicks, so what stands between a "
         "changed price and a surprise bill is the balance read before and after, answered as credits_before and "
-        "credits_after (the ledger row holds their difference as `spent`). Takes about "
+        "credits_after (the ledger row holds their difference as `spent`). An edit cannot change what is said: it "
+        "keeps the clip's audio, and a new line asked for in the prompt came out burned in as a subtitle (measured "
+        "2026-10-01). Takes about "
         "2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out folder. "
         + _BALANCE_MOVED
         + _JOB_ID_RULE
@@ -1602,7 +1605,9 @@ def _video_options() -> str:
     description=(
         "One video from Flow's composer with any option it offers; it spends credits and is ledgered. Text alone "
         "runs Frames; start_frame (and end_frame) are project image media ids for the first and last frame; "
-        "characters (entity ids) and media_ids (project images) run Ingredients. Frames and ingredients do not mix. "
+        "characters (entity ids) and media_ids (project images) run Ingredients. Frames and ingredients do not mix: "
+        "given a character beside a frame, Flow itself sends the request without the character, at full price "
+        "(measured 2026-10-01), so that is refused here. "
         "voices are voice names as flow_voices lists them (a preset such as Achird, or one character_make_voice "
         "saved): each rides as an audio ingredient beside at least one image or character, and a character that "
         "has a voice takes one of the model's voice places. "

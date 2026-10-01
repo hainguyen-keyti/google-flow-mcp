@@ -13,7 +13,7 @@ not been measured, it says so.
 
 ## What it is, and what it is not
 
-**It is** a control layer: 44 MCP tools plus a CLI, with a spend ledger, a double-charge guard, and prices in
+**It is** a control layer: 45 MCP tools plus a CLI, with a spend ledger, a double-charge guard, and prices in
 every tool description.
 
 **It is not** a video maker. The script, the shot list, the camera angles and the quality of the result are the
@@ -76,7 +76,7 @@ cp .mcp.json.example .mcp.json
 ```
 
 Edit the copy if `uv` is not on your PATH, then open the folder with an MCP client (Claude Code reads
-`.mcp.json` from the project root). The server serves **44 tools**; every description carries its price.
+`.mcp.json` from the project root). The server serves **45 tools**; every description carries its price.
 
 A server that is already running does **not** pick up new code, and an open session keeps the old tool
 descriptions: after changing anything here, start a new session.
@@ -92,6 +92,7 @@ guess about; the tool says so too.
 | Action | Credits |
 |---|---|
 | `gen_video`: any option Flow's composer offers, guarded by Flow's live price line and your `max_credits` | Omni 1.1 Flash 720p 4/6/8/10 s: 7/10/12/15; 360p: 4/5/6/7; Veo 3.1 Lite 10, Fast 20, Quality 100 (8 s); x2-x4 multiply (Flow's price line, 2026-09-29) |
+| `gen_video` with `voices` (a preset or a voice of your own, beside an image or a character) | the same price: Veo 3.1 Lite with one image and one voice 10, Omni 1.1 Flash 8 s with one image and two voices 12 (paid 2026-10-01) |
 | `gen_t2v` / `gen_r2v`, veo-lite, 8 s | 10 |
 | `gen_t2v` / `gen_i2v`, omni-flash, 10 s | 15 |
 | `gen_r2v`, omni-flash, 8 s (the only length gflow offers it) | 12 |
@@ -104,7 +105,7 @@ guess about; the tool says so too.
 | `gen_t2i` / `gen_i2i` (Nano Banana 2) | 0 credits, but a daily image quota |
 | `clip_download` at 1080p | 0 |
 | `clip_download` at 4k (a Flow upscale) | not offered on Pro: greyed out, refused before any click (Flow's table: Ultra, 50) |
-| Every read: lane, projects, media, credits, characters, scenes, voices | 0 |
+| Every read: lane, projects, media, credits, characters, scenes, voices, and what a clip was made from (`clip_recipe`) | 0 |
 
 Timing, so a slow call is not mistaken for a broken one: a read takes 15 to 50 s, a change about 50 s, a
 generation 2 to 5 min, `clip_extend` and `clip_edit` up to 7 min.
@@ -121,6 +122,11 @@ These are not suggestions; they are enforced in code and pinned by tests.
 - **Outputs stay inside `out/`.** Every tool that writes a file or a ledger forces its target inside `out/`.
 - **Click once, then wait.** Flow submits late, about 20 s after the click. Leaving the page early cancels the
   request in flight and looks exactly like a dead button; clicking again submits a second, paid job.
+- **Every ingredient is read back before the click, and the clip's recipe after it.** Flow's price line does not
+  move for a chip it has greyed out (an image over the model's cap, a voice with nothing beside it), so the
+  ingredient bar itself is read: each image by the workflow id its thumbnail names, each voice by the name on its
+  hover card, and a refused chip stops the run in Flow's own words. After a paid run the request's own voice field
+  and the clip's recipe are checked; an input Flow dropped is reported as an error even though it was paid.
 - **Prices live in the tool description**, and a tool refuses a cell whose price nobody has measured.
 
 ## Risk, read this before the first run

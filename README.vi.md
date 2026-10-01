@@ -154,8 +154,8 @@ mặt, tay và món đồ.
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`). Server
 đang chạy không tự nạp code mới, và phiên đang mở còn giữ mô tả tool cũ: sửa code xong phải mở phiên mới.
 
-43 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
-"unmeasured"):
+45 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
+"unmeasured"); bảng đầy đủ sinh từ server ở `docs/tools.md`:
 
 - **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
   `clip_edit`, `agent_send` (có thể tốn). **Cả 6 đã chạy thật qua MCP ngày 2026-09-16**, mỗi tool đúng một lần, số dư
@@ -183,8 +183,11 @@ mặt, tay và món đồ.
   từ chối không đốt mất `job_id`. CLI `video gen` giữ nguyên.
 - **Nhân vật trong video, `gen_character`** (tốn credit, ghi ledger, bắt buộc `job_id` ở lượt thật): video 8 s x1 có
   nhân vật của project (entity id từ `flow_characters`) và tuỳ chọn ảnh đã có trong project (media id từ `flow_media`,
-  chỉ ảnh). gflow vẫn từ chối nhân vật trên host này, nên repo tự gõ `@` cộng tên vào ô prompt rồi bấm ĐÚNG option theo
-  tên và loại (`Character` hay `Image`), không bao giờ nhấn Enter. Giá đo bằng tiền thật qua MCP ngày 2026-09-17:
+  chỉ ảnh). gflow vẫn từ chối nhân vật trên host này, nên repo tự gõ `@` cộng tên nhân vật vào ô prompt rồi bấm ĐÚNG
+  option theo tên và loại, không bao giờ nhấn Enter; còn ảnh thì gắn qua hộp "+" của composer, chọn đúng hàng theo đuôi
+  url của ảnh (nên hai ảnh trùng tên vẫn dùng được), và trước khi bấm tiền tool đọc lại từng chip trên thanh ingredient:
+  chip ảnh phải mang đúng workflow id, chip bị Flow làm xám thì dừng kèm nguyên lời của Flow (đo 2026-10-01: trên Veo 3.1
+  Lite nhân vật chiếm một trong ba suất ảnh). Giá đo bằng tiền thật qua MCP ngày 2026-09-17:
   omni-flash (mặc định) **12**, veo-lite **10**; veo-fast **20** theo dòng giá của Flow, chưa tiêu. `dry_run=true` trả
   giá và chip, không bấm, không ghi sổ, không cần `job_id`, để composer trống. `out_dir` (tuỳ chọn, phải nằm trong
   `out/`) đặt clip và sổ của lượt đó vào thư mục riêng, để các take của một phim nằm cùng chỗ; `job_id` vẫn bị từ chối
@@ -197,6 +200,14 @@ mặt, tay và món đồ.
   mã lý do. **Bộ lọc người nổi tiếng của Flow** (`PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED`) đã chặn nhân vật tạo từ
   ảnh người thật, không tính tiền, lúc chặn lúc không: không thử lại cùng đầu vào cho tới khi lọt. File clip đặt tên
   `<media_id>_<8 hex>.mp4`, không bao giờ theo `job_id`.
+- **Mọi option video của composer, `gen_video`** (tốn credit, ghi ledger): model, 360p hay 720p, 4 tới 10 s, x1 tới
+  x4, khung đầu và khung cuối, hoặc Ingredients gồm nhân vật, ảnh và **giọng** (`voices`: tên giọng như `flow_voices`
+  liệt kê, preset hay giọng tự tạo). Rào tiền là dòng giá sống của Flow so với `max_credits`. Giọng phải đi kèm ít nhất
+  một ảnh hay nhân vật; số giọng mỗi model nhận, đo 2026-10-01: omni-flash 5, veo-lite và veo-fast 1 (nhân vật đã có
+  giọng chiếm luôn suất đó), veo-quality không nhận. Trước cú bấm tool đọc lại từng chip (tên giọng lấy từ thẻ hover),
+  lúc request đi ra tool kiểm chính trường giọng của nó, và sau lượt trả tiền tool đọc lại recipe của clip: Flow bỏ mất
+  giọng hay ảnh thì báo lỗi dù đã trả tiền. Đo bằng tiền thật 2026-10-01: Veo Lite + ảnh + giọng tự tạo **10**, Omni 8 s
+  + ảnh + hai giọng **12**.
 - **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
 - **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media` (luôn trả một object,
   `all_versions=true` thêm khoá `versions`; bốn bộ lọc `kind` là `video` hay `image`, `since` nhận epoch hoặc ngày
@@ -208,6 +219,8 @@ mặt, tay và món đồ.
   `flow_characters`, `flow_tools` (`project_id` tuỳ chọn, bỏ trống thì
   tự mở project đầu tiên trên grid), `flow_uploads`, `scene_list`, `scene_clips` (timeline của một scene),
   `flow_download` (ghi file vào thư mục đích),
+  `clip_recipe` (đọc lại từ listing một clip được tạo từ gì: model, khung đầu và khung cuối, ảnh tham chiếu, giọng,
+  nhân vật, và clip nguồn của một lượt edit hay extend, mỗi thứ kèm id và tên),
   `clip_reconcile` (đọc listing và số dư, ghi ledger, không sinh gì; trả kèm đường dẫn sổ đã đọc, sổ có tồn tại
   không và số dòng, để `jobs: []` không bị hiểu nhầm là sạch khi đọc nhầm chỗ; job gen, job agent và job editor của
   project khác ra `skipped`; sổ không có gì để chấm thì trả ngay, không mở Chrome).
@@ -310,8 +323,8 @@ uv run python scripts/acceptance/scene_build.py --project <id nháp>     # $0, 1
 uv run pytest -q
 ```
 
-Test tay toàn bộ 43 tool qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
-`docs/mcp-manual-test.md`.
+Test tay qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
+`docs/mcp-manual-test.md` (tài liệu đó tự ghi số tool nó phủ; `clip_recipe` chưa có trong đó).
 
 `ledger_integrity.py` canh đúng một luật: **không credit nào rời tài khoản qua clip editor mà không có
 dòng ledger trỏ tới nó**. Nó lái editor bằng stub hỏng đúng chỗ đã hỏng thật ngày 2026-09-13, lúc 20

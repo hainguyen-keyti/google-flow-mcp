@@ -98,9 +98,17 @@ def mode_for(
     frames = bool(start_frame or end_frame)
     ingredients = bool(characters or media_ids or voices)
     if frames and ingredients:
+        # Measured 2026-10-01 (job ak-a3): a character mentioned in a Frames prompt shows as a chip and is quoted, and
+        # the request and the clip's recipe then carry the frame image only.
+        dropped = (
+            f" Flow would take a character beside a frame and then send the request without the character, at full "
+            f"price (measured {CAPS_MEASURED}): use Ingredients, or a start frame alone."
+            if characters
+            else ""
+        )
         raise ValueError(
             "pass either frames or ingredients, not both: frames are start_frame and end_frame, ingredients are "
-            "characters, media_ids and voices, and the composer runs one mode per video"
+            f"characters, media_ids and voices, and the composer runs one mode per video.{dropped}"
         )
     if end_frame and not start_frame:
         raise ValueError("end_frame needs a start_frame: the composer fills Start first")

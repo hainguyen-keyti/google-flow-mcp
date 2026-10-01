@@ -416,6 +416,17 @@ def test_voices_ride_only_in_ingredients_and_only_beside_an_image_or_a_character
         video.mode_for(start_frame="m", voices=["Achird"])
 
 
+def test_frames_beside_a_character_are_refused_with_what_flow_would_do():
+    # Measured 2026-10-01 (job ak-a3): a character mentioned in a Frames prompt shows as a chip and is quoted, and
+    # the request and the clip's recipe then carry the frame image only.
+    with pytest.raises(ValueError, match="without the character") as refused:
+        video.mode_for(start_frame="m", characters=["e"])
+    assert "either frames or ingredients" in str(refused.value) and "2026-10-01" in str(refused.value)
+    with pytest.raises(ValueError, match="either frames or ingredients") as plain:
+        video.mode_for(start_frame="m", media_ids=["m2"])
+    assert "without the character" not in str(plain.value)
+
+
 def test_the_driver_hands_the_voices_to_the_ingredients_driver(monkeypatch):
     calls = _driver_world(monkeypatch)
 

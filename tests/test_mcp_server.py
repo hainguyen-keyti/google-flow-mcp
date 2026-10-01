@@ -2893,6 +2893,18 @@ def test_gen_video_forwards_the_voices_beside_the_ingredients(monkeypatch, tmp_p
     assert got["voices"] == ["Achird", "LilyVoice"] and got["media_ids"] == ["M"]
 
 
+def test_the_tools_say_what_flow_does_with_an_input_it_would_drop_or_ignore():
+    # Plan AL, G4, each measured on 2026-10-01: a character beside frames is dropped from the request (ak-a3); an Omni
+    # edit keeps the clip's audio and burns new words in as a subtitle (ak-n1-edit-line); an extension is a 7 s clip,
+    # so the film runs 8 + 7 = 15.0 s (ak-x1).
+    served = served_tool_objects()
+    assert "without the character" in served["gen_video"].description
+    edit = served["clip_edit"].description
+    assert "cannot change what is said" in edit and "subtitle" in edit
+    extend = served["clip_extend"].description
+    assert "8 + 7" in extend and "overlapping" not in extend
+
+
 def test_gen_video_tells_where_voices_come_from_and_what_each_model_takes():
     description = served_tool_objects()["gen_video"].description
     assert "voices" in description and "flow_voices" in description
