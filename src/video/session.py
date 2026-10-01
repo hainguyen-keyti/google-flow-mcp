@@ -7,6 +7,7 @@ class never takes a second one; the module guard serializes sessions inside one 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 from collections.abc import Callable
@@ -23,6 +24,8 @@ from video.flow import overlays
 _GUARD = threading.Lock()
 _GUARD_POLL_S = 0.05
 PAGE_CLOSE_TIMEOUT_S = 10.0
+# Above the 7 s the cookie notice's handler can take (overlays.READ_MS + PRESS_MS + GONE_MS).
+NOTICE_SETTLE_S = 10.0
 
 MIGRATED_ROOT = "https://flow.google.com/"
 # An account with no projects renders only this button, inside the signed-in projects page (measured 2026-09-28).
@@ -59,6 +62,7 @@ class FlowSession:
         self.page: Any = None
         self.notices: list[str] = []
         self.unpressed: list[str] = []
+        self._notice_idle: asyncio.Event | None = None
         self._entered = False
 
     async def __aenter__(self) -> Self:
@@ -72,7 +76,7 @@ class FlowSession:
             await self.client.__aenter__()
             self._entered = True
             self.page = await self.client._context.new_page()
-            await overlays.watch_cookie_notice(self.page, self.notices, self.unpressed)
+            self._notice_idle = await overlays.watch_cookie_notice(self.page, self.notices, self.unpressed)
         except BaseException:
             await self._teardown()
             raise
@@ -80,6 +84,14 @@ class FlowSession:
 
     async def __aexit__(self, *exc: object) -> None:
         await self._teardown()
+
+    async def notices_settled(self) -> None:
+        """Wait out a press of the cookie notice that is still in flight, so `notices` and `unpressed` are read after
+        it and not before: the action that met the notice can fail, or be given up, while the press runs on. Bounded,
+        since this comes before the teardown that gives back the profile lease and the guard."""
+        if self._notice_idle is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._notice_idle.wait(), NOTICE_SETTLE_S)
 
     async def _teardown(self) -> None:
         try:

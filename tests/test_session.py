@@ -88,6 +88,76 @@ def test_a_session_watches_its_page_for_flows_cookie_notice_and_for_nothing_else
     assert notices == [] and unpressed == []
 
 
+class _SlowNotice:
+    """Flow's cookie notice, whose words are read only once `gate` opens: a press caught in flight."""
+
+    def __init__(self):
+        self.gate = asyncio.Event()
+        self.pressed = False
+
+    async def inner_text(self, timeout=None):
+        await self.gate.wait()
+        return "uses cookies OK, got it"
+
+    def locator(self, selector):
+        return self
+
+    async def count(self):
+        return 1
+
+    async def click(self, timeout=None):
+        self.pressed = True
+
+    async def is_visible(self):
+        return not self.pressed
+
+
+def test_a_session_waits_out_a_press_of_the_notice_before_what_it_left_is_read(tmp_path):
+    # Scoped re-review of plan AL, 2026-10-02: the action that met the notice can time out while the handler is
+    # still pressing, and the call that failed then read the session's lists before the handler wrote to them.
+    async def run():
+        async with FlowSession(profile_dir=tmp_path, client_factory=factory([])) as session:
+            await asyncio.wait_for(session.notices_settled(), 1)
+            _, handler = session.page.handlers[0]
+            notice = _SlowNotice()
+            press = asyncio.create_task(handler(notice))
+            await asyncio.sleep(0)
+            settled = asyncio.create_task(session.notices_settled())
+            await asyncio.sleep(0.02)
+            early = settled.done(), list(session.notices)
+            notice.gate.set()
+            await asyncio.wait_for(settled, 1)
+            late = list(session.notices)
+            await press
+            return early, late
+
+    early, late = asyncio.run(run())
+
+    assert early == (False, []) and late == ["uses cookies OK, got it"]
+
+
+def test_a_press_that_never_ends_cannot_hold_the_session_for_good(tmp_path, monkeypatch):
+    # The wait sits before the teardown, which gives back gflow's profile lease and the session guard: unbounded,
+    # one wedged press would lock every later tool out.
+    monkeypatch.setattr(session_mod, "NOTICE_SETTLE_S", 0.05)
+
+    async def run():
+        async with FlowSession(profile_dir=tmp_path, client_factory=factory([])) as session:
+            _, handler = session.page.handlers[0]
+            press = asyncio.create_task(handler(_SlowNotice()))
+            await asyncio.sleep(0)
+            await asyncio.wait_for(session.notices_settled(), 1)
+            press.cancel()
+            return list(session.notices)
+
+    assert asyncio.run(run()) == []
+
+
+def test_the_wait_for_a_press_outlasts_the_longest_the_handler_can_take():
+    longest_ms = overlays.READ_MS + overlays.PRESS_MS + overlays.GONE_MS
+    assert session_mod.NOTICE_SETTLE_S * 1000 > longest_ms
+
+
 def test_second_session_waits_until_first_exits(tmp_path):
     log = []
 

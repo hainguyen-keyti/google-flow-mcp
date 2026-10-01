@@ -52,7 +52,7 @@ repo's source at `615bcac`.
     character's own voice in the request was never measured (the five clips made with a voiced character keep no
     voice in their recipe);
   - once a paid clip is fetched its recipe is read back and compared (voices, images, characters); a clip still
-    rendering when the wait ends is reported with what the request check heard;
+    rendering when the wait ends says what the request check heard only when that check failed;
   - the owner's ear, the same day: every clip made with a voice ingredient sounds less real than `ak-a3`, which
     carried none (Omni, Frames, one short line). A voice ingredient holds one voice across clips; it is not the
     way to the most lifelike one;
@@ -138,11 +138,15 @@ repo's source at `615bcac`.
   (`glue-cookie-notification-bar`) is dismissed with its own button and the click is recorded in the tool's answer;
   any other overlay fails the call at once with its text and its buttons, and is never clicked.
 - Tier 2.
-- **Closed by plan AL (`f6d2725`, tightened after its review)**: Playwright's locator handler presses the notice's
-  own button whenever the bar shows, waits for the bar to leave, and only then records it. An answer that is an
-  object names it under `dismissed_notices`; one an answer cannot carry (a list) rides on the next answer that can,
-  and a failing call carries it as a note. A notice the handler could not press is never clicked, is named under
-  `notices_left_standing` or beside the error of the call that failed, and no longer holds a call to its timeout.
+- **Closed by plan AL (`f6d2725`, tightened after its review and its scoped re-review)**: Playwright's locator handler
+  presses the notice's own button whenever the bar shows, watches the bar until it leaves, and only then records it;
+  one try takes at most 7 s, under the 8 s most actions allow themselves. A press is kept until an answer carries
+  it: an answer that is an object names it under `dismissed_notices`, the tools that run gflow name what their own
+  sessions pressed (Agent mode off and on, the listing read), and an answer that cannot carry it (a list) leaves it
+  for the next that can. A failing call names it in its error and leaves it for the next answer too, since a retry
+  can swallow the error. A notice the handler could not press is named under `notices_left_standing` or beside the
+  error of the call that failed, and after one failed press it is not tried again in that session: a control the
+  notice does not cover goes on, and one it covers still ends in its own timeout, now with the reason beside it.
   What exists for any other overlay is narrower than proposed: it is named, with its text and without its buttons,
   when it covers the Settings trigger or the "+" button, and when it stands open before the "+" dialog is opened;
   it is never clicked and never dismissed with Escape. A covered prompt box, dialog row or Start generation still
@@ -204,6 +208,9 @@ repo's source at `615bcac`.
 | the "+" dialog's window of rows | it renders 15 rows at a time; whether a search can match more than it renders was never measured, so a full window is said and the image is not scrolled to | $0 probe 2026-10-01 (15 of 67 images rendered) |
 | `composer._open_settings`, `composer.configure`, `ingredients.pin_duration`, `pin_resolution` | Escape is pressed without looking at what is open; harmless on both paid runs of plan AL | review of plan AL, not in that plan's diff |
 | an image with several records | its row in the "+" dialog is told by the url of the first one listed, while any of its workflow ids passes the chip check | review of plan AL; none of 67 images holds two records |
+| `Backend.generate` (the tools that run gflow) | a cookie notice the driver could NOT press, met only in that tool's own sessions (Agent mode, the listing read), is named when it made one of them fail and not when they went through; the next browser tool names it, since every session meets a standing notice again | scoped re-review of plan AL, 2026-10-02; a pressed notice is carried, a standing one is not |
+| `overlays.watch_cookie_notice`, the press itself | Playwright runs a click's pre-checks, which wait on the handler once the action that met the notice has timed out: a press begun after that fails at its own 3 s and the notice is left for the next session, named as not pressed | read off `coreBundle.js:21698-21725`, never seen live; the watch for the bar to leave uses no such check |
+| `ingredients._card` | a pane that comes up between the read of the standing panes and the first read after the hover (0.4 s) is taken for the chip's card; one that then stays over 3 s refuses the run, with no click | scoped re-review of plan AL; fails closed |
 
 ## 4. Proposed order (plans to write after approval)
 

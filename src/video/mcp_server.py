@@ -200,26 +200,45 @@ class Backend:
         """Run one call in its own session and say what the session did to Flow's cookie notice.
 
         The owner lets the driver press that notice (2026-10-01), and a call that did so says it did. Flow shows the
-        notice once, so a press that an answer cannot carry (a list) is kept for the next answer that can, and a
-        failing call carries it as a note, as it does a notice that was left standing (review of plan AL)."""
+        notice once, so a press is kept until an answer carries it: one that cannot (a list) leaves it for the next
+        that can. A failing call names it in a note and leaves it too, because the error may never reach the agent:
+        a retry swallows it (scene_download), and so does a step that must not fail (_agent_restore). A notice left
+        standing is named either way (review of plan AL and its scoped re-review, 2026-10-02)."""
         async with FlowSession(self.profile) as session:
             try:
                 result = await fn(session)
             except Exception as exc:
-                for said in [*self._unreported, *session.notices]:
-                    exc.add_note(f"the driver pressed Flow's cookie notice: {said}")
-                self._unreported.clear()
+                await session.notices_settled()
+                self._unreported += session.notices
+                self._noted(exc)
                 for left in session.unpressed:
                     exc.add_note(left)
                 raise
+            await session.notices_settled()
             self._unreported += session.notices
             if isinstance(result, dict):
-                if self._unreported:
-                    result["dismissed_notices"] = list(self._unreported)
-                    self._unreported.clear()
+                self._tell(result)
                 if session.unpressed:
                     result["notices_left_standing"] = list(session.unpressed)
             return result
+
+    def _noted(self, failed: BaseException) -> None:
+        """Name on an error the presses no answer has carried yet, and keep them for the answer that will."""
+        for said in self._unreported:
+            failed.add_note(
+                f"the driver pressed Flow's cookie notice (a later answer names it again): {said}"
+            )
+
+    def _tell(self, answer: dict[str, Any]) -> None:
+        """Hand a tool's own answer the presses no answer has carried yet."""
+        if self._unreported:
+            answer["dismissed_notices"] = list(self._unreported)
+            self._unreported.clear()
+
+    def _kept(self, answer: dict[str, Any]) -> dict[str, Any]:
+        """An answer the agent never sees gives the press it was handed back, for the tool's own answer to carry."""
+        self._unreported += answer.pop("dismissed_notices", [])
+        return answer
 
     def _editor_out_dir(self, out_dir: str | None) -> Path:
         """Editor jobs ledger where out_dir points, and job ids are looked up only under the out folder."""
@@ -626,14 +645,17 @@ class Backend:
             was_on = await self._agent_off(project)
             try:
                 result = await gen_mod.run_job(job, target, profile=self.profile)
-            except BaseException:
+            except BaseException as failed:
                 if was_on:
                     await self._agent_restore(project)
+                self._noted(failed)
                 raise
             if was_on:
                 result["agent_mode_restored"] = await self._agent_restore(project)
             if kind in gen_mod.IMAGE_KINDS:
                 await self._image_media_ids(project, result.get("outputs") or [])
+            # The sessions above answer to this method only, so what they pressed is said here.
+            self._tell(result)
             return result
 
         return await self._spend_once(job_id, target, run)
@@ -650,7 +672,7 @@ class Backend:
             for attempt in range(IMAGE_LISTING_READS):
                 if attempt:
                     await asyncio.sleep(IMAGE_LISTING_POLL_S)
-                media = (await self._with(lambda s: reader.project(s, project)))["media"]
+                media = self._kept(await self._with(lambda s: reader.project(s, project)))["media"]
                 by_workflow = {m.get("workflow_id"): m["id"] for m in media if m.get("workflow_id")}
                 for output in outputs:
                     output["media_id"] = by_workflow.get(output["workflow_id"])
@@ -670,7 +692,7 @@ class Backend:
         """gflow dies with exit 25 while Flow's Agent chip is on (measured 2026-09-28), so it goes off first; returns
         whether it was on. Anything short of off stops the call here, before gflow or the ledger is touched."""
         try:
-            state = await self._with(lambda s: agent_mod.set_mode(s, project, False))
+            state = self._kept(await self._with(lambda s: agent_mod.set_mode(s, project, False)))
         except PlaywrightTimeoutError as exc:
             # Only the chip's own wait: a project page that never loads (a wrong id) keeps its own error (review, e1).
             if "agent-mode-chip" not in str(exc):
@@ -690,7 +712,7 @@ class Backend:
     async def _agent_restore(self, project: str) -> bool:
         """Put Agent mode back on after the run; never raises, since it follows a call that may have spent."""
         try:
-            state = await self._with(lambda s: agent_mod.set_mode(s, project, True))
+            state = self._kept(await self._with(lambda s: agent_mod.set_mode(s, project, True)))
             return bool(state.get("enabled"))
         except Exception:  # noqa: BLE001
             return False
@@ -719,8 +741,14 @@ class TellingServer(MCPServer):
             cause = exc.__cause__ or exc
             # A Playwright error appends a call log listing request headers, cookies included: drop it whole.
             text = str(cause).split("\nCall log:")[0]
-            # What Backend._with noted about Flow's cookie notice comes after the error's own words.
-            notes = "".join(f"; {note}" for note in getattr(cause, "__notes__", []))
+            # What Backend._with noted about Flow's cookie notice comes after the error's own words, wherever down
+            # the causes the session's own error sits: _agent_off raises its advice FROM the timeout that was noted.
+            links: list[BaseException] = []
+            link: BaseException | None = cause
+            while link is not None and link not in links:
+                links.append(link)
+                link = link.__cause__
+            notes = "".join(f"; {note}" for each in links for note in getattr(each, "__notes__", []))
             detail = redact_error_detail(gen_mod._scrub(f"{type(cause).__name__}: {text}{notes}"))
             # Only the scrubbed line is logged: the raw traceback would put the same cookies in the server's stderr.
             logging.getLogger(__name__).error("tool %s failed: %s", name, detail)

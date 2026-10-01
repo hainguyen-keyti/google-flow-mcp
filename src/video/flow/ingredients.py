@@ -1155,9 +1155,9 @@ async def generate(
         heard = getattr(watch, "seen", None)
         if isinstance(failed, Exception) and not dry_run and heard and not heard.get("ok"):
             raise RuntimeError(
-                f"{failed}; and Flow's submit request did not carry the references: model keys "
+                f"{failed}; and Flow's submit request did not match what was asked: model keys "
                 f"{heard.get('model_keys')}, missing {heard.get('missing')}, rpc {heard.get('rpcid')}, so the clip "
-                "may not show them"
+                "may not be what was asked"
             ) from failed
         raise
     if was:
@@ -1171,11 +1171,11 @@ async def generate(
     if not dry_run and check and not check.get("ok"):
         spent = result.get("spent", (result.get("credits_before") or 0) - (result.get("credits_after") or 0))
         raise RuntimeError(
-            f"{spent} credits were spent, but Flow's submit request did not carry the references: model keys "
+            f"{spent} credits were spent, but Flow's submit request did not match what was asked: model keys "
             f"{check.get('model_keys')}, missing {check.get('missing')}"
             f"{', voices sent ' + str(check['voices']) if 'voices' in check else ''}, rpc {check.get('rpcid')}. The clip "
-            f"({result.get('path') or result.get('media_id')}) may not show them. Do not run this job again under a new "
-            f"job_id; its ledger row holds the body check. job {job_id}"
+            f"({result.get('path') or result.get('media_id')}) may not be what was asked. Do not run this job again "
+            f"under a new job_id; its ledger row holds the body check. job {job_id}"
         )
     if not dry_run and result.get("media_id"):
         try:

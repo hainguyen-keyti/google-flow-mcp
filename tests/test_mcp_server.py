@@ -2058,11 +2058,184 @@ def test_a_call_that_fails_still_says_which_notice_the_driver_pressed(monkeypatc
         session.notices.append(said)
         raise RuntimeError("Start generation was clicked, so credits may already be spent")
 
+    async def saw_none(session):
+        return {"balance": 75}
+
     with pytest.raises(RuntimeError) as failed:
         asyncio.run(backend._with(pressed_then_failed))
     # The error's own words stay first and untouched: an agent reads at most the head of it.
     assert str(failed.value) == "Start generation was clicked, so credits may already be spent"
-    assert failed.value.__notes__ == [f"the driver pressed Flow's cookie notice: {said}"]
+    assert failed.value.__notes__ == [
+        f"the driver pressed Flow's cookie notice (a later answer names it again): {said}"
+    ]
+    # Scoped re-review of plan AL, 2026-10-02: an error can be swallowed by a retry (scene_download) or by a step
+    # that must not fail (putting Agent mode back), so a failure never spends the press: an answer does.
+    assert asyncio.run(backend._with(saw_none)) == {"balance": 75, "dismissed_notices": [said]}
+    assert asyncio.run(backend._with(saw_none)) == {"balance": 75}
+
+
+def test_a_press_no_answer_has_carried_yet_is_named_by_the_next_call_that_fails(monkeypatch, tmp_path):
+    backend = _browserless_backend(monkeypatch, tmp_path)
+    said = "flow.google.com uses cookies from Google ... OK, got it"
+
+    async def answers_a_list(session):
+        session.notices.append(said)
+        return [{"id": "P"}]
+
+    async def fails(session):
+        raise LookupError("no project 'P' in the grid")
+
+    assert asyncio.run(backend._with(answers_a_list)) == [{"id": "P"}]
+    with pytest.raises(LookupError) as failed:
+        asyncio.run(backend._with(fails))
+    assert failed.value.__notes__ == [
+        f"the driver pressed Flow's cookie notice (a later answer names it again): {said}"
+    ]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_what_a_press_still_in_flight_leaves_is_read_after_it(monkeypatch, tmp_path, fails):
+    # Scoped re-review of plan AL, 2026-10-02: the action that met the notice can time out while the handler is
+    # still pressing; the failing call then read the session's lists before the handler wrote, and the reason for
+    # the failure reached only the server's stderr.
+    said = "flow.google.com uses cookies from Google ... OK, got it"
+    left = "Flow's cookie notice did not go away (TimeoutError, its button was not pressed): 'uses cookies'"
+
+    class _PressingSession(FlowSession):
+        async def notices_settled(self):
+            self.notices.append(said)
+            self.unpressed.append(left)
+
+    monkeypatch.setattr(
+        mcp_server,
+        "FlowSession",
+        lambda profile: _PressingSession(profile_dir=tmp_path, client_factory=_BrowserlessClient),
+    )
+    backend = mcp_server.Backend()
+
+    async def call(session):
+        if fails:
+            raise PlaywrightTimeoutError("Locator.click: Timeout 8000ms exceeded.")
+        return {"balance": 75}
+
+    if fails:
+        with pytest.raises(PlaywrightTimeoutError) as failed:
+            asyncio.run(backend._with(call))
+        assert failed.value.__notes__ == [
+            f"the driver pressed Flow's cookie notice (a later answer names it again): {said}",
+            left,
+        ]
+    else:
+        assert asyncio.run(backend._with(call)) == {
+            "balance": 75,
+            "dismissed_notices": [said],
+            "notices_left_standing": [left],
+        }
+
+
+def _generation_over_real_sessions(
+    monkeypatch, tmp_path, *, presses_in, chip_times_out=False, left=None, run_fails=False
+):
+    """Backend.generate with its real Agent step and the real Backend._with over browserless sessions. The cookie
+    notice is pressed in the session `presses_in` names: 'agent off', 'agent back on' or 'image listing'."""
+    said = "flow.google.com uses cookies from Google ... OK, got it"
+
+    async def fake_set_mode(session, project_id, enabled):
+        if presses_in == ("agent back on" if enabled else "agent off"):
+            session.notices.append(said)
+        if left and not enabled:
+            session.unpressed.append(left)
+        if chip_times_out:
+            raise PlaywrightTimeoutError(
+                'Locator.click: Timeout 8000ms exceeded.\nCall log:\n  - waiting for locator("button.agent-mode-chip")'
+            )
+        return {"enabled": enabled, "was": not enabled, "panel_closed": False, "rpcids": []}
+
+    async def fake_run_job(job, out_dir, **kwargs):
+        if run_fails:
+            raise RuntimeError("gflow broke")
+        return {"job_id": job.job_id, "outputs": [{"media_id": "wf-1", "path": "out/x.png"}]}
+
+    async def fake_project(session, project_id, **kwargs):
+        if presses_in == "image listing":
+            session.notices.append(said)
+        return {"media": [{"id": "m-1", "workflow_id": "wf-1"}]}
+
+    for name, fn in REAL_AGENT.items():
+        monkeypatch.setattr(mcp_server.Backend, name, fn)
+    monkeypatch.setattr(
+        mcp_server,
+        "FlowSession",
+        lambda profile: FlowSession(profile_dir=tmp_path, client_factory=_BrowserlessClient),
+    )
+    monkeypatch.setattr(mcp_server.agent_mod, "set_mode", fake_set_mode)
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server.reader, "project", fake_project)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    return said
+
+
+@pytest.mark.parametrize("presses_in", ["agent off", "agent back on", "image listing"])
+def test_a_press_met_in_a_session_the_agent_never_sees_is_named_by_the_tools_own_answer(
+    monkeypatch, tmp_path, presses_in
+):
+    # Scoped re-review of plan AL, 2026-10-02: the tools that run gflow open sessions of their own first (Agent
+    # mode off and back on, the listing read for an image's media id). Their answers stay inside the server, and
+    # the first notice of a fresh profile, met there, was handed to one of them and never reported.
+    said = _generation_over_real_sessions(monkeypatch, tmp_path, presses_in=presses_in)
+
+    result = _call("gen_t2i", {"prompt": "a cup", "project": "P"})
+
+    assert not result.is_error, _texts([result])
+    answer = _payload(result)
+    assert answer["dismissed_notices"] == [said], answer
+    assert answer["outputs"][0]["media_id"] == "m-1" and answer["agent_mode_restored"] is True
+
+
+@pytest.mark.parametrize("presses_in", ["agent off", "agent back on"])
+def test_a_generation_gflow_failed_names_the_press_of_its_own_sessions(monkeypatch, tmp_path, presses_in):
+    # The agent may stop at this error, and the press would then be told to nobody.
+    said = _generation_over_real_sessions(monkeypatch, tmp_path, presses_in=presses_in, run_fails=True)
+
+    result = _call("gen_t2i", {"prompt": "a cup", "project": "P"})
+
+    text = _texts([result])[0]
+    assert result.is_error and text.index("gflow broke") < text.index(said), text
+
+
+def test_a_notice_over_the_agent_chip_is_named_beside_the_advice_about_the_chip(monkeypatch, tmp_path):
+    # The Agent step raises its own advice FROM the timeout that carries the note, so the note sits one cause down.
+    left = "Flow's cookie notice shows 2 accept buttons, not one; nothing was clicked: 'uses cookies'"
+    said = _generation_over_real_sessions(
+        monkeypatch, tmp_path, presses_in="nowhere", chip_times_out=True, left=left
+    )
+
+    result = _call("gen_t2v", {"prompt": "a cup", "project": "P", "job_id": "covered-chip-1"})
+
+    text = _texts([result])[0]
+    assert result.is_error and "prompt bar" in text and "2 accept buttons" in text, text
+    assert text.index("prompt bar") < text.index("2 accept buttons") and "Call log" not in text, text
+    assert said not in text
+
+
+def test_a_film_fetched_at_the_second_try_still_names_the_press_of_the_first(monkeypatch, tmp_path):
+    backend = _browserless_backend(monkeypatch, tmp_path)
+    backend.out_dir = tmp_path
+    said = "flow.google.com uses cookies from Google ... OK, got it"
+    tries = []
+
+    async def fake_download(session, project_id, scene_id, *, out_dir):
+        tries.append(scene_id)
+        if len(tries) == 1:
+            session.notices.append(said)
+            raise RuntimeError("Target page, context or browser has been closed")
+        return {"path": str(out_dir / "film.mp4")}
+
+    monkeypatch.setattr(mcp_server.scenes_mod, "download", fake_download)
+
+    film = asyncio.run(backend.scene_download("P", "S"))
+
+    assert film["attempts"] == 2 and film["dismissed_notices"] == [said], film
 
 
 def test_a_notice_the_driver_could_not_press_is_named_beside_whatever_failed_after_it(monkeypatch, tmp_path):

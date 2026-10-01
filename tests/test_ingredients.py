@@ -1255,6 +1255,12 @@ def test_a_refusal_is_read_off_every_pane_and_never_holds_a_voices_player():
     cards = ["Maximum audio ingredients reached (1 allowed) play_arrow 0:06 voice_selection play_arrow girl"]
     assert ingredients._card_refusal(cards) == "Maximum audio ingredients reached (1 allowed)"
     assert ingredients._card_refusal(["play_arrow 0:06 voice_selection Achird"]) == ""
+    # Two panes that came up with the pointer on the chip are both quoted: the driver cannot tell which of them is
+    # Flow's refusal, and the first could be a toast.
+    both = ["Image added to your project", "Maximum image ingredients reached (3 allowed)"]
+    assert ingredients._card_refusal(both) == (
+        "Image added to your project / Maximum image ingredients reached (3 allowed)"
+    )
 
 
 def test_close_dialog_gives_up_on_a_dialog_that_will_not_close():
@@ -4605,8 +4611,45 @@ def test_a_clip_still_rendering_never_hides_a_request_that_dropped_a_voice(monke
         _paid_run(tmp_path)
     said = str(caught.value)
     assert said.startswith(STILL_RENDERING)
-    assert ("did not carry" in said and "achird" in said) is told, said
+    assert ("did not match what was asked" in said and "achird" in said) is told, said
     assert "agent True" in log
+
+
+def test_a_run_cancelled_after_the_click_is_passed_on_as_the_cancellation_it_is(monkeypatch, tmp_path):
+    # Scoped re-review of plan AL, 2026-10-02: only an error is reworded with what the request check heard. A
+    # cancellation turned into a RuntimeError would make the caller's own cancel look like a failed tool.
+    log = []
+    _paid_world(monkeypatch, log, recipe=KEPT_ONE_VOICE)
+
+    async def submit(session, project_id, **kwargs):
+        kwargs["watch"].seen = {"rpcid": "MZZa6b", "model_keys": [], "missing": ["achird"], "ok": False}
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(ingredients.composer, "_submit", submit)
+    with pytest.raises(asyncio.CancelledError):
+        _paid_run(tmp_path)
+    assert "agent True" in log
+
+
+def test_a_request_that_named_the_wrong_model_is_not_said_to_lack_a_reference(monkeypatch, tmp_path):
+    # The check also fails on the model key's mode, length and resolution, with nothing missing: the words must hold
+    # for those too (the Frames driver already says it this way).
+    log = []
+    _paid_world(monkeypatch, log, recipe=KEPT_ONE_VOICE)
+
+    async def submit(session, project_id, **kwargs):
+        return {
+            "spent": 10,
+            "path": "out/x.mp4",
+            "body_check": {"rpcid": "MZZa6b", "model_keys": ["veo_3_1_t2v_lite"], "missing": [], "ok": False},
+        }
+
+    monkeypatch.setattr(ingredients.composer, "_submit", submit)
+    with pytest.raises(RuntimeError, match="10 credits were spent") as caught:
+        _paid_run(tmp_path)
+    said = str(caught.value)
+    assert "did not match what was asked" in said and "veo_3_1_t2v_lite" in said, said
+    assert "missing []" in said and "did not carry" not in said and "may not show them" not in said, said
 
 
 def test_a_failure_before_any_click_is_passed_on_as_it_is(monkeypatch, tmp_path):

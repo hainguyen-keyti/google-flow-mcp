@@ -1,6 +1,8 @@
 import asyncio
+import json
 import re
 from pathlib import Path
+from urllib.parse import quote_plus
 
 """gen_video's driver (plan AB): every video option Flow's composer offers, read from the surveyed options file."""
 
@@ -8,7 +10,7 @@ import pytest
 from test_ingredients import PROMPT, _install, _submit, _SubmitSession, _video
 
 from video import gen
-from video.flow import composer, video
+from video.flow import composer, ingredients, video
 
 
 def test_the_options_file_holds_what_the_composer_showed_on_2026_09_29():
@@ -472,6 +474,20 @@ def test_the_body_check_wants_the_voices_in_every_item_the_submit_carries():
     assert half["ok"] is False and half["missing"] == ["achird"]
     bare = _judged(_submit_body(["achird"], then=[None]), asked)
     assert bare["ok"] is False and bare["missing"] == ["achird"]
+
+
+def test_a_submit_that_carries_no_item_carries_no_voice_either():
+    # Scoped re-review of plan AL, 2026-10-02: no item is not "every item holds the voice".
+    from test_ingredients import ACHIRD, IMAGE
+
+    inner = json.dumps([[], [None, 22, None, None, None, "p-1"], ["x" * 36, 2]])
+    outer = json.dumps([[["MZZa6b", inner, None, "generic"]]])
+    body = "f.req=" + quote_plus(outer) + "&at=AJpMio%3A1790000000"
+    assert ingredients.request_voices(body) == []
+
+    empty = _judged(body, [IMAGE, ACHIRD])
+
+    assert empty["ok"] is False and "achird" in empty["missing"], empty
 
 
 def test_a_voice_nobody_asked_for_is_reported_and_is_no_error():
