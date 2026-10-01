@@ -109,9 +109,20 @@ async def fetch_asset(request: Any, kind: str, base_url: str, stem: Path) -> Pat
     raise RuntimeError(f"no rendition of {kind} returned a real asset: {'; '.join(seen)}")
 
 
+def is_upsampled(row: dict[str, Any]) -> bool:
+    """A 1080p Download adds `<workflow>_upsampled` (model veo_3_1_upsampler_1080p, measured 2026-10-01): a rendition
+    of a version, which the editor history does not list as a version of its own."""
+    return str(row.get("workflow_id") or "").endswith("_upsampled") or "upsampler" in str(
+        row.get("model") or ""
+    )
+
+
 def latest_version(rows: list[dict[str, Any]], media_id: str) -> dict[str, Any]:
     """The newest finished version of a media id among generation records (an edit adds a version)."""
-    versions = sorted((r for r in rows if r.get("id") == media_id), key=lambda r: r.get("created") or 0)
+    versions = sorted(
+        (r for r in rows if r.get("id") == media_id and not is_upsampled(r)),
+        key=lambda r: r.get("created") or 0,
+    )
     if not versions:
         raise LookupError(f"media {media_id} is not in the project listing")
     for item in reversed(versions):

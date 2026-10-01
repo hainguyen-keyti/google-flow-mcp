@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+import urllib.request
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -212,8 +214,10 @@ async def download_rendition(
 ) -> Path:
     label = RENDITIONS[quality.lower()]
     page = session.page
-    await _select_version(session, project_id, media_id, workflow_id)
+    wanted = await _select_version(session, project_id, media_id, workflow_id)
     item = await _menu_item(session, "Download media", label)
+    if quality.lower() == "1080p":
+        return await _download_upsampled(page, item, wanted, out_dir / f"{media_id}_1080p.mp4")
     async with page.expect_download(timeout=600_000) as download_info:
         await item.click(timeout=8_000)
     download = await download_info.value
@@ -223,6 +227,37 @@ async def download_rendition(
         raise FileExistsError(target)
     out_dir.mkdir(parents=True, exist_ok=True)
     await download.save_as(str(target))
+    return target
+
+
+SIGNED_FETCH_TIMEOUT_S = 180
+
+
+def _fetch_signed(url: str) -> tuple[int, str, bytes]:
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(request, timeout=SIGNED_FETCH_TIMEOUT_S) as answer:
+        return answer.status, answer.headers.get("content-type") or "", answer.read()
+
+
+async def _download_upsampled(page: Any, item: Any, wanted: dict[str, Any], target: Path) -> Path:
+    """Measured 2026-10-01: after the 1080p click Flow GETs a signed `flow-content.google/video/<workflow>_upsampled`
+    url and then hands Chrome a blob of the same bytes, and Chrome 154 crashed in that download six times; the signed
+    url needs no cookie, so the file is fetched outside the browser (byte for byte the file Chrome saves)."""
+    if target.exists():
+        raise FileExistsError(target)
+    tail = f"/video/{wanted.get('workflow_id')}_upsampled"
+    async with page.expect_request(
+        lambda request: request.method == "GET" and urlsplit(request.url).path.endswith(tail), timeout=600_000
+    ) as asked:
+        await item.click(timeout=8_000)
+    url = (await asked.value).url
+    status, kind, body = await asyncio.to_thread(_fetch_signed, url)
+    if status != 200 or "video/mp4" not in kind or not body:
+        raise RuntimeError(
+            f"Flow's 1080p file answered HTTP {status} {kind!r} with {len(body)} bytes; nothing was saved"
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(body)
     return target
 
 

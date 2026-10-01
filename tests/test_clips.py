@@ -2448,3 +2448,105 @@ def test_download_rendition_refuses_a_clip_that_lives_only_inside_a_scene_before
     with pytest.raises(LookupError, match="scene_download"):
         asyncio.run(clips.download_rendition(session, "p", "m", "1080p", tmp_path))
     assert opened == []
+
+
+class _FlowRequest:
+    """A request the editor page sent, as logged on 2026-10-01 for the 1080p Download."""
+
+    def __init__(self, url, method="GET"):
+        self.url, self.method = url, method
+
+
+class _SignedUrlPage(_VersionPage):
+    """The 1080p Download as measured 2026-10-01: Flow GETs a signed `/video/<workflow>_upsampled` url and then hands
+    Chrome a blob of the same bytes; Chrome 154 crashed in that download 6 times, so the tool must not wait on it."""
+
+    def __init__(self, requests):
+        super().__init__()
+        self.requests = requests
+
+    def expect_download(self, timeout=None):
+        raise AssertionError("the 1080p path must not depend on Chrome's download")
+
+    def expect_request(self, predicate, timeout=None):
+        page = self
+
+        class _Ctx:
+            async def __aenter__(inner):
+                return inner
+
+            async def __aexit__(inner, *exc):
+                return False
+
+            @property
+            def value(inner):
+                async def wait():
+                    for request in page.requests:
+                        if predicate(request):
+                            return request
+                    raise PlaywrightTimeoutError("no request matched")
+
+                return wait()
+
+        return _Ctx()
+
+
+_EDIT_RECORDS = [
+    {"id": "m", "workflow_id": "w-base", "created": 1, "url": "https://lh3/xxxxxxxxxxxxxxxxxxxxbase"},
+    {"id": "m", "workflow_id": "w-edit", "created": 2, "url": "https://lh3/yyyyyyyyyyyyyyyyyyyyedit"},
+]
+SIGNED = "https://flow-content.google/video/w-edit_upsampled?Expires=1&KeyName=k&Signature=s"
+
+
+def _download_world(monkeypatch, answer=(200, "video/mp4", b"EDIT1080")):
+    fetched = []
+
+    async def fake_snapshot(session, project_id):
+        return (_EDIT_RECORDS, set())
+
+    def fake_fetch(url):
+        fetched.append(url)
+        return answer
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", _none)
+    monkeypatch.setattr(clips, "_menu_item", _clickable_menu_item)
+    monkeypatch.setattr(clips, "_fetch_signed", fake_fetch, raising=False)
+    return fetched
+
+
+def test_a_1080p_download_is_fetched_from_the_signed_url_flow_requested(monkeypatch, tmp_path):
+    fetched = _download_world(monkeypatch)
+    page = _SignedUrlPage([_FlowRequest("https://flow-content.google/video/w-base"), _FlowRequest(SIGNED)])
+    session = type("_S", (), {"page": page})()
+
+    out = asyncio.run(clips.download_rendition(session, "p", "m", "1080p", tmp_path))
+
+    assert fetched == [SIGNED], fetched
+    assert out == tmp_path / "m_1080p.mp4" and out.read_bytes() == b"EDIT1080"
+
+
+def test_a_1080p_download_never_takes_the_file_of_another_version(monkeypatch, tmp_path):
+    fetched = _download_world(monkeypatch)
+    page = _SignedUrlPage(
+        [
+            _FlowRequest("https://flow-content.google/video/w-base_upsampled?Expires=1"),
+            _FlowRequest("https://flow-content.google/video/w-edit"),
+            _FlowRequest("https://flow-content.google/video/w-edit_upsampled?Expires=1", method="HEAD"),
+        ]
+    )
+    session = type("_S", (), {"page": page})()
+
+    with pytest.raises(PlaywrightTimeoutError):
+        asyncio.run(clips.download_rendition(session, "p", "m", "1080p", tmp_path))
+    assert fetched == [] and not list(tmp_path.iterdir())
+
+
+def test_a_signed_url_that_answers_no_video_is_refused(monkeypatch, tmp_path):
+    _download_world(monkeypatch, answer=(403, "text/html", b"denied"))
+    page = _SignedUrlPage([_FlowRequest(SIGNED)])
+    session = type("_S", (), {"page": page})()
+
+    with pytest.raises(RuntimeError, match="403"):
+        asyncio.run(clips.download_rendition(session, "p", "m", "1080p", tmp_path))
+    assert not list(tmp_path.iterdir())

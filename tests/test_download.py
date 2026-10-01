@@ -97,3 +97,30 @@ def test_an_old_lh3_url_is_left_as_it_was():
     assert download.asset_urls("image", "https://lh3.googleusercontent.com/abc") == [
         "https://lh3.googleusercontent.com/abc=s0"
     ]
+
+
+def test_an_upsampled_rendition_is_never_taken_for_the_latest_version():
+    """Measured 2026-10-01: a 1080p Download adds a `<workflow>_upsampled` record (type CAI, model
+    veo_3_1_upsampler_1080p, with a url); taken as the newest version, the editor history had no entry for it."""
+    rows = [
+        {"id": "m", "workflow_id": "w", "created": 10, "url": "https://x/w"},
+        {
+            "id": "m",
+            "workflow_id": "w_upsampled",
+            "created": 20,
+            "url": "https://x/w_up",
+            "model": "veo_3_1_upsampler_1080p",
+        },
+    ]
+    assert download.latest_version(rows, "m")["workflow_id"] == "w"
+    edited = rows + [
+        {"id": "m", "workflow_id": "w2", "created": 30, "url": "https://x/w2"},
+        {
+            "id": "m",
+            "workflow_id": "w2_upsampled",
+            "created": 40,
+            "url": "https://x/w2_up",
+            "model": "veo_3_1_upsampler_1080p",
+        },
+    ]
+    assert download.latest_version(edited, "m")["workflow_id"] == "w2"
