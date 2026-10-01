@@ -2087,10 +2087,19 @@ def test_a_call_cancelled_after_a_press_leaves_the_press_for_the_next_answer(mon
     async def saw_none(session):
         return {"balance": 75}
 
+    async def answers_a_list(session):
+        session.notices.append("an earlier notice")
+        return [{"id": "P"}]
+
+    # A press an earlier list answer left behind is kept beside the cancelled call's own.
+    assert asyncio.run(backend._with(answers_a_list)) == [{"id": "P"}]
     with pytest.raises(asyncio.CancelledError) as cancelled:
         asyncio.run(backend._with(pressed_then_cancelled))
     assert not getattr(cancelled.value, "__notes__", [])
-    assert asyncio.run(backend._with(saw_none)) == {"balance": 75, "dismissed_notices": [said]}
+    assert asyncio.run(backend._with(saw_none)) == {
+        "balance": 75,
+        "dismissed_notices": ["an earlier notice", said],
+    }
 
 
 def test_a_press_no_answer_has_carried_yet_is_named_by_the_next_call_that_fails(monkeypatch, tmp_path):
