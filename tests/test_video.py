@@ -707,3 +707,42 @@ def test_a_preview_that_does_not_show_the_asked_image_is_never_added():
     with pytest.raises(LookupError, match="preview"):
         asyncio.run(video.pin_frame(page, "Start", ref))
     assert "add" not in page.clicked, page.clicked
+
+
+SIZED = "=s512-rw"
+
+
+def test_a_tile_whose_src_carries_a_size_suffix_is_still_the_asked_image():
+    """Measured 2026-10-01: overnight the picker's img src gained '=s512-rw' after the token the listing url ends on
+    ('...RpDlNcxn=s512-rw' against '...RpDlNcxn'), so no tile matched and every Frames run was refused."""
+    ref = video.frame_references([TEAPOT, CUP], RECORDS, "m-cup", None)[0]
+    cup, teapot = ("https://x/" + r["url"][-40:] + SIZED for r in (RECORDS[1], RECORDS[0]))
+    page = _ListPicker([teapot, cup])
+
+    asyncio.run(video.pin_frame(page, "Start", ref))
+
+    assert page.pinned == cup, page.clicked
+    assert page.clicked[-2:] == [("select", cup), "add"], page.clicked
+
+
+def test_a_sized_tile_whose_token_only_contains_the_asked_tail_is_never_clicked():
+    ref = video.frame_references([TEAPOT, CUP], RECORDS, "m-cup", None)[0]
+    page = _ListPicker(["https://x/" + RECORDS[1]["url"][-40:] + "EXTRA" + SIZED])
+
+    with pytest.raises(LookupError, match="no tile"):
+        asyncio.run(video.pin_frame(page, "Start", ref))
+    assert not any(isinstance(c, tuple) or c == "add" for c in page.clicked), page.clicked
+
+
+@pytest.mark.parametrize(
+    ("src", "bare"),
+    [
+        ("https://flow.google.com/asb/TOKEN=s512-rw", "https://flow.google.com/asb/TOKEN"),
+        ("https://lh3/asb/TOKEN=m22", "https://lh3/asb/TOKEN"),
+        ("https://lh3/asb/TOKEN", "https://lh3/asb/TOKEN"),
+        ("https://lh3/asb/TO=KEN", "https://lh3/asb/TO"),
+        (None, ""),
+    ],
+)
+def test_a_rendition_suffix_is_dropped_from_the_end_of_a_src(src, bare):
+    assert video._bare_src(src) == bare

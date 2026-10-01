@@ -118,6 +118,13 @@ ADD_TO_PROMPT = "Add to prompt"
 # The picker lists its results and then shows the selected one large, last (measured 2026-09-30).
 _PICKER_PREVIEW_JS = """() => { const all = [...document.querySelectorAll('.cdk-overlay-pane img, [role=dialog] img')];
   return all.length ? (all[all.length - 1].getAttribute('src') || '') : ''; }"""
+# Since 2026-10-01 the picker's img src carries a size suffix after the token ('...RpDlNcxn=s512-rw'), while the
+# listing url still ends on the bare token.
+_RENDITION_SUFFIX = re.compile(r"=[A-Za-z0-9_-]*$")
+
+
+def _bare_src(src: str | None) -> str:
+    return _RENDITION_SUFFIX.sub("", src or "")
 
 
 async def _add_previewed(page: Any, slot: str, ref: FrameRef) -> None:
@@ -127,7 +134,7 @@ async def _add_previewed(page: Any, slot: str, ref: FrameRef) -> None:
     if await add.count() == 0:
         return
     shown = await page.evaluate(_PICKER_PREVIEW_JS)
-    if not str(shown).endswith(ref.tail):
+    if not _bare_src(str(shown)).endswith(ref.tail):
         raise LookupError(
             f"the {slot} picker's preview shows another image than {ref.title!r} ({ref.id}); nothing was pinned"
         )
@@ -230,7 +237,7 @@ async def pin_frame(page: Any, slot: str, ref: FrameRef) -> None:
         tiles = page.locator(".cdk-overlay-pane img, [role=dialog] img")
         for index in range(await tiles.count()):
             tile = tiles.nth(index)
-            if (await tile.get_attribute("src") or "").endswith(ref.tail):
+            if _bare_src(await tile.get_attribute("src")).endswith(ref.tail):
                 await tile.click(timeout=8_000)
                 await page.wait_for_timeout(3_000)
                 await _add_previewed(page, slot, ref)
