@@ -192,7 +192,10 @@ repo's source at `615bcac`.
   id (rpc `YhhmEf`); the balance had dropped by 4 right after each submit, so Flow charges at the submit and not at
   the finish; both clips rendered after the page had closed and were ready within about 4 minutes; each collect
   fetched its own clip (looked at: the boat and the kite), 360x640, 4.000 s; a second collect answered from the row;
-  a used job id was refused with `outcome code=DONE charged=4`. What it gives up and where it is narrower than the
+  a used job id was refused with `outcome code=DONE charged=4`. A third job the same day (4 credits) ran the code
+  as it stands after its reviews: while it rendered, a `gen_video` of its project and prompt was refused in 0.0 s,
+  with no browser, no row and the balance unmoved, and the job, alone on the balance, was collected with its own
+  bracket of 4. What it gives up and where it is narrower than the
   blocking tools, each named by its tier 1 review: Flow's reason for a refusal after the call has left is not heard,
   so such a job is settled as nothing generated ten minutes after its submit and takes no `retry_of` (a refusal
   heard while the page is still open is settled there, typed, as `gen_video` does); a job's `spent` is its own
@@ -271,7 +274,7 @@ repo's source at `615bcac`.
 |---|---|---|---|
 | AL (done 2026-10-01) | G6 overlays first (the bar blocked every composer tool), then G3 recipe read-back, G2 picker attach, G1 voices, G4 wording | 1 | 22 credits spent of a ceiling of 40 |
 | AM (done 2026-10-02) | G5 typed outcomes and `retry_of` | 1 | 0 to 10 |
-| AN (done 2026-10-03) | G7 submit, status, collect | 1 | 8 credits spent of a ceiling of 20 |
+| AN (done 2026-10-03) | G7 submit, status, collect | 1 | 12 credits spent of a ceiling of 20 |
 | AO | G8 capability map, section 2 rows, section 3 hazards | 2 to 3 | 0 |
 
 Each plan follows the repo's rules: red test first, mutants on every guard, a live run of the exact case that failed,
