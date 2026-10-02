@@ -2661,3 +2661,66 @@ def test_a_greyed_out_item_is_still_said_as_greyed_out(monkeypatch, tmp_path):
     with pytest.raises(LookupError, match="greyed out") as said:
         asyncio.run(clips.download_rendition(session, "p", "m", "4k", tmp_path))
     assert "offers" not in str(said.value)
+
+
+def test_a_menu_that_never_opened_is_not_said_to_lack_the_quality(monkeypatch, tmp_path):
+    # Found in review: any LookupError was reworded as "this clip's Download menu offers [] and no 1080p", though no
+    # menu had opened. Only a menu that shows items can be said to lack one.
+    _menu_world(monkeypatch, ())
+
+    async def no_button(session, button, item):
+        raise LookupError(f"the {button} button never appeared on the editor after 15s")
+
+    monkeypatch.setattr(clips, "_menu_item", no_button)
+    session = type("_S", (), {"page": _VersionPage()})()
+
+    with pytest.raises(LookupError, match="never appeared") as said:
+        asyncio.run(clips.download_rendition(session, "p", "m", "1080p", tmp_path))
+    assert "offers" not in str(said.value)
+
+
+def test_a_quality_asked_in_capitals_is_the_same_quality(monkeypatch, tmp_path):
+    fetched = _menu_world(monkeypatch, SMALL_MENU)
+    page = _SignedUrlPage([_FlowRequest(SMALL_UPSCALE)])
+
+    out = asyncio.run(clips.download_rendition(type("_S", (), {"page": page})(), "p", "m", "720P", tmp_path))
+
+    assert fetched == [SMALL_UPSCALE] and out == tmp_path / "m_720p.mp4"
+
+
+class _ShownAndHidden:
+    """The items of an open menu as Playwright hands them: some hidden, their text spread over lines."""
+
+    def __init__(self, items):
+        self.items = items
+
+    async def count(self):
+        return len(self.items)
+
+    def nth(self, index):
+        text, visible = self.items[index]
+
+        class _Item:
+            async def is_visible(inner):
+                return visible
+
+            async def inner_text(inner):
+                return text
+
+        return _Item()
+
+
+def test_the_menu_is_read_as_the_items_a_person_sees(monkeypatch):
+    # This is what the refusal of a missing quality quotes, so it is run on its own: the hidden item of another
+    # overlay is not offered, and "720p\nUpscaled" reads as one item.
+    selectors = []
+
+    class _Page:
+        def locator(self, selector):
+            selectors.append(selector)
+            return _ShownAndHidden(
+                [("270p\n  Animated GIF", True), ("Share", False), ("720p\nUpscaled", True)]
+            )
+
+    assert asyncio.run(clips._menu_texts(_Page())) == ["270p Animated GIF", "720p Upscaled"]
+    assert "menuitem" in selectors[0]

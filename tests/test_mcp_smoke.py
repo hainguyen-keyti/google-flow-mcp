@@ -462,6 +462,64 @@ def _a_model_with_no_cap(replies):
     replies["capabilities"]["video"]["models"]["veo-lite"]["voice_ingredients"] = None
 
 
+def _two_cells_with_their_prices_swapped(replies):
+    # Found in review: the row compared the sorted prices, so the dearest cell could carry the cheapest price.
+    replies["capabilities"] = _real_map()
+    cells = replies["capabilities"]["video"]["models"]["omni-flash"]["credits_x1"]
+    cells[0]["credits"], cells[-1]["credits"] = cells[-1]["credits"], cells[0]["credits"]
+    assert cells[0]["credits"] != cells[-1]["credits"]
+
+
+def _a_model_with_no_image_cap(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["models"]["veo-lite"]["image_ingredients"] = None
+
+
+def _a_cap_below_zero(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["models"]["veo-lite"]["voice_ingredients"] = -1
+
+
+def _a_cap_that_is_a_flag(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["models"]["veo-lite"]["voice_ingredients"] = True
+
+
+def _counts_the_survey_does_not_hold(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["counts"] = [1]
+
+
+def _aspects_the_survey_does_not_hold(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["aspects"] = ["1:1"]
+
+
+def _a_length_the_survey_does_not_hold(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["models"]["omni-flash"]["seconds"] = [99]
+
+
+def _a_mode_the_survey_does_not_hold(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["models"]["veo-quality"]["modes"] = ["Frames"]
+
+
+def _modes_the_survey_does_not_hold(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["modes"] = ["Frames"]
+
+
+def _a_resolution_the_survey_does_not_hold(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["models"]["omni-flash"]["resolutions"] = ["720p"]
+
+
+def _an_image_composer_of_another_survey(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["image"]["composer"]["price_line_x1"] = 50
+
+
 CORRUPTIONS = [
     ("flow_lane", _signed_out),
     ("flow_projects", _repeated_project_id),
@@ -493,6 +551,17 @@ CORRUPTIONS = [
     ("flow_capabilities", _a_model_the_survey_holds_left_out),
     ("flow_capabilities", _a_map_dated_another_day),
     ("flow_capabilities", _a_model_with_no_cap),
+    ("flow_capabilities", _two_cells_with_their_prices_swapped),
+    ("flow_capabilities", _a_model_with_no_image_cap),
+    ("flow_capabilities", _a_cap_below_zero),
+    ("flow_capabilities", _a_cap_that_is_a_flag),
+    ("flow_capabilities", _counts_the_survey_does_not_hold),
+    ("flow_capabilities", _aspects_the_survey_does_not_hold),
+    ("flow_capabilities", _a_length_the_survey_does_not_hold),
+    ("flow_capabilities", _a_mode_the_survey_does_not_hold),
+    ("flow_capabilities", _modes_the_survey_does_not_hold),
+    ("flow_capabilities", _a_resolution_the_survey_does_not_hold),
+    ("flow_capabilities", _an_image_composer_of_another_survey),
 ]
 
 

@@ -330,10 +330,12 @@ mặt, tay và món đồ.
   360p tải bản upscale qua link đã ký (720x1280, $0); mức mà menu của clip không có, kể cả 1080p mặc định, bị từ chối
   kèm đúng các mục menu đang có; file 360p gốc lấy bằng `flow_download`.
 - **`flow_upload`**: đọc danh sách ảnh của project TRƯỚC khi chọn file. Flow trả lời (rpc `maseQ`, đo 7,8 tới 9,1 s)
-  thì dùng câu trả lời đó. Không thấy câu trả lời thì quyết toán bằng listing: đúng một ảnh mới mang tên file là bản
-  vừa upload (`found_by: "listing"`); không có ảnh mới nào thì báo "chưa upload gì, upload lại an toàn"; có hai thì
-  không chọn bừa; file video thì bảo xem `flow_media` vì chưa ai đo tên video trong listing. Lý do: ngày 2026-10-02
-  tool báo lỗi hai lần trong khi ảnh đã lên, và lần gọi lại để lại hai ảnh trùng tên.
+  thì dùng câu trả lời đó. Không thấy câu trả lời thì quyết toán bằng listing, đọc bốn lần trong khoảng một phút:
+  đúng một ảnh mới mang tên file là bản vừa upload (`found_by: "listing"`); KHÔNG có ảnh mới nào cả thì báo "chưa
+  upload gì, upload lại an toàn"; có hai ảnh cùng tên, hay có ảnh mới mang tên khác, thì không đoán mà bảo xem
+  `flow_media`; file không phải ảnh (png, jpg, jpeg, webp) cũng bảo xem `flow_media` vì chưa ai đo nó hiện tên gì
+  trong listing. Lý do: ngày 2026-10-02 tool báo lỗi hai lần trong khi ảnh đã lên, và lần gọi lại để lại hai ảnh
+  trùng tên. Lỗi đó không tái hiện được ngày 2026-10-03, nên nhánh này mới chỉ được chứng minh bằng test.
 
 Không có chế độ no-spend: chủ repo chốt agent được gọi mọi thứ. Chuỗi `instructions` mà server gửi cho agent lúc
 `initialize` nêu đích danh nhóm tốn credit, thời gian chờ và luật giữ `job_id`, và có test canh để nó không lệch

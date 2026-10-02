@@ -225,8 +225,11 @@ async def download_rendition(
     except LookupError as exc:
         if "greyed out" in str(exc):
             raise
-        # A 360p clip has no 1080p and no 4K (measured 2026-10-03): say what its menu does offer.
+        # A 360p clip has no 1080p and no 4K (measured 2026-10-03): say what its menu does offer. A menu showing no
+        # item never opened, and that failure keeps its own words.
         offered = await _menu_texts(page)
+        if not offered:
+            raise
         raise LookupError(
             f"this clip's Download menu offers {offered} and no {label}; ask for a quality it offers (a 360p clip "
             "has a 720p upscale, and its own 360p file comes with flow_download); nothing was downloaded"

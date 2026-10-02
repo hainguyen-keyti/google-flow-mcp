@@ -105,7 +105,7 @@ guess about; the tool says so too.
 | `clip_extend` (Veo clips only) | 10 |
 | `clip_edit` (Omni 1.1 Flash) | 20 measured, Flow's table says 40 |
 | `gen_t2i` / `gen_i2i` (Nano Banana 2) | 0 credits, but a daily image quota |
-| `clip_download` at 1080p, or at 720p on a 360p clip (its upscale; a 360p clip has no 1080p and is refused with what its menu offers) | 0 |
+| `clip_download` at 1080p, or at 720p on a 360p clip (its upscale, measured 2026-10-03; a 360p clip has no 1080p and is refused with what its menu offers) | 0 |
 | `clip_download` at 4k (a Flow upscale) | not offered on Pro: greyed out, refused before any click (Flow's table: Ultra, 50) |
 | Every read: lane, projects, media, credits, characters, scenes, voices, what a clip was made from (`clip_recipe`), and this table as data (`flow_capabilities`: every model's cells, lengths and caps, no browser) | 0 |
 
@@ -184,6 +184,11 @@ These are not suggestions; they are enforced in code and pinned by tests.
 - Flow's Agent mode (the "Agent" chip in the prompt bar) blocks generation while on. The five gflow MCP tools and
   `gen_character` turn it off first and back on after (about 19 s, or 35 s when it was on); the CLI and the editor
   tools (`clip_extend`, `clip_edit`) do not, so turn it off with `agent_mode` before using them.
+- `flow_upload` is told by Flow's own reply. When that reply is not seen (it happened twice on 2026-10-02 while the
+  image did reach the project, and not again since; the cause is unknown), the tool reads the listing four times,
+  about a minute in all: one new image carrying the file's name is the upload, no new image at all means nothing
+  was uploaded and a second try is safe, and anything else (two of that name, a new image under another title, a
+  file that is no image) sends you to `flow_media` first. That branch is proven by tests only.
 - Trimming a clip's head or tail inside a scene is not implemented.
 - Deliberately out of scope: collections, media rename, media trash, project zip export, the Tools gallery,
   Flow's own agent mode beyond an on/off switch, project settings, GIF export, share

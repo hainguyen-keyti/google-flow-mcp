@@ -4624,3 +4624,17 @@ def test_the_tools_that_quote_prices_in_prose_point_to_the_table():
     for name in ("gen_video", "job_submit", "gen_character"):
         assert "flow_capabilities" in tools[name].description, name
     assert "flow_capabilities" in mcp_server.server.instructions
+
+
+def test_what_the_table_marks_unmeasured_is_what_the_tool_calls_unmeasured():
+    # The mark lives in the table and the words in gen_character's description: one must not say measured for a
+    # price the other calls unmeasured. The description of the table claims no date for a part that has none.
+    from video.flow import capabilities, ingredients
+
+    tools = served_tool_objects()
+    said = tools["gen_character"].description
+    for name, price in ingredients.PRICES.items():
+        unmeasured = f"{name} {price} credits by Flow's own price table, unmeasured"
+        assert (unmeasured in said) == (name in capabilities.CHARACTER_UNMEASURED), name
+    assert "each part with the date" not in tools["flow_capabilities"].description
+    assert "measured false" in tools["flow_capabilities"].description

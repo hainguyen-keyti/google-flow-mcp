@@ -170,47 +170,82 @@ def _image(media_id, title, workflow="w"):
     }
 
 
-def _upload_world(monkeypatch, tmp_path, *, before, after, frames):
-    """The listing before and after the file is chosen, and the batchexecute frames heard in between."""
-    listings = [before, after]
-    read = []
+class _UploadWorld:
+    """The project's listing as Flow would answer it: `before` until the file has been chosen, then `after` from
+    the read numbered `late` on (0 is the first read after the choice). A listing read out of order answers what
+    the real one would, so a driver that reads "before" after the choice finds the upload already in it."""
 
-    async def fake_project(session, project_id, settle=10.0, *, versions=False):
-        read.append(project_id)
-        return {"meta": {"id": project_id}, "media": list(listings[min(len(read), 2) - 1])}
+    def __init__(self, monkeypatch, tmp_path, *, before, after, frames, name="shot.png", late=0):
+        self.before, self.after, self.frames, self.late = before, after, frames, late
+        self.chosen = False
+        self.reads_before = self.reads_after = 0
+        self.settle = None
+        monkeypatch.setattr(uploads.reader, "project", self.project)
+        monkeypatch.setattr(uploads, "capture", self.capture)
+        monkeypatch.setattr(uploads, "LISTING_STEP_S", 0, raising=False)
+        self.local = tmp_path / name
+        self.local.write_bytes(b"\x89PNG\r\n\x1a\n")
+        self.session = _FakeSession(_FakePage(uploads_on_disk=4, all_media_tiles=4, sidebar_ready_at_ms=0))
 
-    async def fake_capture(session, action, *, settle):
-        return frames
+    async def project(self, session, project_id, settle=10.0, *, versions=False):
+        if not self.chosen:
+            self.reads_before += 1
+            return {"meta": {"id": project_id}, "media": list(self.before)}
+        self.reads_after += 1
+        listed = self.after if self.reads_after > self.late else self.before
+        return {"meta": {"id": project_id}, "media": list(listed)}
 
-    monkeypatch.setattr(uploads.reader, "project", fake_project)
-    monkeypatch.setattr(uploads, "capture", fake_capture)
-    local = tmp_path / "shot.png"
-    local.write_bytes(b"\x89PNG\r\n\x1a\n")
-    page = _FakePage(uploads_on_disk=4, all_media_tiles=4, sidebar_ready_at_ms=0)
-    return _FakeSession(page), local, read
+    async def capture(self, session, action, *, settle):
+        self.chosen, self.settle = True, settle
+        return self.frames
+
+    def upload(self):
+        return asyncio.run(uploads.upload(self.session, "p", self.local))
 
 
 def test_an_upload_flow_answered_is_told_by_its_reply(monkeypatch, tmp_path):
-    session, local, read = _upload_world(
-        monkeypatch, tmp_path, before=[], after=[], frames={"maseQ": [MASEQ]}
-    )
+    world = _UploadWorld(monkeypatch, tmp_path, before=[], after=[], frames={"maseQ": [MASEQ]})
 
-    out = asyncio.run(uploads.upload(session, "p", local))
+    out = world.upload()
 
     assert out["media_id"] == MASEQ[0][2] and "found_by" not in out
-    assert len(read) == 1, "the listing is read once before; the reply needs no second look"
+    assert (world.reads_before, world.reads_after) == (1, 0), "the reply needs no second look at the listing"
+    # Flow answered 7.8 and 9.1 s after the file was chosen (2026-10-03): the wait has to cover that twice over.
+    assert world.settle >= 2 * 9.1
 
 
 def test_an_upload_whose_reply_was_not_seen_is_found_in_the_listing(monkeypatch, tmp_path):
     twin = _image("m-old", "shot.png")
-    session, local, read = _upload_world(
+    world = _UploadWorld(
         monkeypatch, tmp_path, before=[twin], after=[twin, _image("m-new", "shot.png")], frames={}
     )
 
-    out = asyncio.run(uploads.upload(session, "p", local))
+    out = world.upload()
 
     assert (out["media_id"], out["workflow_id"], out["size_bytes"]) == ("m-new", "w-m-new", 5)
-    assert out["found_by"] == "listing" and out["rpcids"] == [] and len(read) == 2
+    assert out["found_by"] == "listing" and out["rpcids"] == []
+    assert (world.reads_before, world.reads_after) == (1, 1)
+
+
+def test_an_upload_the_listing_shows_late_is_waited_for(monkeypatch, tmp_path):
+    # A saved frame reached the listing about 40 s after its click (2026-09-18), and the 2026-10-02 uploads landed
+    # with no reply at all: one read right after the wait would call an upload on its way "not uploaded".
+    world = _UploadWorld(
+        monkeypatch, tmp_path, before=[], after=[_image("m-new", "shot.png")], frames={}, late=2
+    )
+
+    out = world.upload()
+
+    assert out["media_id"] == "m-new" and out["found_by"] == "listing"
+    assert world.reads_after == 3
+
+
+def test_an_upload_named_in_capitals_is_judged_as_the_image_it_is(monkeypatch, tmp_path):
+    world = _UploadWorld(
+        monkeypatch, tmp_path, before=[], after=[_image("m-new", "SHOT.PNG")], frames={}, name="SHOT.PNG"
+    )
+
+    assert world.upload()["media_id"] == "m-new"
 
 
 @pytest.mark.parametrize(
@@ -218,43 +253,57 @@ def test_an_upload_whose_reply_was_not_seen_is_found_in_the_listing(monkeypatch,
     [
         ([], []),
         ([_image("m-old", "shot.png")], [_image("m-old", "shot.png")]),
-        ([], [_image("m-else", "another.png")]),
         ([], [{**_image("m-clip", "shot.png"), "kind": "video"}]),
     ],
-    ids=["nothing new", "only the twin that was there before", "a new image of another name", "a new video"],
+    ids=["nothing new", "only the twin that was there before", "a new video"],
 )
 def test_an_upload_neither_answered_nor_listed_says_nothing_was_uploaded(
     monkeypatch, tmp_path, before, after
 ):
-    session, local, _ = _upload_world(
-        monkeypatch, tmp_path, before=before, after=after, frames={"as29s": [[]]}
-    )
+    world = _UploadWorld(monkeypatch, tmp_path, before=before, after=after, frames={"as29s": [[]]})
 
     with pytest.raises(RuntimeError, match="nothing was uploaded") as said:
-        asyncio.run(uploads.upload(session, "p", local))
+        world.upload()
 
     assert "uploading again is safe" in str(said.value) and "as29s" in str(said.value)
+    # Said only after the listing was read as many times as the driver waits, never after one look.
+    assert world.reads_after == uploads.LISTING_READS > 1
+
+
+@pytest.mark.parametrize("title", ["another.png", "Shot.png", "shot", "shot (1).png", "my shot.png"])
+def test_a_new_image_of_another_name_is_neither_the_upload_nor_proof_of_none(monkeypatch, tmp_path, title):
+    # The rule "an upload is listed under its file name" was measured on five PNG uploads. A new image under any
+    # other title may be this upload renamed, so the caller is not told a second try is safe.
+    world = _UploadWorld(monkeypatch, tmp_path, before=[], after=[_image("m-else", title)], frames={})
+
+    with pytest.raises(RuntimeError, match="flow_media") as said:
+        world.upload()
+
+    assert title in str(said.value) and "m-else" in str(said.value)
+    assert "safe" not in str(said.value) and world.reads_after == uploads.LISTING_READS
 
 
 def test_two_new_images_of_the_name_are_not_chosen_between(monkeypatch, tmp_path):
     after = [_image("m-a", "shot.png"), _image("m-b", "shot.png")]
-    session, local, _ = _upload_world(monkeypatch, tmp_path, before=[], after=after, frames={})
+    world = _UploadWorld(monkeypatch, tmp_path, before=[], after=after, frames={})
 
     with pytest.raises(RuntimeError, match="2 new images") as said:
-        asyncio.run(uploads.upload(session, "p", local))
+        world.upload()
 
     assert "m-a" in str(said.value) and "m-b" in str(said.value) and "flow_media" in str(said.value)
     assert "safe" not in str(said.value)
 
 
-def test_an_unanswered_upload_of_a_video_is_not_judged_by_a_rule_measured_on_images(monkeypatch, tmp_path):
-    # How an uploaded video is titled in the listing was never measured, so "no new image of that name" proves
+@pytest.mark.parametrize("name", ["take.mp4", "loop.gif"])
+def test_an_unanswered_upload_that_is_no_image_is_not_judged_by_a_rule_measured_on_images(
+    monkeypatch, tmp_path, name
+):
+    # How anything but an image is titled in the listing was never measured, so "no new image of that name" proves
     # nothing about it: the caller is sent to the listing, and is not told that uploading again is safe.
-    session, _, _ = _upload_world(monkeypatch, tmp_path, before=[], after=[], frames={})
-    clip = tmp_path / "take.mp4"
-    clip.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    world = _UploadWorld(monkeypatch, tmp_path, before=[], after=[], frames={}, name=name)
 
     with pytest.raises(RuntimeError, match="flow_media") as said:
-        asyncio.run(uploads.upload(session, "p", clip))
+        world.upload()
 
     assert "safe" not in str(said.value) and "never measured" in str(said.value)
+    assert "video" not in str(said.value) or name.endswith(".mp4")

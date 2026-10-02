@@ -200,18 +200,44 @@ def a_capability_map(payload):
     if not isinstance(models, dict) or sorted(models) != sorted(surveyed["video"]["models"]):
         return f"the models are {sorted(models) if isinstance(models, dict) else models!r}, the surveyed file holds others"
     for name, entry in surveyed["video"]["models"].items():
-        cells = models[name].get("credits_x1") if isinstance(models[name], dict) else None
-        said = sorted(cell.get("credits") for cell in cells) if isinstance(cells, list) else cells
-        if said != sorted(entry["price_x1"].values()):
-            return f"{name} costs {said}, the surveyed file says {sorted(entry['price_x1'].values())}"
+        said = models[name] if isinstance(models[name], dict) else {}
+        cells = said.get("credits_x1")
+        if not isinstance(cells, list) or not all(isinstance(cell, dict) for cell in cells):
+            return f"{name} has no list of cells: {cells!r}"
+        # Cell by cell, under the surveyed file's own keys: a bag of the right prices on the wrong cells is wrong.
+        keys = [
+            f"{cell.get('resolution')} {cell.get('seconds')}s" if entry["durations"] else "" for cell in cells
+        ]
+        priced = dict(zip(keys, (cell.get("credits") for cell in cells), strict=True))
+        if len(priced) != len(cells) or priced != entry["price_x1"]:
+            return f"{name}'s cells are {priced}, the surveyed file says {entry['price_x1']}"
+        for key in ("resolutions", "durations"):
+            held = said.get("seconds" if key == "durations" else key)
+            if entry[key] and held != entry[key]:
+                return f"{name}'s {key} are {held!r}, the surveyed file says {entry[key]}"
+        if said.get("modes") != entry["modes"]:
+            return f"{name}'s modes are {said.get('modes')!r}, the surveyed file says {entry['modes']}"
         for cap in ("image_ingredients", "voice_ingredients"):
-            held = models[name].get(cap)
+            held = said.get(cap)
             if isinstance(held, bool) or not isinstance(held, int) or held < 0:
                 return f"{name} has no {cap} cap: {held!r}"
+    for key in ("modes", "aspects", "counts"):
+        if payload["video"].get(key) != surveyed["video"][key]:
+            return f"video {key} are {payload['video'].get(key)!r}, the surveyed file says {surveyed['video'][key]}"
     if payload["video"].get("measured") != surveyed["measured"]:
         return (
             f"dated {payload['video'].get('measured')!r}, the surveyed file is dated {surveyed['measured']!r}"
         )
+    image = payload.get("image") if isinstance(payload.get("image"), dict) else {}
+    composer = {
+        "measured": surveyed["measured"],
+        "models": surveyed["image"]["models"],
+        "aspects": surveyed["image"]["aspects"],
+        "counts": surveyed["image"]["counts"],
+        "price_line_x1": surveyed["image"]["price_x1"],
+    }
+    if image.get("composer") != composer:
+        return f"the image composer is {image.get('composer')!r}, the surveyed file says {composer}"
     return None
 
 

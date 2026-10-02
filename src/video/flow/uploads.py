@@ -1,15 +1,16 @@
 """Upload local media into a project (measured 2026-09-12: 'Add media' menu > Upload > file chooser,
-the upload answers on rpc maseQ; on 2026-10-03, three uploads, 7.8 to 9.1 s after the file was chosen). Counting
-uploads reads the DOM instead: measured 2026-09-14, opening the Uploads view fires no batchexecute at all, it is a
-client-side filter.
+the upload answers on rpc maseQ; on 2026-10-03 five uploads answered there, the two that were timed 7.8 and 9.1 s
+after the file was chosen). Counting uploads reads the DOM instead: measured 2026-09-14, opening the Uploads view
+fires no batchexecute at all, it is a client-side filter.
 
 On 2026-10-02 two uploads raised "rpc maseQ not observed; saw []" while each image had reached the project, and the
 second, made on that error, left two images of one name. It did not happen again the next day and the cause is not
 known, so a reply that is not seen is settled by the listing: the project's images are read before the file is
-chosen and again after, and the upload is the one new image carrying the file's name."""
+chosen and several times after, and the upload is the one new image carrying the file's name."""
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,16 @@ from video.session import PROJECT_READY, FlowSession
 # Uploads view of 604b2de7, container 4, image-tile 4, video-tile 0, union 8, against a screenshot of 4.
 _TILES_JS = "() => document.querySelectorAll('flow-tile-container').length"
 # The files whose upload the listing can vouch for: an uploaded image is listed under its file name (measured
-# 2026-10-02 and 2026-10-03, five uploads). A video's title in the listing was never measured.
+# 2026-10-02 and 2026-10-03, on PNG files only). How anything else is titled in the listing was never measured.
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+# How long Flow's reply is waited for: it came 7.8 and 9.1 s after the file was chosen (2026-10-03).
+REPLY_WAIT_S = 20.0
+# With no reply, how often the listing is read before "nothing was uploaded" is said, and the pause between reads.
+# One read is not enough: a saved frame reached the listing about 40 s after its click (2026-09-18), and the uploads
+# of 2026-10-02 landed with no reply at all. Each read takes over 10 s itself, so four reads span about a minute,
+# the delay at which the probe of 2026-10-03 (out/ao/t1_upload.py) read the listing and found its upload.
+LISTING_READS = 4
+LISTING_STEP_S = 5.0
 
 
 async def upload(session: FlowSession, project_id: str, path: Path) -> dict[str, Any]:
@@ -51,11 +60,11 @@ async def upload(session: FlowSession, project_id: str, path: Path) -> dict[str,
         chooser = await chooser_info.value
         await chooser.set_files(str(path.resolve()))
 
-    frames = await capture(session, pick, settle=20.0)
+    frames = await capture(session, pick, settle=REPLY_WAIT_S)
     if "maseQ" in frames:
         record = parsers.upload_record(frames["maseQ"][0])
     else:
-        record = {**_found(before, await reader.project(session, project_id), project_id, path, frames)}
+        record = await _settled_by_listing(session, project_id, path, before, frames)
     return {
         "file": str(path),
         "bytes": path.stat().st_size,
@@ -69,40 +78,56 @@ def _images(listing: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {str(row.get("id")): row for row in listing.get("media") or [] if row.get("kind") == "image"}
 
 
-def _found(
-    before: dict[str, dict[str, Any]],
-    listing: dict[str, Any],
+async def _settled_by_listing(
+    session: FlowSession,
     project_id: str,
     path: Path,
+    before: dict[str, dict[str, Any]],
     frames: dict[str, Any],
 ) -> dict[str, Any]:
     """The upload whose reply was not seen, told by the listing: the one image that is new since the file was
-    chosen and carries its name. None means nothing was uploaded; two are not chosen between."""
+    chosen and carries its name. Two are not chosen between. "Nothing was uploaded" is said only when the listing,
+    read `LISTING_READS` times, holds no new image at all: a new image under another title may be this upload."""
     if path.suffix.lower() not in IMAGE_SUFFIXES:
         raise RuntimeError(
-            f"upload: Flow's reply (rpc maseQ) was not seen for {path.name!r}; how an uploaded video shows in the "
-            "listing was never measured, so look at flow_media before uploading it again"
+            f"upload: Flow's reply (rpc maseQ) was not seen for {path.name!r}; how a file that is not one of "
+            f"{', '.join(IMAGE_SUFFIXES)} shows in the listing was never measured, so look at flow_media before "
+            "uploading it again"
         )
-    new = [
-        row for key, row in _images(listing).items() if key not in before and row.get("title") == path.name
-    ]
-    if not new:
+    new: list[dict[str, Any]] = []
+    named: list[dict[str, Any]] = []
+    for read in range(LISTING_READS):
+        if read:
+            await asyncio.sleep(LISTING_STEP_S)
+        listed = _images(await reader.project(session, project_id))
+        new = [row for key, row in listed.items() if key not in before]
+        named = [row for row in new if row.get("title") == path.name]
+        if named:
+            break
+    if len(named) > 1:
+        raise RuntimeError(
+            f"upload: Flow's reply (rpc maseQ) was not seen and the listing holds {len(named)} new images named "
+            f"{path.name!r} ({[row.get('id') for row in named]}): look at flow_media before uploading anything again"
+        )
+    if named:
+        return {
+            "media_id": named[0].get("id"),
+            "project_id": project_id,
+            "workflow_id": named[0].get("workflow_id"),
+            "size_bytes": named[0].get("size_bytes"),
+            "found_by": "listing",
+        }
+    if new:
         raise RuntimeError(
             f"upload: Flow's reply (rpc maseQ) was not seen and the listing holds no new image named {path.name!r}, "
-            f"so nothing was uploaded and uploading again is safe; saw {sorted(frames)}"
+            f"but it holds new images under other titles ({[(row.get('id'), row.get('title')) for row in new]}): "
+            "one of them may be this upload, so look at flow_media before uploading anything again"
         )
-    if len(new) > 1:
-        raise RuntimeError(
-            f"upload: Flow's reply (rpc maseQ) was not seen and the listing holds {len(new)} new images named "
-            f"{path.name!r} ({[row.get('id') for row in new]}): look at flow_media before uploading anything again"
-        )
-    return {
-        "media_id": new[0].get("id"),
-        "project_id": project_id,
-        "workflow_id": new[0].get("workflow_id"),
-        "size_bytes": new[0].get("size_bytes"),
-        "found_by": "listing",
-    }
+    raise RuntimeError(
+        f"upload: Flow's reply (rpc maseQ) was not seen in {REPLY_WAIT_S:.0f} s and the listing, read {LISTING_READS} "
+        f"times after that, holds no new image at all, so nothing was uploaded and uploading again is safe; saw "
+        f"{sorted(frames)}"
+    )
 
 
 async def list_uploads(session: FlowSession, project_id: str) -> dict[str, Any]:

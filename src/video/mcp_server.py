@@ -1250,9 +1250,11 @@ async def flow_credits() -> str:
     description=(
         "What Flow offers and what it costs on this account, as data and with no browser: for each video model its "
         "modes, resolutions, lengths, the price of every cell at x1, and how many image and voice ingredients it "
-        "takes; the counts and aspects; the image models; gen_character's prices by length; and the measured prices "
-        "of clip_extend, clip_edit and agent_send. Every number is the one the tools themselves refuse and charge "
-        "by, each part with the date it was measured; it is the surveyed table, not a live read. The live price of "
+        "takes (characters and images share the image places); the counts and aspects; the model names gen_t2i and "
+        "gen_i2i take, beside the labels Flow's composer shows; gen_character's prices by length; and the measured "
+        "prices of clip_extend, clip_edit and agent_send. Every number is the one the tools themselves refuse and "
+        "charge by. The surveyed tables and the caps carry their dates; a price that was never paid here is marked "
+        "measured false. It is the surveyed table, not a live read. The live price of "
         "one cell is gen_video with dry_run=true, and a paid call is refused when Flow's own price line is over its "
         "max_credits, so budget from this table and let the live line decide. Free."
     ),
@@ -1451,10 +1453,11 @@ async def scene_save_clip(project_id: str, scene_id: str, clip_id: str) -> str:
     name="flow_upload",
     description=(
         "Upload a local image or video into a project and answer its media_id, which the other tools take. The "
-        "upload is told by Flow's own reply; when that reply is not seen, an image is looked for in the listing "
-        "(the one new image carrying the file's name, found_by listing) before anything is called a failure. An "
-        "error that says nothing was uploaded means uploading again is safe; any other error means look at "
-        "flow_media first, since a second upload leaves two images of one name. Free."
+        "upload is told by Flow's own reply; when that reply is not seen, an image is looked for in the listing, "
+        "read several times over about a minute (the one new image carrying the file's name, found_by listing), "
+        "before anything is called a failure. An error that says nothing was uploaded means the listing held no "
+        "new image at all and uploading again is safe; any other error means look at flow_media first, since a "
+        "second upload leaves two images of one name. Free."
     ),
 )
 async def flow_upload(project_id: str, path: str) -> str:
@@ -1728,7 +1731,8 @@ async def agent_send(project_id: str, message: str, job_id: str, wait: float = 6
         "Defaults to the NEWEST finished version of the media; pass workflow_id (from flow_media with "
         "all_versions=true) to fetch one specific version, such as the clip a particular edit produced. "
         "1080p measured 0 credits. A 360p clip has another menu (measured 2026-10-03): its 720p is an upscale, "
-        "fetched the same way at 0 credits (720x1280), and it has no 1080p and no 4k, so asking for one of those, "
+        "fetched the same way at 0 credits (720x1280 for a 9:16 clip), and it has no 1080p and no 4k, so asking for "
+        "one of those, "
         "the default included, is refused with what the menu offers; its own 360p file comes with flow_download. "
         "4k is an upscale Flow's price table offers only from the Ultra plan, at 50 "
         "credits; on this Pro account the Download menu shows it greyed out (measured 2026-09-29 on every clip "
