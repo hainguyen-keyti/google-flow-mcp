@@ -236,7 +236,7 @@ Save the frame the clip editor opens on as an IMAGE of the project, and answer i
 
 **Arguments**: `project_id`, `path`
 
-Upload a local image or video into a project. Free.
+Upload a local image or video into a project and answer its media_id, which the other tools take. The upload is told by Flow's own reply; when that reply is not seen, an image is looked for in the listing (the one new image carrying the file's name, found_by listing) before anything is called a failure. An error that says nothing was uploaded means uploading again is safe; any other error means look at flow_media first, since a second upload leaves two images of one name. Free.
 
 ### `agent_mode`
 

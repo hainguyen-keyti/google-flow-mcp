@@ -1447,7 +1447,16 @@ async def scene_save_clip(project_id: str, scene_id: str, clip_id: str) -> str:
     return _json(await backend.scene_save_clip(project_id, scene_id, clip_id))
 
 
-@server.tool(name="flow_upload", description="Upload a local image or video into a project. Free.")
+@server.tool(
+    name="flow_upload",
+    description=(
+        "Upload a local image or video into a project and answer its media_id, which the other tools take. The "
+        "upload is told by Flow's own reply; when that reply is not seen, an image is looked for in the listing "
+        "(the one new image carrying the file's name, found_by listing) before anything is called a failure. An "
+        "error that says nothing was uploaded means uploading again is safe; any other error means look at "
+        "flow_media first, since a second upload leaves two images of one name. Free."
+    ),
+)
 async def flow_upload(project_id: str, path: str) -> str:
     _require(project_id, "project_id")
     _require(path, "path")
