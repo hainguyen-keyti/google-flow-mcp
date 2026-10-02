@@ -128,6 +128,18 @@ repo's source at `615bcac`.
   `UNSAFE_GENERATION` (never retry the same inputs), `PROMINENT_PEOPLE`, `UNUSUAL_ACTIVITY` (stop everything). A retry names the failed job (`retry_of`) and is
   accepted only when that job's row shows `spent: 0`.
 - Tier 1 (it decides when a second click is allowed).
+- **Closed by plan AM**: the outcome is derived from the rows the drivers already write, by one pure module
+  (`src/video/outcome.py`), so no driver changed when it clicks or what it records. Thirteen codes; over the 250 jobs
+  of this machine's 39 ledgers the replay (`scripts/acceptance/outcome_replay.py`) reads 5 `AUDIO_FILTERED`, 1
+  `NO_REASON`, 2 `PROMINENT_PEOPLE`, 2 `UNSAFE_GENERATION`, and calls no job uncharged whose balance bracket says
+  otherwise. Every spending tool's answer carries `outcome`, and an error opens with `outcome code=.. charged=..
+  retryable=..` and carries the whole outcome as structured content (an error result keeps its structured content
+  through mcp 2.2.0, probed). `retry_of` exists on `gen_video` and `gen_character` only, the tools that hear Flow's
+  reason: accepted when the named job failed uncharged with Flow's failed status for the audio filter or for no
+  reason, with the same project and prompt, not yet retried, and at most twice for one original; the link is written
+  on the `submitted` row, before the click. Narrower than proposed: `UNUSUAL_ACTIVITY` is read off gflow's exit 10
+  only (the composer path has never met it), the editor tools and `agent_send` get the outcome and no retry, and
+  the server never retries by itself.
 
 ### G6. An overlay on the page looks like a dead button
 
@@ -224,7 +236,7 @@ repo's source at `615bcac`.
 | Plan | Holds | Tier | Paid proof |
 |---|---|---|---|
 | AL (done 2026-10-01) | G6 overlays first (the bar blocked every composer tool), then G3 recipe read-back, G2 picker attach, G1 voices, G4 wording | 1 | 22 credits spent of a ceiling of 40 |
-| AM | G5 typed outcomes and `retry_of` | 1 | 0 to 10 |
+| AM (done 2026-10-02) | G5 typed outcomes and `retry_of` | 1 | 0 to 10 |
 | AN | G7 submit, status, collect | 1 | about 20 |
 | AO | G8 capability map, section 2 rows, section 3 hazards | 2 to 3 | 0 |
 

@@ -2658,6 +2658,33 @@ def test_submit_calls_a_job_flow_reported_failed_a_failure(monkeypatch, tmp_path
     assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["status"] == "failed"
 
 
+@pytest.mark.parametrize(
+    ("reason", "kind", "may_retry"),
+    [
+        ([["PUBLIC_ERROR_AUDIO_FILTERED"]], "character", True),
+        ([], "video", True),
+        ([["PUBLIC_ERROR_UNSAFE_GENERATION"]], "video", False),
+        ([["PUBLIC_ERROR_AUDIO_FILTERED"]], "story", False),
+    ],
+    ids=["the audio filter", "no reason", "unsafe", "a kind with no retry_of"],
+)
+def test_a_refusal_that_may_be_retried_says_how_and_one_that_may_not_says_never(
+    monkeypatch, tmp_path, reason, kind, may_retry
+):
+    # Plan AM: the error's own words must not forbid the retry its outcome allows (ak-v3 passed on an identical
+    # retry; the audio filter is random on Veo).
+    log = []
+    replies = {"click": [SUBMIT_REPLY, _status_reply(2)], "poll": [_status_reply(4, extra=reason)]}
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies=replies)
+
+    with pytest.raises(RuntimeError, match="Flow refused this job and charged nothing") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True, kind=kind)
+
+    said = str(raised.value)
+    assert ("retry_of" in said) is may_retry, said
+    assert ("do not retry the same inputs" in said) is (not may_retry), said
+
+
 def test_submit_never_says_flow_refused_a_job_flow_last_reported_running(monkeypatch, tmp_path):
     # The story path settles an unmoved balance as failed whatever Flow last said; only status 4 is a refusal.
     log = []

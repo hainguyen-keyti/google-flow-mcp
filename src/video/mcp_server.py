@@ -878,7 +878,11 @@ server = TellingServer(
         "2-5 min, clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. The "
         "credit-spending tools require a job_id. Never call one again under a new job_id because it was slow, "
         "errored or timed out: check flow_media and flow_credits first, and if you do call again keep the same "
-        "job_id, which the ledger refuses instead of charging twice. When model is omitted gen_t2v and gen_i2v "
+        "job_id, which the ledger refuses instead of charging twice. Every answer of a real run carries an outcome "
+        "{code, charged, retryable, advice} and every error of one opens with it: read charged before anything "
+        "else. The one retry under a new job_id the server vouches for is when gen_video or gen_character says "
+        "retryable=yes: call again with the same request, a new job_id and retry_of set to the refused job_id. "
+        "When model is omitted gen_t2v and gen_i2v "
         "use omni-flash for 10 s, and gen_r2v uses omni-flash at 8 s, the only length this host offers it. "
         "When aspect is omitted, all three run 9:16: that is gflow's own default, not the shape of the image you "
         "passed, and Flow crops a start frame of another shape to fit. Name the aspect you want. "
@@ -909,6 +913,17 @@ _JOB_ID_RULE = (
     "retry never pays twice; that refusal means the job may already have spent credits, so check flow_media and "
     "flow_credits before starting it under a new one. A job_id still running in another call is refused too: wait "
     "for that call to finish and call again with the SAME job_id, never a new one."
+    " The answer of a real run carries outcome {code, charged, retryable, advice}, and an error opens with "
+    "'outcome code=... charged=... retryable=...' (the whole outcome is its structured content): charged is what "
+    "the balance bracket says left the account, UNKNOWN and CHARGED_NO_OUTPUT mean money may be gone, and an error "
+    "with no outcome line was refused before any job started."
+)
+_RETRY_RULE = (
+    " When an error says retryable=yes (Flow failed the job and charged nothing, with code AUDIO_FILTERED or "
+    "NO_REASON), it may pass as it is: call again with the same project and prompt, a NEW job_id, and retry_of set "
+    "to the refused job_id. The server checks the ledger before a browser opens and allows one retry of a job at a "
+    f"time and at most {outcome_mod.MAX_RETRIES} retries of one original job; for any other code a new job_id "
+    "after an error is still wrong."
 )
 
 
@@ -1696,6 +1711,7 @@ def _longer_lengths() -> str:
         "it must be inside out/, and a job_id is refused when ANY ledger under out/ already holds it, that folder's "
         "included. For a real run,"
         + _JOB_ID_RULE
+        + _RETRY_RULE
         + " Flow can refuse a run under its content filters and charges nothing for it: the error then opens with that "
         "and carries Flow's own status, reason and words, for example status 4 with "
         "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED for a character made from a real person's photo (measured "
@@ -1801,7 +1817,10 @@ def _video_options() -> str:
         "or max_credits. Every setting is read back before the click, and the submit request is checked afterwards "
         "for the mode and length asked: a mismatch is reported as an error even though it was paid. x2-x4 return "
         "every clip in outputs. Flow's Agent mode is turned off for the run and put back after. out_dir must be "
-        "inside out/. Allow 3-8 min for a real run, 1-2 min for a dry run." + _BALANCE_MOVED + _JOB_ID_RULE
+        "inside out/. Allow 3-8 min for a real run, 1-2 min for a dry run."
+        + _BALANCE_MOVED
+        + _JOB_ID_RULE
+        + _RETRY_RULE
     ),
 )
 async def gen_video(

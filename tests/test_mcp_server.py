@@ -3555,6 +3555,36 @@ def test_gen_character_takes_a_retry_the_same_way(monkeypatch, tmp_path):
     assert other.is_error and "same request" in _texts([other])[0] and len(reached) == 1
 
 
+def test_every_spending_description_says_how_to_read_an_outcome():
+    # An agent holding nothing but this MCP has to learn from the description what the new line means.
+    tools = served_tool_objects()
+    for name in sorted(SPENDING_TOOLS):
+        description = tools[name].description or ""
+        assert "outcome {code, charged, retryable, advice}" in description, name
+        assert "outcome code=" in description and "UNKNOWN" in description, name
+        assert "money may be gone" in description and "no outcome line" in description, name
+
+
+def test_a_description_talks_of_retry_of_exactly_when_the_tool_takes_it():
+    tools = served_tool_objects()
+    for name, tool in tools.items():
+        takes = "retry_of" in ((tool.input_schema or {}).get("properties") or {})
+        assert ("retry_of" in (tool.description or "")) is takes, name
+    for name in ("gen_video", "gen_character"):
+        description = tools[name].description
+        bound = f"at most {mcp_server.outcome_mod.MAX_RETRIES}"
+        assert "NEW job_id" in description and bound in description, name
+        assert "AUDIO_FILTERED" in description and "NO_REASON" in description, name
+
+
+def test_the_instructions_name_the_outcome_and_the_one_retry_the_server_vouches_for():
+    text = mcp_server.server.instructions
+
+    assert "outcome" in text and "retry_of" in text and "retryable=yes" in text
+    # The old rule stays for everything else: no new job_id after an error or a timeout.
+    assert "Never call one again under a new job_id" in text
+
+
 def test_only_the_two_composer_tools_take_a_retry_of():
     # Read off the served schemas: retry_of is vouched for from Flow's own reason, which only the composer path hears.
     takes = {

@@ -1024,8 +1024,18 @@ async def _submit(
         )
     if status == "failed" and spent == 0 and statuses and statuses[-1] == STATUS_FAILED:
         # The advice, the reason and Flow's own words lead: an agent sees at most 500 characters (dancer-1, 2026-09-17).
+        # The audio filter and a refusal with no reason may pass as they are (plan AM: `ak-v3` did), so the advice
+        # is the one the job's typed outcome gives, never a "do not retry" beside a retry the server would allow.
+        settled = {"status": "failed", "spent": spent, "flow": flow}
+        if outcome.classify([{"status": "submitted", "kind": kind}, settled])["retryable"]:
+            advice = (
+                "it may pass as it is: call again with the same request, a new job_id and retry_of set to this "
+                "job_id"
+            )
+        else:
+            advice = "do not retry the same inputs hoping they pass, tell the owner"
         raise RuntimeError(
-            "Flow refused this job and charged nothing: do not retry the same inputs hoping they pass, tell the owner; "
+            f"Flow refused this job and charged nothing: {advice}; "
             f"{flow_said(flow)}; Flow said: {notice or '(no message captured)'}{page_note}; rpcids {sorted(frames)}; "
             f"settings {settings['applied']}; job {job_id}"
         )

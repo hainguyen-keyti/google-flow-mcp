@@ -103,7 +103,11 @@ All 8 spending tools **require a `job_id`** (except `gen_character` and `gen_vid
 `job_id` that already has any row in any `ledger.jsonl` under `out/` (any letter case in the file name) is refused
 before a browser opens; a `job_id` that looks like a session secret (a cookie name or an `Authorization` header) is
 refused; a `job_id` running in another call is refused, and then you wait and call again with the SAME `job_id`, never
-a new one. `clip_edit`, `clip_extend` and `agent_send` refuse a prompt with a newline; an all-space prompt is refused;
+a new one. Every answer of a real run carries `outcome {code, charged, retryable, advice}` and every error of one
+opens with `outcome code=... charged=... retryable=...`: read `charged` first; `UNKNOWN` and `CHARGED_NO_OUTPUT` mean
+money may be gone, and an error with no outcome line was refused before any job started. Only when `gen_video` or
+`gen_character` says `retryable=yes` may you call again under a NEW `job_id`, with the same request and `retry_of` set
+to the refused `job_id` (the server checks the ledger first and allows two retries of one original at most). `clip_edit`, `clip_extend` and `agent_send` refuse a prompt with a newline; an all-space prompt is refused;
 the `out_dir` of `clip_edit` and `clip_extend` must be a folder inside `out/` with no part named `ledger.jsonl` (any
 case) and no part that is an existing file.
 

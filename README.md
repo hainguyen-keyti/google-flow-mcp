@@ -119,6 +119,16 @@ These are not suggestions; they are enforced in code and pinned by tests.
 - **A `job_id` is spent once.** Before opening a browser, a paid tool refuses any `job_id` that appears in ANY
   `ledger.jsonl` under `out/`, and refuses one that another call is running right now. Retrying with the same
   id is safe; inventing a new id for a job you already paid for is how you buy the same thing twice.
+- **Every paid call says what it came to.** The answer carries `outcome {code, charged, retryable, advice}` and an
+  error opens with `outcome code=... charged=... retryable=...`, read off the job's own ledger rows: `charged` is
+  what the balance bracket says left the account, `UNKNOWN` and `CHARGED_NO_OUTPUT` mean money may be gone, and an
+  error with no outcome line was refused before any job started. Flow's refusals seen on this account all charged
+  nothing: the audio filter (5 times), prominent people (2), unsafe generation (2), and once no reason at all.
+- **One retry the server vouches for.** When `gen_video` or `gen_character` says `retryable=yes` (Flow failed the
+  job uncharged, for its audio filter or for no reason), call again with the same request, a new `job_id` and
+  `retry_of` set to the refused one. The ledger is checked before a browser opens: the job must have failed
+  uncharged, the project and prompt must be the same, one retry of a job at a time, at most two retries of one
+  original. Any other new `job_id` after an error is still wrong.
 - **Outputs stay inside `out/`.** Every tool that writes a file or a ledger forces its target inside `out/`.
 - **Click once, then wait.** Flow submits late, about 20 s after the click. Leaving the page early cancels the
   request in flight and looks exactly like a dead button; clicking again submits a second, paid job.

@@ -167,6 +167,14 @@ mặt, tay và món đồ.
   `ledger.jsonl` dưới `out/`, kèm lời dặn soát `flow_media` và `flow_credits`, nên gọi lại không bao giờ trả tiền hai
   lần. `job_id` đang chạy ở một lời gọi khác cũng bị từ chối, với lời dặn khác hẳn: chờ lời gọi đó xong rồi gọi lại
   với CÙNG `job_id`, không bao giờ đổi id mới (lúc job còn đang bay, `flow_media` và `flow_credits` chưa thấy gì).
+  **Mỗi lượt trả tiền đều nói nó ra sao**: câu trả lời mang `outcome {code, charged, retryable, advice}`, câu lỗi mở
+  đầu bằng `outcome code=... charged=... retryable=...`, đọc từ chính dòng sổ của job: `charged` là số credit mà hai
+  đầu số dư cho thấy đã rời tài khoản, `UNKNOWN` và `CHARGED_NO_OUTPUT` nghĩa là tiền có thể đã mất, còn lỗi không có
+  dòng outcome là bị từ chối trước khi job nào bắt đầu. **Một kiểu chạy lại được server bảo lãnh**: khi `gen_video`
+  hay `gen_character` báo `retryable=yes` (Flow làm hỏng job mà không trừ tiền, vì bộ lọc âm thanh hoặc không lý do),
+  gọi lại với đúng yêu cầu cũ, `job_id` MỚI và `retry_of` là id của job bị từ chối. Sổ được kiểm trước khi mở trình
+  duyệt: job đó phải hỏng mà không tốn, cùng project và prompt, mỗi job một lần chạy lại một lúc, tối đa hai lần cho
+  một job gốc. Mọi trường hợp khác, đổi `job_id` sau lỗi vẫn là sai.
   `job_id` mang chữ giống bí mật phiên (tên cookie hay header `Authorization`) bị từ chối trước mọi thứ, vì sổ sẽ lưu nó
   thành một id khác và không bao giờ tìm lại được; `Ledger.append` cũng từ chối id như vậy ở mọi đường ghi sổ (CLI,
   story, driver), và mỗi chuỗi trong dòng sổ được lọc riêng nên dòng luôn là JSON đọc được. `clip_extend` và
