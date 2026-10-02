@@ -18,9 +18,11 @@ from gflow_cli.api.video import VideoModel, reference_cap_for, validate_duration
 from gflow_cli.data.redaction import redact_error_detail
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+from mcp.types import CallToolResult, TextContent
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen as gen_mod
+from video import outcome as outcome_mod
 from video.flow import agent as agent_mod
 from video.flow import characters as characters_mod
 from video.flow import clips as clips_mod
@@ -286,19 +288,54 @@ class Backend:
             )
             ledgers = dict.fromkeys([*found, out_dir / "ledger.jsonl"])
             for ledger in ledgers:
-                statuses = sorted({str(row.get("status")) for row in gen_mod.Ledger(ledger).rows(job_id)})
+                rows = gen_mod.Ledger(ledger).rows(job_id)
+                statuses = sorted({str(row.get("status")) for row in rows})
                 if statuses:
                     seen = f"ledger rows ({', '.join(statuses)}) in {ledger}"
-                    raise gen_mod.AlreadySubmitted(_job_refused(job_id, seen))
+                    refused = gen_mod.AlreadySubmitted(_job_refused(job_id, seen))
+                    # What that earlier run came to, so the caller learns it without a second look (plan AM).
+                    refused.outcome = self._came_to(rows)
+                    raise refused
             # Marked with no await since the check, so a second call with this id cannot slip in between.
             self._running.add(job_id)
+        ledger = gen_mod.Ledger(out_dir / "ledger.jsonl")
         try:
-            return await run()
+            result = await run()
         except gen_mod.AlreadySubmitted as exc:
             # The drivers' own message ends "use a new job id", which invites paying twice.
-            raise gen_mod.AlreadySubmitted(_job_refused(job_id, "a submitted row")) from exc
+            again = gen_mod.AlreadySubmitted(_job_refused(job_id, "a submitted row"))
+            again.outcome = self._outcome_of(ledger, job_id)
+            raise again from exc
+        except Exception as failed:
+            failed.outcome = self._outcome_of(ledger, job_id)
+            raise
         finally:
             self._running.discard(job_id)
+        # A driver that answered and left no row is not a job this server can say anything about.
+        named = job_id or (result.get("job_id") if isinstance(result, dict) else None)
+        said = self._outcome_of(ledger, named)
+        if isinstance(result, dict) and said is not None and said["code"] != "NOT_SUBMITTED":
+            result["outcome"] = said
+        return result
+
+    def _came_to(self, rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """The typed outcome of a job's rows (video.outcome). Never raises: it runs after a driver that may have
+        spent, where an exception would replace the paid answer or the error that says credits are gone."""
+        try:
+            return outcome_mod.classify(rows)
+        except Exception:
+            logging.getLogger(__name__).exception("the outcome of a job could not be read off its rows")
+            return None
+
+    def _outcome_of(self, ledger: gen_mod.Ledger, job_id: str | None) -> dict[str, Any] | None:
+        if not job_id:
+            return None
+        try:
+            rows = ledger.rows(job_id)
+        except Exception:
+            logging.getLogger(__name__).exception("the ledger %s could not be read", ledger.path)
+            return None
+        return self._came_to(rows)
 
     async def lane(self) -> dict[str, Any]:
         return await self._with(lane_mod.run)
@@ -754,10 +791,22 @@ class TellingServer(MCPServer):
                 links.append(link)
                 link = link.__cause__
             notes = "".join(f"; {note}" for each in links for note in getattr(each, "__notes__", []))
-            detail = redact_error_detail(gen_mod._scrub(f"{type(cause).__name__}: {text}{notes}"))
+            # What the job came to (plan AM) leads: the agent reads at most 500 characters of an error, and this is
+            # the part that says whether money left the account and whether a retry is allowed.
+            typed = [each.outcome for each in links if isinstance(getattr(each, "outcome", None), dict)]
+            said = typed[0] if typed else None
+            lead = f"{outcome_mod.head(said)}; " if said else ""
+            detail = redact_error_detail(gen_mod._scrub(f"{lead}{type(cause).__name__}: {text}{notes}"))
             # Only the scrubbed line is logged: the raw traceback would put the same cookies in the server's stderr.
             logging.getLogger(__name__).error("tool %s failed: %s", name, detail)
-            raise ToolError(f"Error executing tool {name}: {detail}") from cause
+            if said is None:
+                raise ToolError(f"Error executing tool {name}: {detail}") from cause
+            # Measured 2026-10-02 (out/am/t1_probe.py): an error result reaches a client with its structured content.
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"Error executing tool {name}: {detail}")],
+                structured_content={"outcome": said},
+                is_error=True,
+            )
 
 
 backend = Backend()

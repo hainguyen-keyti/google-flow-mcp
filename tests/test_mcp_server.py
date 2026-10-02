@@ -3263,3 +3263,179 @@ def test_an_image_whose_listing_read_fails_still_answers_its_file(monkeypatch, t
     out = json.loads(_texts([result])[0])["outputs"][0]
     assert (out["media_id"], out["workflow_id"], out["path"]) == (None, "WF-1", "out/WF-1_1.jpg"), out
     assert "Zzl0ze" in out["media_id_note"], out
+
+
+# Plan AM: every spending tool says what the job came to, read off the rows its driver wrote.
+
+VIDEO_CALL = {"project": "P", "prompt": "a cup on a table", "max_credits": 10}
+AUDIO = {"statuses": [6, 2, 4], "reasons": ["PUBLIC_ERROR_AUDIO_FILTERED"]}
+
+
+def _video_world(monkeypatch, tmp_path, rows, *, fails=None, answer=None):
+    """gen_video over the real Backend, with a driver that writes `rows` to the job's ledger and then answers or
+    fails. No session opens."""
+
+    async def fake_with(self, fn):
+        return await fn(object())
+
+    async def fake_generate(session, project, *, prompt, out_dir, job_id=None, **options):
+        ledger = gen.Ledger(out_dir / "ledger.jsonl")
+        for status, fields in rows:
+            ledger.append(job_id, status, **fields)
+        if fails is not None:
+            raise fails
+        return dict(answer if answer is not None else {"job_id": job_id, "path": "out/x.mp4"})
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.video_mod, "generate", fake_generate)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+
+
+def _submitted(**more):
+    fields = {"kind": "video", "project": "P", "prompt": "a cup on a table", "credits_before": 100}
+    return ("submitted", {**fields, **more})
+
+
+def test_a_paid_answer_says_what_the_job_came_to(monkeypatch, tmp_path):
+    done = ("done", {"spent": 10, "credits_before": 100, "credits_after": 90})
+    _video_world(monkeypatch, tmp_path, [_submitted(), done])
+
+    answer = _payload(_call("gen_video", {**VIDEO_CALL, "job_id": "am-done-1"}))
+
+    assert answer["outcome"]["code"] == "DONE" and answer["outcome"]["charged"] == 10
+    assert answer["outcome"]["retryable"] is False and answer["path"] == "out/x.mp4"
+
+
+def test_an_answer_whose_job_left_no_row_carries_no_outcome(monkeypatch, tmp_path):
+    # A driver that answered and wrote nothing is not a job this server can vouch for: it says nothing, not
+    # "nothing was submitted" beside a file.
+    _video_world(monkeypatch, tmp_path, [])
+
+    answer = _payload(_call("gen_video", {**VIDEO_CALL, "job_id": "am-no-row-1"}))
+
+    assert "outcome" not in answer
+
+
+def test_a_refusal_flow_did_not_charge_for_leads_the_error_with_its_code(monkeypatch, tmp_path):
+    failed = ("failed", {"spent": 0, "credits_before": 100, "credits_after": 100, "flow": AUDIO})
+    _video_world(
+        monkeypatch,
+        tmp_path,
+        [_submitted(), failed],
+        fails=RuntimeError("Flow refused this job and charged nothing: do not retry the same inputs"),
+    )
+
+    result = _call("gen_video", {**VIDEO_CALL, "job_id": "am-audio-1"})
+
+    text = _texts([result])[0]
+    assert result.is_error
+    assert text.startswith(
+        "Error executing tool gen_video: outcome code=AUDIO_FILTERED charged=0 retryable=yes; RuntimeError: Flow refused"
+    ), text
+    said = result.structured_content["outcome"]
+    assert (said["code"], said["charged"], said["retryable"]) == ("AUDIO_FILTERED", 0, True)
+    assert "retry_of" in said["advice"]
+
+
+def test_a_job_refused_before_any_click_is_said_to_be_free_to_run_again(monkeypatch, tmp_path):
+    _video_world(monkeypatch, tmp_path, [], fails=LookupError("the ingredients dialog offers no image"))
+
+    result = _call("gen_video", {**VIDEO_CALL, "job_id": "am-early-1"})
+
+    text = _texts([result])[0]
+    assert result.is_error and "outcome code=NOT_SUBMITTED charged=0 retryable=no; LookupError" in text, text
+    assert "same job_id" in result.structured_content["outcome"]["advice"]
+
+
+def test_a_job_started_and_never_settled_is_unknown_whatever_the_error_says(monkeypatch, tmp_path):
+    # I-read-2: a crash between the intent row and the outcome row is money that may be gone.
+    _video_world(monkeypatch, tmp_path, [_submitted()], fails=RuntimeError("the browser has been closed"))
+
+    result = _call("gen_video", {**VIDEO_CALL, "job_id": "am-crash-1"})
+
+    text = _texts([result])[0]
+    assert "outcome code=UNKNOWN charged=unknown retryable=no; RuntimeError" in text, text
+
+
+def test_a_job_id_used_again_is_refused_with_what_the_first_run_came_to(monkeypatch, tmp_path):
+    done = ("done", {"spent": 10, "credits_before": 100, "credits_after": 90})
+    _video_world(monkeypatch, tmp_path, [_submitted(), done])
+    first = _call("gen_video", {**VIDEO_CALL, "job_id": "am-twice-1"})
+    assert not first.is_error
+
+    again = _call("gen_video", {**VIDEO_CALL, "job_id": "am-twice-1"})
+
+    text = _texts([again])[0]
+    assert again.is_error and "outcome code=DONE charged=10 retryable=no; AlreadySubmitted" in text, text
+    assert len(gen.Ledger(tmp_path / "ledger.jsonl").rows("am-twice-1")) == 2, "the second call wrote nothing"
+
+
+def test_a_driver_that_finds_the_job_already_submitted_says_what_it_came_to(monkeypatch, tmp_path):
+    # The drivers keep their own check: a row written between the server's sweep and the driver's start.
+    done = ("done", {"spent": 10, "credits_before": 100, "credits_after": 90})
+    _video_world(
+        monkeypatch,
+        tmp_path,
+        [_submitted(), done],
+        fails=gen.AlreadySubmitted("job am-race-1 is already done; delete its output to redo it"),
+    )
+
+    text = _texts([_call("gen_video", {**VIDEO_CALL, "job_id": "am-race-1"})])[0]
+
+    head = "outcome code=DONE charged=10 retryable=no; AlreadySubmitted: that job may already have spent"
+    assert head in text, text
+
+
+def test_the_outcome_survives_the_cut_an_agent_reads_through(monkeypatch, tmp_path):
+    # gflow's redaction keeps 500 characters of an error: the code leads, so no long error can push it out.
+    failed = ("failed", {"spent": 0, "credits_before": 100, "credits_after": 100, "flow": AUDIO})
+    _video_world(monkeypatch, tmp_path, [_submitted(), failed], fails=RuntimeError("x" * 900))
+
+    text = _texts([_call("gen_video", {**VIDEO_CALL, "job_id": "am-long-1"})])[0]
+
+    assert "outcome code=AUDIO_FILTERED charged=0 retryable=yes; RuntimeError: xxx" in text, text[:200]
+
+
+def test_a_ledger_that_cannot_be_read_never_costs_a_paid_answer(monkeypatch, tmp_path):
+    # The outcome is read after the driver came back: a failure there must not replace a finished, paid result.
+    done = ("done", {"spent": 10, "credits_before": 100, "credits_after": 90})
+    _video_world(monkeypatch, tmp_path, [_submitted(), done])
+
+    def broken(rows):
+        raise ValueError("rows nobody can read")
+
+    monkeypatch.setattr(mcp_server.outcome_mod, "classify", broken)
+
+    answer = _payload(_call("gen_video", {**VIDEO_CALL, "job_id": "am-unreadable-1"}))
+
+    assert answer["path"] == "out/x.mp4" and "outcome" not in answer
+
+
+def test_an_error_keeps_its_own_words_when_the_outcome_cannot_be_read(monkeypatch, tmp_path):
+    _video_world(monkeypatch, tmp_path, [_submitted()], fails=RuntimeError("credits may already be spent"))
+
+    def broken(rows):
+        raise ValueError("rows nobody can read")
+
+    monkeypatch.setattr(mcp_server.outcome_mod, "classify", broken)
+
+    result = _call("gen_video", {**VIDEO_CALL, "job_id": "am-unreadable-2"})
+
+    text = _texts([result])[0]
+    assert result.is_error and "credits may already be spent" in text and "outcome code" not in text, text
+
+
+def test_a_gflow_job_with_no_job_id_of_its_own_still_says_what_it_came_to(monkeypatch, tmp_path):
+    # gen_t2i takes no job_id from the agent: the backend mints one, and the answer names it.
+    async def fake_run_job(job, out_dir, **kwargs):
+        ledger = gen.Ledger(out_dir / "ledger.jsonl")
+        ledger.append(job.job_id, "submitted", kind=job.kind, credits_before=100)
+        ledger.append(job.job_id, "done", credits_before=100, credits_after=100, spent=0)
+        return {"job_id": job.job_id, "outputs": []}
+
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+
+    answer = _payload(_call("gen_t2i", {"prompt": "a cup", "project": "P"}))
+
+    assert (answer["outcome"]["code"], answer["outcome"]["charged"]) == ("DONE", 0)
