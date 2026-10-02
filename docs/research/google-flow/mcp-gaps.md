@@ -201,8 +201,9 @@ repo's source at `615bcac`.
   intent row while the balance is read up to 90 s earlier, which only two server processes can fall into; a
   blocking tool run while a submitted job renders has no shared-balance check of its own, and is refused outright
   for the same project and prompt while that job's clip may still show (from the moment `job_submit` is called
-  until the job is collected, or for an hour after it was settled with no clip), since it takes the one new clip
-  carrying its prompt
+  until the job is collected, or for an hour after it was settled with no clip; the ledgers are read before the
+  browser opens and once more when the run holds the session, since a submit can get the browser first), since it
+  takes the one new clip carrying its prompt
   (the gflow tools and the editor tools are not held to that); a job named no workflow never takes a clip another
   job's rows name, and never one that another open job of the prompt, named no workflow either, could own, so two
   such jobs are both settled unknown and their clips are fetched with `flow_download`; whether the

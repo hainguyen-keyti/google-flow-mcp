@@ -4237,9 +4237,10 @@ def _submitted_job(
     settled=None,
     age=0.0,
     prompt_text=None,
+    begun=None,
 ):
     """The rows of a job as the composer writes them for job_submit (`detach` false: for a blocking run), the last
-    of them `age` seconds old."""
+    of them `age` seconds old and the first `begun` seconds old (the same when not given)."""
     ledger = gen.Ledger(tmp_path / "films" / "ledger.jsonl")
     box = {"prompt_text": prompt_text} if prompt_text else {}
     mark = {"detach": True} if detach else {}
@@ -4252,6 +4253,7 @@ def _submitted_job(
     if settled:
         ledger.append(job_id, settled[0], **settled[1])
     rows = [{**row, "ts": time.time() - age} for row in ledger.rows()]
+    rows[0]["ts"] = time.time() - (age if begun is None else begun)
     ledger.path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     return ledger
 
@@ -4267,6 +4269,7 @@ def _submitted_job(
         ({"prompt": LONG_CUP}, LONG_CUP),
         ({"prompt": LONG_CUP, "started": False}, LONG_CUP),
         ({"age": 3000}, CUP),
+        ({"settled": ("unknown", {"spent": None}), "age": 60, "begun": 7200}, CUP),
     ],
     ids=[
         "rendering",
@@ -4277,6 +4280,7 @@ def _submitted_job(
         "a prompt longer than the intent row keeps",
         "a long prompt and only the intent row",
         "fifty minutes old",
+        "begun two hours ago and settled unknown a minute ago",
     ],
 )
 @pytest.mark.parametrize("tool", ["gen_video", "gen_character"])
@@ -4482,3 +4486,108 @@ def test_a_blocking_run_a_submit_in_its_session_cannot_be_confused_with_is_not_r
 
     assert not first.is_error and not second.is_error, _texts([first, second])
     assert sorted(reached) == [("gen_video", "an-beside"), ("job_submit", "an-in-session")]
+
+
+@pytest.mark.parametrize("tool", ["gen_video", "gen_character"])
+def test_a_blocking_run_that_queued_before_a_submit_of_its_prompt_clicked_looks_again(
+    monkeypatch, tmp_path, tool
+):
+    # Third re-review (G1). The blocking run was checked while nothing of the submit existed, then waited for the
+    # browser; the submit got the session first, clicked and left. Checked once only, the blocking run would then
+    # run beside the rendering clip. It looks at the ledgers again once it holds the session, before any driver.
+    reached = []
+    go = asyncio.Event()
+    sessions = []
+
+    async def queued_with(self, fn):
+        sessions.append(fn)
+        if len(sessions) == 1:
+            await go.wait()
+        return await fn(object())
+
+    async def fake_generate(session, project, *, prompt, out_dir, job_id=None, detach=False, **options):
+        reached.append(("job_submit" if detach else "gen_video", job_id))
+        ledger = gen.Ledger(out_dir / "ledger.jsonl")
+        mark = {"detach": True} if detach else {}
+        ledger.append(
+            job_id, "submitted", kind="video", project=project, prompt=prompt, credits_before=100, **mark
+        )
+        if detach:
+            ledger.append(job_id, "started", workflow_id="w-a", workflows_before=[], prompt=prompt)
+            return {"job_id": job_id, "state": "started", "workflow_id": "w-a"}
+        ledger.append(job_id, "done", media_id="m-w-a", spent=10)
+        return {"job_id": job_id, "media_id": "m-w-a"}
+
+    async def fake_character(session, project, **kwargs):
+        return await fake_generate(
+            session, project, **{k: kwargs[k] for k in ("prompt", "out_dir", "job_id")}
+        )
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", queued_with)
+    monkeypatch.setattr(mcp_server.video_mod, "generate", fake_generate)
+    monkeypatch.setattr(ingredients, "generate", fake_character)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    blocking = SPEND_CALLS[tool] | {"project": "P", "prompt": CUP, "job_id": "an-queued"}
+    submit = SPEND_CALLS["job_submit"] | {"project": "P", "prompt": CUP, "job_id": "an-won"}
+
+    async def race(session):
+        first = asyncio.create_task(session.call_tool(tool, blocking))
+        for _ in range(10_000):
+            if sessions:
+                break
+            await asyncio.sleep(0)
+        second = await asyncio.wait_for(session.call_tool("job_submit", submit), 10)
+        go.set()
+        return await asyncio.wait_for(first, 10), second
+
+    first, second = with_client(race)
+
+    text = _texts([first])[0]
+    assert not second.is_error and first.is_error, text
+    assert "outcome code=NOT_SUBMITTED charged=0 retryable=no" in text and "an-won" in text, text
+    assert (
+        reached == [("job_submit", "an-won")]
+        and gen.Ledger(tmp_path / "ledger.jsonl").rows("an-queued") == []
+    )
+
+
+def test_a_blocking_run_in_its_session_is_not_refused_for_a_submit_that_only_waits(monkeypatch, tmp_path):
+    # The submit behind it in the queue has clicked nothing: by the time it does, the blocking run is over.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    inside, leave, first_over = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    sessions = []
+
+    async def one_at_a_time(self, fn):
+        sessions.append(fn)
+        if len(sessions) > 1:
+            await first_over.wait()
+            return await fn(object())
+        # The blocking run has the session; the submit arrives and queues behind it before the run looks again.
+        inside.set()
+        await leave.wait()
+        try:
+            return await fn(object())
+        finally:
+            first_over.set()
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", one_at_a_time)
+    blocking = SPEND_CALLS["gen_video"] | {"project": "P", "prompt": CUP, "job_id": "an-first"}
+    submit = SPEND_CALLS["job_submit"] | {"project": "P", "prompt": CUP, "job_id": "an-behind"}
+
+    async def both(session):
+        first = asyncio.create_task(session.call_tool("gen_video", blocking))
+        await inside.wait()
+        second = asyncio.create_task(session.call_tool("job_submit", submit))
+        for _ in range(10_000):
+            if len(sessions) == 2:
+                break
+            await asyncio.sleep(0)
+        waiting = list(mcp_server.backend._submitting)
+        leave.set()
+        return await asyncio.wait_for(first, 10), await asyncio.wait_for(second, 10), waiting
+
+    first, second, waiting = with_client(both)
+
+    assert [entry[0] for entry in waiting] == ["an-behind"], "the submit was in the queue when the run looked"
+    assert not first.is_error and not second.is_error, _texts([first, second])
+    assert reached == [("gen_video", "an-first"), ("job_submit", "an-behind")]

@@ -327,15 +327,7 @@ class Backend:
             if claims_by_prompt and request:
                 twin = self._rendering_twin(list(ledgers), **request)
                 if twin:
-                    # Before job_submit no two jobs of one server overlapped. Beside a submitted job of the same
-                    # prompt the one new clip may be that job's: both would end DONE on it and this run's own clip
-                    # would be left to nobody (re-review of plan AN).
-                    raise self._not_started(
-                        f"job {twin!r} was submitted with this project and prompt and its clip may still show, and "
-                        "a blocking run takes the one new clip that carries its prompt, which could be that job's: "
-                        "fetch it with job_collect first (job_status says when it is ready), or start this one with "
-                        "job_submit too; nothing was started"
-                    )
+                    raise self._twin_refusal(twin)
             if retry_of:
                 if retry_of in self._retrying:
                     raise self._not_started(
@@ -383,12 +375,40 @@ class Backend:
             result["outcome"] = said
         return result
 
-    def _rendering_twin(self, ledgers: list[Path], project: str, prompt: str) -> str | None:
+    def _twin_refusal(self, twin: str) -> ValueError:
+        # Before job_submit no two jobs of one server overlapped. Beside a submitted job of the same prompt the one
+        # new clip may be that job's: both would end DONE on it and this run's own clip would be left to nobody
+        # (re-review of plan AN).
+        return self._not_started(
+            f"job {twin!r} was submitted with this project and prompt and its clip may still show, and a blocking "
+            "run takes the one new clip that carries its prompt, which could be that job's: fetch it with "
+            "job_collect first (job_status says when it is ready), or start this one with job_submit too; nothing "
+            "was started"
+        )
+
+    def _looking_again(
+        self, project: str, prompt: str, drive: Callable[[FlowSession], Awaitable[Any]]
+    ) -> Callable[[FlowSession], Awaitable[Any]]:
+        """A blocking run's session function, with one more look at the ledgers once the session is held: a
+        job_submit of the prompt may have got the browser first, clicked and left while this call waited for it.
+        A submit still waiting behind this run has clicked nothing, so it is no reason to stop."""
+
+        async def looked(session: FlowSession) -> Any:
+            twin = self._rendering_twin(self._ledgers(), project, prompt, waiting=False)
+            if twin:
+                raise self._twin_refusal(twin)
+            return await drive(session)
+
+        return looked
+
+    def _rendering_twin(
+        self, ledgers: list[Path], project: str, prompt: str, *, waiting: bool = True
+    ) -> str | None:
         """A job that job_submit ran for this project whose clip a blocking run of this prompt could take: one a
-        job_submit call is still in its session for (it has no row until it clicks), or one the ledgers hold
-        (`jobs.rendering`)."""
+        job_submit call is still in its session for (it has no row until it clicks; `waiting` false leaves those
+        out), or one the ledgers hold (`jobs.rendering`)."""
         typed = jobs_mod.composer._flat(prompt)
-        for job, theirs, asked in self._submitting:
+        for job, theirs, asked in self._submitting if waiting else []:
             if theirs == project and jobs_mod.composer._flat(asked) == typed:
                 return job
         jobs: dict[str, list[dict[str, Any]]] = {}
@@ -714,31 +734,29 @@ class Backend:
         target = self._editor_out_dir(out_dir)
         link = {"retry_of": retry_of} if retry_of else {}
 
-        def run() -> Awaitable[Any]:
-            return self._with(
-                lambda s: ingredients_mod.generate(
-                    s,
-                    project,
-                    prompt=prompt,
-                    characters=characters,
-                    media_ids=media_ids or [],
-                    model=model,
-                    aspect=aspect,
-                    job_id=job_id,
-                    out_dir=target,
-                    dry_run=dry_run,
-                    duration=duration,
-                    **link,
-                )
+        def drive(session: FlowSession) -> Awaitable[Any]:
+            return ingredients_mod.generate(
+                session,
+                project,
+                prompt=prompt,
+                characters=characters,
+                media_ids=media_ids or [],
+                model=model,
+                aspect=aspect,
+                job_id=job_id,
+                out_dir=target,
+                dry_run=dry_run,
+                duration=duration,
+                **link,
             )
 
         # A dry run clicks nothing and writes no row, so there is no job to guard.
         if dry_run:
-            return await run()
+            return await self._with(drive)
         return await self._spend_once(
             job_id,
             target,
-            run,
+            lambda: self._with(self._looking_again(project, prompt, drive)),
             retry_of=retry_of,
             request={"project": project, "prompt": prompt},
             claims_by_prompt=True,
@@ -750,18 +768,16 @@ class Backend:
         dry_run = options.get("dry_run", False)
         target = self._editor_out_dir(out_dir)
 
-        def run() -> Awaitable[Any]:
-            return self._with(
-                lambda s: video_mod.generate(s, project, prompt=prompt, out_dir=target, **options)
-            )
+        def drive(session: FlowSession) -> Awaitable[Any]:
+            return video_mod.generate(session, project, prompt=prompt, out_dir=target, **options)
 
         # A dry run clicks nothing and writes no row, so there is no job to guard.
         if dry_run:
-            return await run()
+            return await self._with(drive)
         return await self._spend_once(
             job_id,
             target,
-            run,
+            lambda: self._with(self._looking_again(project, prompt, drive)),
             retry_of=options.get("retry_of"),
             request={"project": project, "prompt": prompt},
             claims_by_prompt=True,
