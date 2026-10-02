@@ -912,6 +912,15 @@ def request_voices(post_data: str) -> list[list[str]] | None:
     return None
 
 
+def reference_row(reference: Reference) -> dict[str, Any]:
+    """What `recipe_check` needs of a reference, as a ledger row can hold it."""
+    return {"kind": reference.kind, "id": reference.id, "mention_ids": sorted(reference.mention_ids)}
+
+
+def reference_from_row(row: dict[str, Any]) -> Reference:
+    return Reference(str(row["kind"]), str(row["id"]), "", frozenset(row.get("mention_ids") or ()))
+
+
 def recipe_check(recipe: dict[str, Any], references: list[Reference]) -> dict[str, Any]:
     """Whether a clip kept every reference it was given, by the recipe the listing holds for it (clip_recipe): each
     voice by its id, each image by a workflow id of its own, each character by its entity id, and nothing more."""
@@ -1147,6 +1156,10 @@ async def generate(
             click_box=False,
             retry_of=retry_of,
             detach=detach,
+            # A detached job's clip is fetched by a later call, which holds its recipe to these (plan AN).
+            started_extra={"references": [reference_row(reference) for reference in references]}
+            if detach
+            else None,
         )
     except BaseException as failed:
         # A restore that fails must never replace why the run failed, which may say credits were spent.

@@ -3966,7 +3966,9 @@ def test_a_job_that_job_submit_did_not_start_is_answered_with_its_outcome(monkey
 
     text = _texts([result])[0]
     assert result.is_error and "outcome code=UNKNOWN charged=unknown retryable=no; LookupError" in text, text
-    assert "job_submit did not start it" in text and "runs again" not in text
+    # A job_submit killed between its click and its started row leaves the same rows: the words must not say
+    # that job_submit never ran it.
+    assert "no started row" in text and "did not start it" not in text and "runs again" not in text
     assert len(ledger.rows()) == 1 and mcp_server.backend._running == set()
     assert opened == []
 
@@ -4020,7 +4022,171 @@ def test_the_job_tools_say_how_they_fit_together_and_what_each_costs():
     assert "spends credits" in submit and "job_status" in submit and "job_collect" in submit
     assert "max_credits" in submit and "STARTED" in submit
     for free in (status, collect):
-        assert free.endswith("Free.") and "never clicks" in free
-    assert "writes nothing" in status and "settled row" in collect
+        assert free.endswith("Free.") and "never clicks Start generation" in free
+    assert "writes no ledger row" in status and "settled row" in collect
     for name in ("job_submit", "job_status", "job_collect"):
         assert name in mcp_server.server.instructions
+
+
+def test_the_job_tools_do_not_promise_what_the_code_does_not_do():
+    # Review of plan AN, each a sentence the code contradicted.
+    tools = served_tool_objects()
+    submit, status, collect = (
+        tools[name].description for name in ("job_submit", "job_status", "job_collect")
+    )
+
+    # job_submit offers no count, so it must not carry gen_video's sentence about one.
+    assert "multiplies the price" not in submit and "multiplies the price" in tools["gen_video"].description
+    # With no submit request seen the call stays and answers as gen_video does.
+    assert "stays" in submit and "as gen_video does" in submit
+    # A blocking run made while a submitted job renders has no shared-balance check of its own.
+    assert "balance_moved" in submit
+    # job_status appends the balance it read to out/credits.jsonl, so "writes nothing" was untrue.
+    assert "writes nothing" not in status and "credits.jsonl" in status
+    # When every direct link fails the download goes through the editor's own Download menu, which is clicked.
+    assert "never clicks and never types" not in collect and "Download menu" in collect
+    # A 360p job has no 720p rendition: its own file is what is fetched.
+    assert "360p" in collect and "recipe" in collect and "charged_from" in collect
+
+
+def test_job_submit_hands_the_driver_what_gen_video_hands_it(monkeypatch, tmp_path):
+    # Review of plan AN: job_submit could drop the aspect, the model, the ingredients, or swap the two frames, with
+    # the suite green. The two tools are run with the same options, a set per mode and one with none at all (so a
+    # default that drifts shows), and the driver must get the same call but for the job id and the detach.
+    _spending_backend(monkeypatch, tmp_path)
+    option_sets = [
+        {"model": "omni-flash", "aspect": "16:9", "resolution": "360p", "duration": 6, "start_frame": "S"}
+        | {"end_frame": "E"},
+        {"model": "veo-lite", "media_ids": ["M"], "characters": ["E"], "voices": ["Achird"]},
+        {"out_dir": str(tmp_path / "films")},
+        {},
+    ]
+    schema = served_tool_objects()["job_submit"].input_schema["properties"]
+    named = {key for options in option_sets for key in options}
+    assert set(schema) - named == {"project", "prompt", "job_id", "max_credits"}, "an option no set exercises"
+
+    for index, options in enumerate(option_sets):
+        blocking = _payload(
+            _call("gen_video", SPEND_CALLS["gen_video"] | options | {"job_id": f"fwd-a{index}"})
+        )
+        detached = _payload(
+            _call("job_submit", SPEND_CALLS["job_submit"] | options | {"job_id": f"fwd-b{index}"})
+        )
+
+        assert (blocking.pop("count"), blocking.pop("dry_run"), detached.pop("detach")) == (1, False, True)
+        assert (blocking.pop("job_id"), detached.pop("job_id")) == (f"fwd-a{index}", f"fwd-b{index}")
+        assert detached == blocking, options
+
+
+def test_gen_video_still_names_a_blank_project_before_anything_about_a_retry():
+    # The order gen_video refused in before its checks were shared with job_submit (non-goal: it does not change).
+    result = _call("gen_video", {"project": " ", "prompt": "a boat", "dry_run": True, "retry_of": "j"})
+
+    assert result.is_error and "project is required" in _texts([result])[0]
+
+
+@pytest.mark.parametrize("tool", ["job_status", "job_collect"])
+def test_a_ledger_that_cannot_be_read_never_leaves_a_later_tool_without_an_outcome(
+    monkeypatch, tmp_path, tool
+):
+    # Review of plan AN: a torn line in ANOTHER ledger gave a bare JSONDecodeError, which the job id rule tells an
+    # agent to read as "refused before any job started", for a job that is started and paid.
+    opened = _job_backend(monkeypatch, tmp_path)
+    ledger = _started_job(tmp_path / "films")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other" / "ledger.jsonl").write_text('{"job_id": "jo', encoding="utf-8")
+
+    result = _call(tool, {"job_id": "job-1"})
+
+    text = _texts([result])[0]
+    assert result.is_error and "outcome code=UNKNOWN charged=unknown retryable=no" in text, text
+    assert "cannot be read" in text and opened == [] and len(ledger.rows()) == 2
+
+
+def test_two_collects_of_one_job_at_once_fetch_and_settle_it_once(monkeypatch, tmp_path):
+    # The first collect is inside its session when the second arrives. The mark is what turns the second away:
+    # this fake session has no guard, so without the mark both would fetch and both would write a row.
+    ledger = _started_job(tmp_path / "films")
+    log = _job_world(monkeypatch, tmp_path, [_video("w-job", PROMPT)])
+    inside, leave = asyncio.Event(), asyncio.Event()
+    sessions = []
+
+    async def held_with(self, fn):
+        sessions.append(fn)
+        if len(sessions) == 1:
+            inside.set()
+            await leave.wait()
+        else:
+            # A second session means the mark did not hold. Let the first go, so this test fails on what both of
+            # them then write instead of hanging (it hung a mutant run for an hour and a half, 2026-10-02).
+            leave.set()
+        return await fn(_Reader())
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", held_with)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+
+    async def both(session):
+        first = asyncio.create_task(session.call_tool("job_collect", {"job_id": "job-1"}))
+        await inside.wait()
+        second = await session.call_tool("job_collect", {"job_id": "job-1"})
+        seen = await session.call_tool("job_status", {"job_id": "job-1"})
+        leave.set()
+        return await first, second, seen
+
+    first, second, seen = with_client(both)
+
+    assert not first.is_error and second.is_error and "in another call" in _texts([second])[0]
+    assert _payload(seen)["state"] == "in_another_call"
+    assert [row["status"] for row in ledger.rows()] == ["submitted", "started", "done"]
+    assert len(log.fetched) == 1 and len(sessions) == 1 and mcp_server.backend._running == set()
+
+
+def test_job_status_types_an_error_by_the_jobs_own_rows(monkeypatch, tmp_path):
+    # A listing that cannot be read is no reason to call a started job UNKNOWN: it is still Flow's to render.
+    _job_backend(monkeypatch, tmp_path)
+    _started_job(tmp_path / "films")
+
+    async def broken(session, project_id, attempts=4):
+        raise RuntimeError("no Zzl0ze frame")
+
+    monkeypatch.setattr(mcp_server.jobs_mod.composer, "snapshot", broken)
+
+    text = _texts([_call("job_status", {"job_id": "job-1"})])[0]
+
+    assert "outcome code=STARTED charged=unknown retryable=no; RuntimeError: no Zzl0ze frame" in text, text
+
+
+def test_job_status_of_a_job_not_listed_yet_still_says_it_is_started(monkeypatch, tmp_path):
+    _job_backend(monkeypatch, tmp_path)
+    _started_job(tmp_path / "films")
+    _job_world(monkeypatch, tmp_path, [_video("w-before", "old")])
+
+    answer = _payload(_call("job_status", {"job_id": "job-1"}))
+
+    assert (answer["state"], answer["outcome"]["code"]) == ("not_listed", "STARTED")
+
+
+def test_job_status_reads_every_ledger_for_a_clip_another_job_names(monkeypatch, tmp_path):
+    # I-money-5 through the server: the other job's rows sit in another folder's ledger.
+    _job_backend(monkeypatch, tmp_path)
+    _started_job(tmp_path / "films", workflow=None, at=time.time())
+    theirs = gen.Ledger(tmp_path / "other" / "ledger.jsonl")
+    theirs.append("job-B", "submitted", kind="video", project="p-1", prompt=PROMPT)
+    theirs.append("job-B", "started", workflow_id="w-B", prompt=PROMPT)
+    _job_world(monkeypatch, tmp_path, [_video("w-B", PROMPT)])
+
+    assert _payload(_call("job_status", {"job_id": "job-1"}))["state"] == "not_listed"
+    assert _payload(_call("job_collect", {"job_id": "job-1"}))["state"] == "not_listed"
+
+
+def test_a_collected_clips_path_is_spelled_as_the_out_folder_is(monkeypatch, tmp_path):
+    # Blocking rows hold `out/...` as the server was given it; a resolved path would put the home folder in the row.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(mcp_server.Backend, "_with", lambda self, fn: fn(_Reader()))
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=Path("out")))
+    ledger = _started_job(Path("out") / "films")
+    _job_world(monkeypatch, tmp_path, [_video("w-job", PROMPT)])
+
+    answer = _payload(_call("job_collect", {"job_id": "job-1"}))
+
+    assert answer["path"].startswith("out/films/m-w-job_") and ledger.rows()[-1]["path"] == answer["path"]

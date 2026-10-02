@@ -68,6 +68,9 @@ def _charged(row: dict[str, Any]) -> int | None:
     """What the row's own balance bracket says left the account; None when it cannot say."""
     if isinstance(row.get("spent"), int) and not isinstance(row.get("spent"), bool):
         return row["spent"]
+    if row.get("balance_shared"):
+        # job_collect met other jobs inside this bracket (plan AN): the difference is theirs too, so it says nothing.
+        return None
     before, after = row.get("credits_before"), row.get("credits_after")
     if isinstance(before, int) and isinstance(after, int):
         return before - after
@@ -113,7 +116,12 @@ def classify(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return _said("STARTED" if any(row.get("status") == "started" for row in after) else "UNKNOWN", None)
     status, charged = settled.get("status"), _charged(settled)
     if status == "done":
-        return _said("DONE", charged)
+        said = _said("DONE", charged)
+        if settled.get("spent_from") == "quoted":
+            # A job collected on a shared balance (plan AN): the figure is the price quoted before the click, not
+            # what a bracket saw leave the account.
+            said["charged_from"] = "quoted"
+        return said
     if status == "pending":
         return _said("PENDING", charged)
     if status == "unknown" or charged is None:

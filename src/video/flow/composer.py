@@ -756,12 +756,15 @@ async def _submit(
     max_credits: int | None = None,
     retry_of: str | None = None,
     detach: bool = False,
+    started_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The one money path: every mode goes through the same price guard, single click and ledger.
 
     detach (plan AN) leaves once a submit request has been seen going out: it writes a `started` row holding what a
-    later call needs to find the clip (the workflow Flow's reply named, the workflows listed before, the prompt) and
-    returns; nothing is waited for, read or fetched. With no submit request seen it runs on as a blocking call does.
+    later call needs to find the clip (the workflow Flow's reply named, the workflows listed before, the prompt, and
+    `started_extra`, what the caller wants the clip held to) and returns; nothing is waited for, read or fetched.
+    With no submit request seen, or once Flow has already failed the job in this page, it runs on as a blocking call
+    does: this page is the only place Flow's reason is heard.
 
     dry_run stops once the price is read: no balance read, no ledger row, no click, and the composer is emptied again.
     watch hears every request of the click window and its report lands in the outcome row. strict_output takes only
@@ -873,9 +876,10 @@ async def _submit(
         with contextlib.suppress(Exception):
             await session.page.screenshot(path=str(out_dir / f"submitted_{digest}.png"))
 
-        if detach and any(rpcid in mc.SUBMIT_RPCS for rpcid in frames):
-            # The request is out, so the job is Flow's now and leaving the page cancels nothing (plan AN).
-            flow = await replies.report()
+        # The request is out, so the job is Flow's now and leaving the page cancels nothing (plan AN). A job Flow has
+        # already failed stays: the wait below ends at once on that reply and settles it with its reason.
+        flow = await replies.report() if detach and any(rpcid in mc.SUBMIT_RPCS for rpcid in frames) else None
+        if flow is not None and (flow.get("statuses") or [None])[-1] != STATUS_FAILED:
             session.page.remove_listener("response", replies.on_response)
             watched = {"body_check": watch.report()} if watch is not None else {}
             ledger.append(
@@ -888,6 +892,7 @@ async def _submit(
                 rpcids=sorted(frames),
                 notice=notice,
                 **watched,
+                **(started_extra or {}),
                 flow=flow,
                 page_after_click=page_after_click,
             )
