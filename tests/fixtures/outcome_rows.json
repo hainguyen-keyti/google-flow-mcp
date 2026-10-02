@@ -1,0 +1,72 @@
+{
+  "_about": "Rows of real jobs, read off the ledgers of this machine on 2026-10-02 (plan AM, T1) and cut down to the fields an outcome is read from. Prompts are replaced; job ids and numbers are the real ones.",
+  "composer_done": {"job": "al-t5-lite-lilyvoice-1", "rows": [
+    {"status": "submitted", "kind": "character", "credits_before": 75, "project": "102445f4", "prompt": "a prompt"},
+    {"status": "done", "spent": 10, "credits_before": 75, "credits_after": 65, "flow": {"statuses": [6, 2, 3], "reasons": []}}]},
+  "no_reason": {"job": "ak-v3", "rows": [
+    {"status": "submitted", "kind": "video", "credits_before": 237, "project": "102445f4", "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 237, "credits_after": 237, "flow": {"statuses": [6, 2, 4], "reasons": []}}]},
+  "audio_filtered": {"job": "lly-v5-s3-pose", "rows": [
+    {"status": "submitted", "kind": "video", "credits_before": 467, "project": "102445f4", "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 467, "credits_after": 467, "flow": {"statuses": [6, 2, 4], "reasons": ["PUBLIC_ERROR_AUDIO_FILTERED"]}}]},
+  "audio_filtered_late_submit_reply": {"job": "lly-v5-s1b-reveal", "rows": [
+    {"status": "submitted", "kind": "video", "credits_before": 455, "project": "102445f4", "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 455, "credits_after": 455, "flow": {"statuses": [2, 6, 2, 4], "reasons": ["PUBLIC_ERROR_AUDIO_FILTERED"]}}]},
+  "prominent_people": {"job": "plan-e-l4-1", "rows": [
+    {"status": "submitted", "kind": "character", "credits_before": 181, "project": "118aece2", "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 181, "credits_after": 181, "flow": {"statuses": [6, 2, 4], "reasons": ["PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"]}}]},
+  "prominent_people_refused_at_once": {"job": "dancer-1", "rows": [
+    {"status": "submitted", "kind": "character", "credits_before": 135, "project": "118aece2", "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 135, "credits_after": 135, "flow": {"statuses": [6, 4], "reasons": ["PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED"]}}]},
+  "unsafe_generation": {"job": "v5b-t1-frames", "rows": [
+    {"status": "submitted", "kind": "video", "credits_before": 435, "project": "102445f4", "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 435, "credits_after": 435, "flow": {"statuses": [2, 6, 2, 4], "reasons": ["PUBLIC_ERROR_UNSAFE_GENERATION"]}}]},
+  "failed_while_flow_still_ran": {"job": "sg-bf-2", "rows": [
+    {"status": "submitted", "kind": "character", "credits_before": 147, "project": "118aece2", "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 147, "credits_after": 147, "flow": {"statuses": [6, 2], "reasons": []}}]},
+  "failed_with_no_reply_heard": {"job": "plan-e-l3-1", "rows": [
+    {"status": "submitted", "kind": "character", "credits_before": 193, "project": "118aece2", "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 193, "credits_after": 193}]},
+  "composer_pending": {"job": "leelyly-p2", "rows": [
+    {"status": "submitted", "kind": "character", "credits_before": 113, "project": "a0b250bd", "prompt": "a prompt"},
+    {"status": "pending", "spent": 12, "credits_before": 113, "credits_after": 101, "flow": {"statuses": [6, 2], "reasons": []}}]},
+  "gflow_selector_drift": {"job": "9854f050-4914-4338-a151-ab1073d42801", "rows": [
+    {"status": "submitted", "kind": "i2i", "credits_before": 735},
+    {"status": "failed", "credits_before": 735, "credits_after": 735, "exit_code": 23, "error_class": "UiSelectorDriftError"}]},
+  "gflow_exit_without_class": {"job": "acc2-t2i-1", "rows": [
+    {"status": "submitted", "kind": "t2i", "credits_before": 1050},
+    {"status": "failed", "credits_before": 1050, "credits_after": 1050, "exit_code": 2}]},
+  "gflow_submitted_only": {"job": "e36b0a53-5864-4397-b551-319f3ad14c99", "rows": [
+    {"status": "submitted", "kind": "r2v", "credits_before": 735}]},
+  "editor_opening_only": {"job": "t6-clip-extend-1", "rows": [
+    {"status": "opening", "kind": "extend", "credits_before": 230, "project": "118aece2", "prompt": "a prompt"}]},
+  "editor_failed_and_charged": {"job": "f3ce0f73-27e7-4d2e-9c58-7ba45854d09e", "rows": [
+    {"status": "submitted", "kind": "edit", "credits_before": 755, "prompt": "a prompt"},
+    {"status": "failed", "spent": 20, "credits_before": 755, "credits_after": 735}]},
+  "editor_failed_uncharged": {"job": "c488f6a1-3d92-4659-98e9-6921b13a2e57", "rows": [
+    {"status": "submitted", "kind": "extend", "credits_before": 620, "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 620, "credits_after": 620}]},
+  "editor_pending": {"job": "0cf458a9-1e38-4365-95c9-aa2e8b785c9a", "rows": [
+    {"status": "submitted", "kind": "extend", "credits_before": 765, "prompt": "a prompt"},
+    {"status": "pending", "spent": 10, "credits_before": 765, "credits_after": 755}]},
+  "editor_done": {"job": "ak-x1", "rows": [
+    {"status": "opening", "kind": "extend", "credits_before": 95, "project": "102445f4", "prompt": "a prompt"},
+    {"status": "submitted", "kind": "extend", "credits_before": 95, "prompt": "a prompt"},
+    {"status": "done", "spent": 10, "credits_before": 95, "credits_after": 85, "flow": {"statuses": [6, 2, 3], "reasons": []}}]},
+  "agent_done_uncharged": {"job": "b002fa81-8e80-43ea-8452-3696b80f0a38", "rows": [
+    {"status": "submitted", "kind": "agent", "credits_before": 735, "project": "c5d1301b"},
+    {"status": "done", "spent": 0, "credits_before": 735, "credits_after": 735}]},
+  "gflow_done": {"job": "a5e6c925-04a8-4f5b-bdb9-785ed5dde2c2", "rows": [
+    {"status": "submitted", "kind": "t2v", "credits_before": 775},
+    {"status": "done", "spent": 10, "credits_before": 775, "credits_after": 765}]},
+  "one_id_run_twice": {"job": "tryon-01", "rows": [
+    {"status": "submitted", "kind": "story", "credits_before": 525, "project": "c5d1301b", "prompt": "a prompt"},
+    {"status": "failed", "spent": 0, "credits_before": 525, "credits_after": 525},
+    {"status": "submitted", "kind": "story", "credits_before": 525, "project": "c5d1301b", "prompt": "a prompt"},
+    {"status": "done", "spent": 10, "credits_before": 525, "credits_after": 515}]},
+  "done_then_other_rows": {"job": "tryon2-02", "rows": [
+    {"status": "submitted", "kind": "frames", "credits_before": 425, "project": "c5d1301b", "prompt": "a prompt"},
+    {"status": "done", "spent": 10, "credits_before": 425, "credits_after": 415},
+    {"status": "selected"},
+    {"status": "selected"}]}
+}
