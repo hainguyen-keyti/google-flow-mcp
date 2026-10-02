@@ -41,12 +41,14 @@ GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
             "scene_list",
             "scene_clips",
             "clip_reconcile",
+            "clip_recipe",
+            "job_status",
         ),
     ),
     (
         "Write a file on this machine, free",
         "Free for Flow, but they put bytes on your disk, always inside `out/`.",
-        ("flow_download", "clip_download", "scene_download"),
+        ("flow_download", "clip_download", "scene_download", "job_collect"),
     ),
     (
         "Change the account, free",
@@ -81,6 +83,8 @@ GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
             "any ledger under `out/` has already seen."
         ),
         (
+            "gen_video",
+            "job_submit",
             "gen_t2v",
             "gen_i2v",
             "gen_r2v",

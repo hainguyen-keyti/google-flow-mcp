@@ -250,7 +250,7 @@ def _status(ledger, job_id="job-1", now=T0 + 60):
 
 
 def _collect(ledger, job_id="job-1", now=T0 + 60, others=()):
-    return asyncio.run(jobs.collect(_Reader(), ledger, job_id, now=now, others=list(others)))
+    return asyncio.run(jobs.collect(_Reader(), ledger, job_id, now=now, others=lambda: list(others)))
 
 
 @pytest.mark.parametrize(
@@ -356,13 +356,73 @@ def test_a_balance_other_jobs_moved_is_never_written_as_this_jobs_own_spend(monk
     assert (answer["spent"], answer["spent_from"]) == (10, "quoted")
     settled = ledger.rows()[-1]
     assert settled["spent"] == 10 and settled["spent_from"] == "quoted" and settled["credits_after"] == 170
-    # A row of another job from BEFORE this job's submit shares nothing.
-    earlier = _started_job(tmp_path / "b")
+
+
+def test_a_job_still_in_flight_from_before_this_submit_shares_the_balance_too(monkeypatch, tmp_path):
+    # Two jobs render at once and the later one is collected first: the earlier one has no row after this job's
+    # submit, and its charge, or the refund of its failure, still lands inside this job's bracket.
+    ledger = _started_job(tmp_path)
+    _world(monkeypatch, tmp_path, [_video("w-job", PROMPT)], balance=180)
+    flying = [
+        {"job_id": "job-0", "status": "submitted", "ts": T0 - 30},
+        {"job_id": "job-0", "status": "started", "ts": T0 - 10},
+    ]
+
+    answer = _collect(ledger, others=flying)
+
+    assert (answer["spent"], answer["spent_from"]) == (10, "quoted")
+    assert "balance_moved" not in answer and ledger.rows()[-1]["spent_from"] == "quoted"
+
+
+@pytest.mark.parametrize(
+    "others",
+    [
+        [
+            {"job_id": "job-0", "status": "submitted", "ts": T0 - 30},
+            {"job_id": "job-0", "status": "done", "ts": T0 - 5},
+        ],
+        [{"job_id": "job-0", "status": "submitted", "ts": T0 - jobs.IN_FLIGHT_S - 1}],
+        [{"job_id": "job-0", "status": "noted", "ts": T0 + 5}],
+    ],
+    ids=["settled before this submit", "left unsettled long ago", "a row that is no step of a job"],
+)
+def test_a_job_that_could_not_move_the_balance_meanwhile_shares_nothing(monkeypatch, tmp_path, others):
+    # A job that crashed last week has no settled row either: it must not mark every later bracket as shared.
+    ledger = _started_job(tmp_path)
     _world(monkeypatch, tmp_path, [_video("w-job", PROMPT)], balance=190)
-    alone = asyncio.run(
-        jobs.collect(_Reader(), earlier, "job-1", now=T0 + 60, others=[{**other, "ts": T0 - 5}])
-    )
-    assert (alone["spent"], alone["spent_from"]) == (10, "bracket")
+
+    answer = _collect(ledger, others=others)
+
+    assert (answer["spent"], answer["spent_from"]) == (10, "bracket")
+
+
+def test_ledgers_that_cannot_be_read_are_taken_as_sharing_the_balance(monkeypatch, tmp_path):
+    # Another process appending a row can leave a torn last line for a moment: a ledger that cannot be read may hold
+    # a job that moved the balance, and a paid clip must still be fetched.
+    ledger = _started_job(tmp_path)
+    _world(monkeypatch, tmp_path, [_video("w-job", PROMPT)], balance=190)
+
+    def torn():
+        raise json.JSONDecodeError("Unterminated string", '{"job_id": "jo', 14)
+
+    answer = asyncio.run(jobs.collect(_Reader(), ledger, "job-1", now=T0 + 60, others=torn))
+
+    assert (answer["state"], answer["spent"], answer["spent_from"]) == ("collected", 10, "quoted")
+    assert ledger.rows()[-1]["status"] == "done"
+
+
+def test_the_other_jobs_rows_are_read_after_the_balance(monkeypatch, tmp_path):
+    # A job submitted while this collect waited for the browser is in the rows only when they are read last.
+    ledger = _started_job(tmp_path)
+    log = _world(monkeypatch, tmp_path, [_video("w-job", PROMPT)])
+
+    def others():
+        log.append("others")
+        return []
+
+    asyncio.run(jobs.collect(_Reader(), ledger, "job-1", now=T0 + 60, others=others))
+
+    assert log[:3] == ["snapshot p-1", "credits", "others"]
 
 
 def test_an_own_bracket_that_is_not_the_quoted_price_is_said(monkeypatch, tmp_path):

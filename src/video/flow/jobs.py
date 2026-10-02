@@ -12,6 +12,7 @@ Measured 2026-10-02 (`out/an/t1_probe.py`, three jobs of three): the workflow id
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any
 
 from video import gen, outcome
@@ -21,6 +22,9 @@ from video.session import FlowSession
 # How long after its submit a job with no record is still only "not listed". Not measured: the listing has always
 # shown a rendering job within a minute; ten leaves room for a slow day before anything is written.
 NOT_LISTED_S = 600.0
+# How long after its submit another job with no settled row can still move the balance. Not measured: the longest run
+# seen took 8 minutes; an hour keeps a job that crashed last week from marking every later bracket as shared.
+IN_FLIGHT_S = 3600.0
 # Rows of another job that can stand for a balance on the move.
 _MOVES = (*outcome.INTENT, "started", *outcome.SETTLED)
 _NEVER = "never run this job again under a new job_id"
@@ -49,11 +53,23 @@ def _settled(job_id: str, settled: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def standing(ledger: gen.Ledger, job_id: str) -> dict[str, Any] | None:
+    """What the ledger alone says of a job: the answer of one that has its settled row, None for a started one that
+    Flow must be asked about, and a refusal for one job_submit did not start. Callers ask this first, so neither a
+    settled job nor one with no clip to look for opens a browser."""
+    intent, started, settled = _run(ledger.rows(job_id))
+    if settled is not None:
+        return _settled(job_id, settled)
+    if intent is None or started is None:
+        raise _not_started(job_id, ledger)
+    return None
+
+
 def _not_started(job_id: str, ledger: gen.Ledger) -> LookupError:
     return LookupError(
-        f"job {job_id!r} has no started row in {ledger.path}: job_submit did not start it, so there is no clip to "
-        "look for here; a blocking tool settles its own job, and a job that never started runs again under its "
-        "own job_id"
+        f"job {job_id!r} has no started row in {ledger.path}: job_submit did not start it, so job_status and "
+        "job_collect have no clip to look for; a blocking tool settles its own job, and what this one came to is "
+        "its outcome"
     )
 
 
@@ -76,6 +92,24 @@ def _claim(
     if not mine:
         return "not_listed", None, []
     return ("ready" if clips.is_done(mine[0]) else "rendering"), mine[0], []
+
+
+def _shared(job_id: str, intent: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+    """Whether another job could have moved the balance inside this job's bracket (I-read-2): one with a row after
+    this job's submit, or one submitted within the hour before it and not settled yet, whose charge, or the refund
+    of its failure, is still to land."""
+    mine = intent.get("ts") or 0
+    theirs: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if row.get("job_id") != job_id and row.get("status") in _MOVES:
+            theirs.setdefault(str(row.get("job_id")), []).append(row)
+    for moves in theirs.values():
+        if any((row.get("ts") or 0) > mine for row in moves):
+            return True
+        began, settled = outcome.last_run(moves)
+        if began is not None and settled is None and mine - (began.get("ts") or 0) < IN_FLIGHT_S:
+            return True
+    return False
 
 
 async def _look(session: FlowSession, intent: dict[str, Any], started: dict[str, Any]) -> dict[str, Any]:
@@ -118,13 +152,13 @@ async def collect(
     ledger: gen.Ledger,
     job_id: str,
     *,
-    others: list[dict[str, Any]] | None = None,
+    others: Callable[[], list[dict[str, Any]]] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     """Fetch a started job's finished clip and write its one settled row; a job still rendering, or not listed yet,
-    is answered as such with nothing written. `others` are the rows of every ledger under the out folder: a row of
-    another job after this job's submit means the balance bracket is shared, and then the job's `spent` is the price
-    Flow quoted before the click, said as such (I-read-2)."""
+    is answered as such with nothing written. `others` reads the rows of every ledger under the out folder: another
+    job that could have moved the balance meanwhile (`_shared`) means the bracket is not this job's own, and then
+    the job's `spent` is the price Flow quoted before the click, said as such (I-read-2)."""
     intent, started, settled = _run(ledger.rows(job_id))
     if settled is not None:
         return _settled(job_id, settled)
@@ -134,12 +168,12 @@ async def collect(
     state, record, credits_now = seen["state"], seen["record"], seen["credits_now"]
     age = int((time.time() if now is None else now) - (started.get("ts") or 0))
     before, quoted = intent.get("credits_before"), intent.get("quoted_credits")
-    shared = any(
-        row.get("job_id") != job_id
-        and row.get("status") in _MOVES
-        and (row.get("ts") or 0) > (intent.get("ts") or 0)
-        for row in others or []
-    )
+    # Read after the balance, so a job submitted while this call waited for the browser is among them. A ledger that
+    # cannot be read (another process mid-append) may hold such a job, so it counts as one.
+    try:
+        shared = _shared(job_id, intent, others() if others else [])
+    except (OSError, ValueError):
+        shared = True
     bracket = before - credits_now if isinstance(before, int) and isinstance(credits_now, int) else None
     common = {
         "credits_before": before,

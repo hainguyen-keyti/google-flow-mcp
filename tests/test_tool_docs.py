@@ -39,6 +39,18 @@ def test_every_served_tool_appears_with_its_own_description():
         assert first[:60] in rendered, f"{tool.name} is listed without what it does"
 
 
+def test_no_served_tool_is_left_without_a_group():
+    """The groups are typed by hand, so a new tool lands under "Ungrouped" until someone files it: gen_video and
+    clip_recipe sat there from plans AB and AL until 2026-10-02."""
+    served = {tool.name for tool in asyncio.run(gen.tools())}
+    listed = [name for _, _, names in gen.GROUPS for name in names]
+
+    assert sorted(served - set(listed)) == []
+    assert sorted(set(listed) - served) == [], "a group names a tool the server no longer serves"
+    assert len(listed) == len(set(listed)), "a tool is filed under two groups"
+    assert "Ungrouped" not in asyncio.run(gen.render())
+
+
 def test_a_tool_that_never_says_what_it_costs_is_reported():
     """Every description in this repo names its price, because the description is the contract an agent reads
     before spending. A new tool that forgets is caught here rather than in someone's bill."""

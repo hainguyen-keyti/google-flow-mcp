@@ -37,7 +37,7 @@ import sys
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 
-from video import mcp_server
+from video import gen, mcp_server
 from video.flow import parsers
 
 SECRET = re.compile(r"SAPISID=|__Secure-|Authorization:")
@@ -58,6 +58,8 @@ READ_ONLY_PER_CHARACTER = ("flow_voices",)
 READ_ONLY_PER_MEDIA = ("clip_recipe",)
 # The kinds the parser itself can answer, read from it so the two never drift apart.
 RECIPE_KINDS = (*parsers._RECIPE_KINDS.values(), "unknown")
+# Reads where one job stands. Called here on a job the ledger already settled, which is answered from its row.
+READ_ONLY_PER_JOB = ("job_status",)
 
 # Free but they CHANGE things. Never called here; see I4 in the plan.
 MUTATING = (
@@ -86,8 +88,9 @@ MUTATING = (
     "gen_i2i",
 )
 
-# Free for Flow but they write a file on this machine, so they are not called here either.
-DOWNLOADING = ("flow_download", "scene_download")
+# Free for Flow but they write a file on this machine, so they are not called here either. job_collect also writes
+# a job's settled row.
+DOWNLOADING = ("flow_download", "scene_download", "job_collect")
 
 # clip_download at 1080p was measured free, but its 4k rendition is a Flow upscale whose price has never been
 # measured, and its own description says so. Filing it with the plainly free ones was a claim the tool contradicts
@@ -101,6 +104,7 @@ SPENDING = (
     "gen_r2v",
     "gen_character",
     "gen_video",
+    "job_submit",
     "clip_extend",
     "clip_edit",
     "agent_send",
@@ -115,6 +119,7 @@ CLASSIFIED = (
     *READ_ONLY_PER_SCENE,
     *READ_ONLY_PER_CHARACTER,
     *READ_ONLY_PER_MEDIA,
+    *READ_ONLY_PER_JOB,
     *MUTATING,
     *DOWNLOADING,
     *MAYBE_SPENDING,
@@ -361,6 +366,43 @@ def recipe_of(media_id):
     return check
 
 
+def newest_settled_job(out_dir):
+    """The job whose `done` row is the newest, among those one ledger alone holds and whose last row it is: the kind
+    of job job_status answers from the ledger, with no browser. None when no ledger under the out folder has one."""
+    last, held = {}, {}
+    for path in sorted(out_dir.rglob("ledger.jsonl")):
+        for row in gen.Ledger(path).rows():
+            job_id = row.get("job_id")
+            if isinstance(job_id, str) and job_id:
+                last[job_id] = row
+                held.setdefault(job_id, set()).add(path.resolve())
+    done = [
+        (row.get("ts") or 0, job_id)
+        for job_id, row in last.items()
+        if row.get("status") == "done" and len(held[job_id]) == 1
+    ]
+    return max(done)[1] if done else None
+
+
+def settled_job(job_id):
+    def check(payload):
+        if not isinstance(payload, dict):
+            return f"expected an object, got {type(payload).__name__}"
+        if payload.get("job_id") != job_id:
+            return f"asked where {job_id} stands, got the answer of {payload.get('job_id')!r}"
+        if (payload.get("state"), payload.get("status")) != ("settled", "done"):
+            return (
+                f"state is {payload.get('state')!r} and status {payload.get('status')!r} for a job whose last "
+                "row is done"
+            )
+        outcome = payload.get("outcome")
+        if not isinstance(outcome, dict) or outcome.get("code") != "DONE":
+            return f"the outcome of a done job is {str(outcome)[:80]}"
+        return None
+
+    return check
+
+
 def an_upload_count(payload):
     """Why `a_dict` was not enough here. Measured 2026-09-14: flow_uploads was answering `count: null`,
     a doubled tile figure and an empty rpcid list on a project holding 4 uploads, and this gate stayed
@@ -557,6 +599,22 @@ async def run(findings):
                             "name": "clip_recipe",
                             "status": "SKIP",
                             "detail": "the project holds no generated video to read a recipe from",
+                        }
+                    )
+
+                # A settled job is answered from its ledger row, so this row reads nothing off Flow and changes nothing.
+                job_id = newest_settled_job(mcp_server.backend.out_dir)
+                if job_id:
+                    status, detail, _ = await call(
+                        session, "job_status", {"job_id": job_id}, settled_job(job_id)
+                    )
+                    findings.append({"name": "job_status", "status": status, "detail": detail})
+                else:
+                    findings.append(
+                        {
+                            "name": "job_status",
+                            "status": "SKIP",
+                            "detail": "no ledger under the out folder holds a settled job to ask about",
                         }
                     )
 

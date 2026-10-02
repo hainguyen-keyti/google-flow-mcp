@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from video import mcp_server
+from video import gen, mcp_server
 
 _SMOKE = Path(__file__).resolve().parents[1] / "scripts" / "acceptance" / "mcp_smoke.py"
 _spec = importlib.util.spec_from_file_location("mcp_smoke", _SMOKE)
@@ -103,13 +103,39 @@ def _replies(first=PROJECT, empty=False):
     }
 
 
+# The out folder the offline account keeps its ledgers in, set per test by `_out`: never the repo's own out/.
+_STATE = {}
+
+
+def _settle(folder, job_id, status="done"):
+    ledger = gen.Ledger(folder / "ledger.jsonl")
+    ledger.append(job_id, "submitted", kind="video", project=PROJECT, credits_before=200)
+    ledger.append(job_id, status, media_id="m1", path="out/m1.mp4", spent=10, credits_after=190)
+    return ledger
+
+
+@pytest.fixture(autouse=True)
+def _out(tmp_path, monkeypatch):
+    """A used account's out folder: one ledger holding one settled job."""
+    monkeypatch.setitem(_STATE, "out", tmp_path)
+    _settle(tmp_path, "job-settled")
+    return tmp_path
+
+
 class _Account(mcp_server.Backend):
     """The real Backend with its reads answered from canned replies: everything it does NOT override, the refusal
-    of an out_dir outside out/ among it, runs the server's own code rather than a double of it."""
+    of an out_dir outside out/ and the answer of a settled job among it, runs the server's own code rather than a
+    double of it."""
 
     def __init__(self, replies):
-        super().__init__()
+        super().__init__(out_dir=_STATE["out"])
         self.replies = replies
+
+    async def job_status(self, job_id):
+        self.replies.setdefault("job_asked_for", []).append(job_id)
+        if "job_status" in self.replies:
+            return self.replies["job_status"]
+        return await super().job_status(job_id)
 
     async def _with(self, fn):
         # The unit suite never talks to Flow (CLAUDE.md rule 6). Inheriting the real Backend means an unguarded
@@ -176,8 +202,35 @@ def _failing(rows):
 def test_a_healthy_account_passes_every_row(monkeypatch):
     rows = _rows(monkeypatch, _replies())
 
-    assert len(rows) == 17
+    assert len(rows) == 18
     assert _failing(rows) == {}
+
+
+def test_the_smoke_asks_where_a_job_the_ledger_settled_stands(monkeypatch, _out):
+    # job_status needs a job id the way scene_clips needs a scene id; the gate takes the newest job one ledger alone
+    # settled as done, which the server answers from the row with no browser (the offline account has none).
+    _settle(_out / "older", "job-older")
+    _settle(_out, "job-settled-later")
+    _settle(_out / "failed", "job-failed", status="failed")
+    _settle(_out / "twice-a", "job-twice")
+    _settle(_out / "twice-b", "job-twice")
+    replies = _replies()
+
+    rows = _rows(monkeypatch, replies)
+
+    assert replies["job_asked_for"] == ["job-settled-later"]
+    assert rows["job_status"][0] == "PASS"
+
+
+def test_an_out_folder_with_no_settled_job_skips_the_job_row(monkeypatch, _out):
+    (_out / "ledger.jsonl").unlink()
+    _settle(_out, "job-failed", status="failed")
+    replies = _replies()
+
+    rows = _rows(monkeypatch, replies)
+
+    assert rows["job_status"] == ("SKIP", "no ledger under the out folder holds a settled job to ask about")
+    assert "job_asked_for" not in replies
 
 
 def test_the_smoke_reads_the_timeline_of_a_scene_the_listing_named(monkeypatch):
@@ -251,7 +304,7 @@ def test_an_empty_project_passes_every_row(monkeypatch):
 
     rows = _rows(monkeypatch, replies)
 
-    assert len(rows) == 17
+    assert len(rows) == 18
     assert _failing(rows) == {
         "scene_clips": "the project holds no scene to read",
         "flow_voices": "the project holds no character to read voices from",
@@ -358,6 +411,25 @@ def _recipe_voice_that_does_not_say_if_it_is_custom(replies):
     replies["recipe"]["voices"] = [{"voice": "achird", "name": "Achird"}]
 
 
+SETTLED = {"job_id": "job-settled", "state": "settled", "status": "done", "outcome": {"code": "DONE"}}
+
+
+def _job_read_off_flow_instead_of_its_row(replies):
+    replies["job_status"] = {**SETTLED, "state": "ready", "status": None}
+
+
+def _status_of_another_job(replies):
+    replies["job_status"] = {**SETTLED, "job_id": "job-other"}
+
+
+def _settled_job_with_no_outcome(replies):
+    replies["job_status"] = {key: value for key, value in SETTLED.items() if key != "outcome"}
+
+
+def _done_job_said_to_be_unknown(replies):
+    replies["job_status"] = {**SETTLED, "outcome": {"code": "UNKNOWN"}}
+
+
 CORRUPTIONS = [
     ("flow_lane", _signed_out),
     ("flow_projects", _repeated_project_id),
@@ -381,6 +453,10 @@ CORRUPTIONS = [
     ("clip_recipe", _recipe_of_a_kind_nobody_named),
     ("clip_recipe", _recipe_whose_voices_are_bare_strings),
     ("clip_recipe", _recipe_voice_that_does_not_say_if_it_is_custom),
+    ("job_status", _job_read_off_flow_instead_of_its_row),
+    ("job_status", _status_of_another_job),
+    ("job_status", _settled_job_with_no_outcome),
+    ("job_status", _done_job_said_to_be_unknown),
 ]
 
 

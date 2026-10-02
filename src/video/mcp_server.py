@@ -28,6 +28,7 @@ from video.flow import characters as characters_mod
 from video.flow import clips as clips_mod
 from video.flow import download as download_mod
 from video.flow import ingredients as ingredients_mod
+from video.flow import jobs as jobs_mod
 from video.flow import lane as lane_mod
 from video.flow import projects as projects_mod
 from video.flow import reader
@@ -723,6 +724,100 @@ class Backend:
             request={"project": project, "prompt": prompt},
         )
 
+    async def job_submit(self, project: str, prompt: str, **options: Any) -> dict[str, Any]:
+        """gen_video's own run, left once its request has gone out (plan AN): the same guards, the same one click."""
+        out_dir = options.pop("out_dir", None)
+        target = self._editor_out_dir(out_dir)
+
+        def run() -> Awaitable[Any]:
+            return self._with(
+                lambda s: video_mod.generate(
+                    s, project, prompt=prompt, out_dir=target, detach=True, **options
+                )
+            )
+
+        return await self._spend_once(options.get("job_id"), target, run)
+
+    def _ledgers(self) -> list[Path]:
+        """Every ledger under the out folder, each once however its path is spelled."""
+        found = self.out_dir.rglob("ledger.jsonl", case_sensitive=False)
+        return sorted({path.resolve() for path in found if path.is_file()})
+
+    def _every_row(self) -> list[dict[str, Any]]:
+        return [row for path in self._ledgers() for row in gen_mod.Ledger(path).rows()]
+
+    def _job_ledger(self, job_id: str) -> gen_mod.Ledger:
+        """The one ledger under the out folder that holds a job. A job held nowhere, or in two, is refused, typed:
+        nothing can then be looked for, and nothing is started here in any case."""
+        held = [path for path in self._ledgers() if gen_mod.Ledger(path).rows(job_id)]
+        if len(held) == 1:
+            return gen_mod.Ledger(held[0])
+        if not held:
+            nobody = LookupError(
+                f"no ledger under {self.out_dir.resolve()} holds job {job_id!r}: job_status and job_collect work "
+                "on a job that job_submit recorded; nothing was looked up and nothing was spent"
+            )
+            nobody.outcome = self._came_to([])
+            raise nobody
+        twice = LookupError(
+            f"job {job_id!r} has rows in {len(held)} ledgers under the out folder "
+            f"({', '.join(str(path) for path in held)}), so which run they describe cannot be told and nothing is "
+            "looked up: tell the owner"
+        )
+        twice.outcome = outcome_mod.unreadable()
+        raise twice
+
+    def _told(self, answer: dict[str, Any], ledger: gen_mod.Ledger, job_id: str) -> dict[str, Any]:
+        said = self._outcome_of(ledger, job_id)
+        if said is not None:
+            answer["outcome"] = said
+        return answer
+
+    async def job_status(self, job_id: str) -> dict[str, Any]:
+        gen_mod.check_job_id(job_id)
+        if job_id in self._running:
+            # Mid-submit a job has its intent row and no started row yet, which reads as a job nobody started.
+            return {
+                "job_id": job_id,
+                "state": "in_another_call",
+                "note": "another call holds this job right now (its job_submit, or a job_collect): ask again once "
+                "that call has answered",
+            }
+        ledger = self._job_ledger(job_id)
+        try:
+            answer = jobs_mod.standing(ledger, job_id)
+            if answer is None:
+                answer = await self._with(lambda s: jobs_mod.status(s, ledger, job_id))
+        except Exception as failed:
+            failed.outcome = self._after_a_run(ledger, job_id)
+            raise
+        return self._told(answer, ledger, job_id)
+
+    async def job_collect(self, job_id: str) -> dict[str, Any]:
+        gen_mod.check_job_id(job_id)
+        if job_id in self._running:
+            flying = gen_mod.AlreadySubmitted(
+                f"job {job_id!r} is in another call right now (its job_submit, or another job_collect): wait for "
+                "that call to answer, then ask job_status; nothing was fetched and nothing was written"
+            )
+            flying.outcome = outcome_mod.unreadable()
+            raise flying
+        ledger = self._job_ledger(job_id)
+        # Marked with no await since the check, so a second collect of this job cannot slip in and settle it twice.
+        self._running.add(job_id)
+        try:
+            answer = jobs_mod.standing(ledger, job_id)
+            if answer is None:
+                answer = await self._with(
+                    lambda s: jobs_mod.collect(s, ledger, job_id, others=self._every_row)
+                )
+        except Exception as failed:
+            failed.outcome = self._after_a_run(ledger, job_id)
+            raise
+        finally:
+            self._running.discard(job_id)
+        return self._told(answer, ledger, job_id)
+
     async def generate(
         self,
         *,
@@ -888,7 +983,7 @@ server = TellingServer(
     "video",
     instructions=(
         "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
-        "recorded in the ledger (out/ledger.jsonl by default): gen_video, gen_t2v, gen_i2v, gen_r2v, "
+        "recorded in the ledger (out/ledger.jsonl by default): gen_video, job_submit, gen_t2v, gen_i2v, gen_r2v, "
         "gen_character, clip_extend, clip_edit, and agent_send (may spend). gen_video covers every video option "
         "Flow's composer offers (every model, 360p/720p, 4-10 s, x1-x4, first and last frame, ingredients) and "
         "needs max_credits for a real run. clip_download at 4k is a Flow upscale its price "
@@ -897,7 +992,10 @@ server = TellingServer(
         "for its cost before calling it: each carries what was MEASURED here and, where Flow's published table "
         "disagrees, that figure too (Omni Flash Edit is listed at 40 and measured 20). Every call drives a real Chrome "
         "session and blocks until Flow answers: a read takes about 15-50 s and a change about 50 s, a generation "
-        "2-5 min, clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. The "
+        "2-5 min, clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. To start a video "
+        "without waiting for its render, job_submit runs gen_video's own guards and click and answers once the "
+        "request has left; job_status then says where the job stands and job_collect fetches the clip and writes "
+        "its ledger row, both free, and several submitted jobs render at once. The "
         "credit-spending tools require a job_id. Never call one again under a new job_id because it was slow, "
         "errored or timed out: check flow_media and flow_credits first, and if you do call again keep the same "
         "job_id, which the ledger refuses instead of charging twice. Every answer of a real run carries an outcome "
@@ -966,6 +1064,54 @@ def _one_line(value: str, name: str) -> None:
         raise ValueError(
             f"{name} must be one line: Flow's box takes a newline as Enter, which may submit early"
         )
+
+
+def _video_request(
+    project: str,
+    prompt: str,
+    *,
+    model: str,
+    aspect: str,
+    resolution: str | None,
+    duration: int | None,
+    count: int,
+    start_frame: str | None,
+    end_frame: str | None,
+    characters: list[str] | None,
+    media_ids: list[str] | None,
+    voices: list[str] | None,
+) -> None:
+    """What gen_video and job_submit refuse before a browser opens, in one place so the two cannot drift."""
+    _require(project, "project")
+    _require(prompt, "prompt")
+    _one_line(prompt, "prompt")
+    wanted = [
+        *(characters or []),
+        *(media_ids or []),
+        *(voices or []),
+        *(x for x in (start_frame, end_frame) if x),
+    ]
+    if any(not value or not value.strip() for value in wanted):
+        raise ValueError("frame, character, media ids and voice names must not be blank")
+    filled_resolution, filled_duration = video_mod.defaults(model, resolution, duration)
+    video_mod.check_settings(
+        model=model, resolution=filled_resolution, duration=filled_duration, count=count, aspect=aspect
+    )
+    video_mod.mode_for(
+        start_frame=start_frame,
+        end_frame=end_frame,
+        characters=characters or [],
+        media_ids=media_ids or [],
+        voices=voices or [],
+    )
+
+
+def _paid_run(job_id: str | None, max_credits: int | None) -> None:
+    _require(job_id or "", "job_id")
+    if max_credits is None:
+        raise ValueError("max_credits is required for a real run: the most credits this call may spend")
+    if max_credits < 1:
+        raise ValueError(f"max_credits must be at least 1, got {max_credits}")
 
 
 def _retry_named(retry_of: str | None, dry_run: bool) -> None:
@@ -1866,35 +2012,23 @@ async def gen_video(
     voices: list[str] | None = None,
     retry_of: str | None = None,
 ) -> str:
-    _require(project, "project")
-    _require(prompt, "prompt")
-    _one_line(prompt, "prompt")
     _retry_named(retry_of, dry_run)
-    wanted = [
-        *(characters or []),
-        *(media_ids or []),
-        *(voices or []),
-        *(x for x in (start_frame, end_frame) if x),
-    ]
-    if any(not value or not value.strip() for value in wanted):
-        raise ValueError("frame, character, media ids and voice names must not be blank")
-    filled_resolution, filled_duration = video_mod.defaults(model, resolution, duration)
-    video_mod.check_settings(
-        model=model, resolution=filled_resolution, duration=filled_duration, count=count, aspect=aspect
-    )
-    video_mod.mode_for(
+    _video_request(
+        project,
+        prompt,
+        model=model,
+        aspect=aspect,
+        resolution=resolution,
+        duration=duration,
+        count=count,
         start_frame=start_frame,
         end_frame=end_frame,
-        characters=characters or [],
-        media_ids=media_ids or [],
-        voices=voices or [],
+        characters=characters,
+        media_ids=media_ids,
+        voices=voices,
     )
     if not dry_run:
-        _require(job_id or "", "job_id")
-        if max_credits is None:
-            raise ValueError("max_credits is required for a real run: the most credits this call may spend")
-        if max_credits < 1:
-            raise ValueError(f"max_credits must be at least 1, got {max_credits}")
+        _paid_run(job_id, max_credits)
     return _json(
         await backend.gen_video(
             project,
@@ -1916,6 +2050,117 @@ async def gen_video(
             **({"retry_of": retry_of} if retry_of else {}),
         )
     )
+
+
+@server.tool(
+    name="job_submit",
+    description=(
+        "gen_video that does not wait for the render: the same composer run, options and guards, one clip per call, "
+        "left once Flow's own submit request has been seen going out. It spends credits and is ledgered: the price "
+        "is the one gen_video names, read off Flow's live price line right before the single click and refused "
+        "when it is over max_credits. "
+        + _video_options()
+        + " The answer is state started, with the workflow_id Flow named for the clip and outcome code STARTED: the "
+        "clip is then Flow's to render, and several submitted jobs render at once. Ask job_status with the same "
+        "job_id to see where it stands and fetch it with job_collect once it is ready, which writes the ledger's "
+        "settled row; until then what the job cost is not on record. There is no dry run here (gen_video with "
+        "dry_run=true quotes for free) and no count. Frames, ingredients and voices follow gen_video's rules, and "
+        "the request is checked as it leaves: a mismatch is an error that still names the started job. A job Flow "
+        "refuses after the submit never shows in the listing, and Flow's reason is heard only by a call that waits: "
+        "job_collect settles such a job as nothing generated and it cannot be retried from here, so use gen_video "
+        "when the reason matters. out_dir must be inside out/." + _JOB_ID_RULE
+    ),
+)
+async def job_submit(
+    project: str,
+    prompt: str,
+    job_id: str,
+    max_credits: int,
+    model: str = VIDEO_DEFAULT_MODEL,
+    aspect: str = "9:16",
+    resolution: str | None = None,
+    duration: int | None = None,
+    start_frame: str | None = None,
+    end_frame: str | None = None,
+    characters: list[str] | None = None,
+    media_ids: list[str] | None = None,
+    out_dir: str | None = None,
+    voices: list[str] | None = None,
+) -> str:
+    _video_request(
+        project,
+        prompt,
+        model=model,
+        aspect=aspect,
+        resolution=resolution,
+        duration=duration,
+        count=1,
+        start_frame=start_frame,
+        end_frame=end_frame,
+        characters=characters,
+        media_ids=media_ids,
+        voices=voices,
+    )
+    _paid_run(job_id, max_credits)
+    return _json(
+        await backend.job_submit(
+            project,
+            prompt,
+            job_id=job_id,
+            max_credits=max_credits,
+            model=model,
+            aspect=aspect,
+            resolution=resolution,
+            duration=duration,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            characters=characters or [],
+            media_ids=media_ids or [],
+            voices=voices or [],
+            out_dir=out_dir,
+        )
+    )
+
+
+@server.tool(
+    name="job_status",
+    description=(
+        "Where a job that job_submit started stands, by its job_id. state is rendering (Flow lists the clip and it "
+        "is not finished), ready (finished: fetch it with job_collect), not_listed (no record yet, or Flow refused "
+        "the job), ambiguous (Flow named no workflow at the submit and several new clips carry the prompt), settled "
+        "(the job's ledger row is written: the answer is that row, read with no browser) or in_another_call (its "
+        "job_submit or a job_collect has not answered yet). It reads the project listing and the balance, never "
+        "clicks, never types and writes nothing, so it may be asked as often as needed. The answer carries the "
+        "workflow_id, the media_id once the clip is listed, the price quoted before the click, the balance before "
+        "the click and now, the seconds since the submit, and the job's outcome. A job_id no ledger under the out "
+        "folder holds, or a job a blocking tool ran and never settled, is an error that opens with that job's "
+        "outcome. Free."
+    ),
+)
+async def job_status(job_id: str) -> str:
+    _require(job_id, "job_id")
+    return _json(await backend.job_status(job_id))
+
+
+@server.tool(
+    name="job_collect",
+    description=(
+        "Fetch the clip of a job that job_submit started and write the job's one settled row in the ledger. A "
+        "finished clip is downloaded at 720p beside the job's ledger and answered as state collected with path, "
+        "media_id and spent; a clip still rendering, or not listed yet, is answered as such with nothing written, so "
+        "call again later. spent is the job's own balance bracket (spent_from bracket) only when no other job could "
+        "have moved the balance since the submit; otherwise it is the price Flow quoted before the click (spent_from "
+        "quoted), which is the usual case when several jobs render at once. A job with no record "
+        f"{int(jobs_mod.NOT_LISTED_S // 60)} minutes after its submit is settled as an error: nothing generated when "
+        "the balance did not move, unknown otherwise; Flow's reason for a refusal is not heard here. A job already "
+        "settled is answered from its row with no browser, so collecting twice never fetches or writes twice. It "
+        "never clicks and never types, so it cannot start or pay for anything: the credits were spent by "
+        "job_submit. Every answer and every error carries the job's outcome. Free."
+    ),
+)
+async def job_collect(job_id: str) -> str:
+    _require(job_id, "job_id")
+    return _json(await backend.job_collect(job_id))
 
 
 @server.tool(
