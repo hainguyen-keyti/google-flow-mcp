@@ -106,7 +106,7 @@ Download one media item to out_dir as <media_id>.<ext>. out_dir must be inside t
 
 **Arguments**: `project_id`, `media_id`, `quality` (optional), `out_dir` (optional), `workflow_id` (optional)
 
-Download a clip rendition from the editor: gif (270p), 720p, 1080p or 4k (upscaled by Flow). Defaults to the NEWEST finished version of the media; pass workflow_id (from flow_media with all_versions=true) to fetch one specific version, such as the clip a particular edit produced. 1080p measured 0 credits. 4k is an upscale Flow's price table offers only from the Ultra plan, at 50 credits; on this Pro account the Download menu shows it greyed out (measured 2026-09-29 on every clip tried), so a 4k request is refused before any click and costs nothing.
+Download a clip rendition from the editor: gif (270p), 720p, 1080p or 4k (upscaled by Flow). Defaults to the NEWEST finished version of the media; pass workflow_id (from flow_media with all_versions=true) to fetch one specific version, such as the clip a particular edit produced. 1080p measured 0 credits. A 360p clip has another menu (measured 2026-10-03): its 720p is an upscale, fetched the same way at 0 credits (720x1280), and it has no 1080p and no 4k, so asking for one of those, the default included, is refused with what the menu offers; its own 360p file comes with flow_download. 4k is an upscale Flow's price table offers only from the Ultra plan, at 50 credits; on this Pro account the Download menu shows it greyed out (measured 2026-09-29 on every clip tried), so a 4k request is refused before any click and costs nothing.
 
 ### `scene_download`
 

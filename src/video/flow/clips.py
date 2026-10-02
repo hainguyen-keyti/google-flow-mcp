@@ -31,6 +31,10 @@ EDITOR = "flow-scene-builder"
 INDEX_WAIT_S = 90.0
 INDEX_STEP_S = 5.0
 RENDITIONS = {"gif": "270p", "720p": "720p", "1080p": "1080p", "4k": "4K"}
+# How the signed url of an upscale ends after the workflow id, by the quality asked. 1080p: measured 2026-10-01.
+# 720p: the upscale a 360p clip offers ("720p Upscaled"), measured 2026-10-03 on job an8-a (out/ao/t1_upscale.json):
+# /video/<workflow>_720p_upsampled, 720x1280, 0 credits. A 720p clip's own 720p is "720p Original size", no upscale.
+UPSCALE_TAILS = {"1080p": "_upsampled", "720p": "_720p_upsampled"}
 DONE_STATUS = 3
 
 
@@ -212,17 +216,30 @@ async def download_rendition(
     *,
     workflow_id: str | None = None,
 ) -> Path:
-    label = RENDITIONS[quality.lower()]
+    quality = quality.lower()
+    label = RENDITIONS[quality]
     page = session.page
     wanted = await _select_version(session, project_id, media_id, workflow_id)
-    item = await _menu_item(session, "Download media", label)
-    if quality.lower() == "1080p":
-        return await _download_upsampled(page, item, wanted, out_dir / f"{media_id}_1080p.mp4")
+    try:
+        item = await _menu_item(session, "Download media", label)
+    except LookupError as exc:
+        if "greyed out" in str(exc):
+            raise
+        # A 360p clip has no 1080p and no 4K (measured 2026-10-03): say what its menu does offer.
+        offered = await _menu_texts(page)
+        raise LookupError(
+            f"this clip's Download menu offers {offered} and no {label}; ask for a quality it offers (a 360p clip "
+            "has a 720p upscale, and its own 360p file comes with flow_download); nothing was downloaded"
+        ) from exc
+    said = " ".join((await item.inner_text()).split()).casefold()
+    if quality == "1080p" or (quality in UPSCALE_TAILS and "upscaled" in said):
+        target = out_dir / f"{media_id}_{quality}.mp4"
+        return await _download_upsampled(page, item, wanted, target, UPSCALE_TAILS[quality])
     async with page.expect_download(timeout=600_000) as download_info:
         await item.click(timeout=8_000)
     download = await download_info.value
     suffix = Path(download.suggested_filename).suffix or ".mp4"
-    target = out_dir / f"{media_id}_{quality.lower()}{suffix}"
+    target = out_dir / f"{media_id}_{quality}{suffix}"
     if target.exists():
         raise FileExistsError(target)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -239,13 +256,26 @@ def _fetch_signed(url: str) -> tuple[int, str, bytes]:
         return answer.status, answer.headers.get("content-type") or "", answer.read()
 
 
-async def _download_upsampled(page: Any, item: Any, wanted: dict[str, Any], target: Path) -> Path:
+async def _menu_texts(page: Any) -> list[str]:
+    """What an open toolbar menu shows, item by item."""
+    items = page.locator("[role=menuitem], .cdk-overlay-pane button")
+    texts = []
+    for index in range(await items.count()):
+        if await items.nth(index).is_visible():
+            texts.append(" ".join((await items.nth(index).inner_text()).split()))
+    return texts
+
+
+async def _download_upsampled(
+    page: Any, item: Any, wanted: dict[str, Any], target: Path, upscale: str = "_upsampled"
+) -> Path:
     """Measured 2026-10-01: after the 1080p click Flow GETs a signed `flow-content.google/video/<workflow>_upsampled`
     url and then hands Chrome a blob of the same bytes, and Chrome 154 crashed in that download six times; the signed
-    url needs no cookie, so the file is fetched outside the browser (byte for byte the file Chrome saves)."""
+    url needs no cookie, so the file is fetched outside the browser (byte for byte the file Chrome saves). `upscale`
+    is how that url ends after the workflow id (`UPSCALE_TAILS`)."""
     if target.exists():
         raise FileExistsError(target)
-    tail = f"/video/{wanted.get('workflow_id')}_upsampled"
+    tail = f"/video/{wanted.get('workflow_id')}{upscale}"
     async with page.expect_request(
         lambda request: request.method == "GET" and urlsplit(request.url).path.endswith(tail), timeout=600_000
     ) as asked:
@@ -254,7 +284,7 @@ async def _download_upsampled(page: Any, item: Any, wanted: dict[str, Any], targ
     status, kind, body = await asyncio.to_thread(_fetch_signed, url)
     if status != 200 or "video/mp4" not in kind or not body:
         raise RuntimeError(
-            f"Flow's 1080p file answered HTTP {status} {kind!r} with {len(body)} bytes; nothing was saved"
+            f"Flow's upscaled file answered HTTP {status} {kind!r} with {len(body)} bytes; nothing was saved"
         )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(body)

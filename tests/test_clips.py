@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import re
 from pathlib import Path
 from typing import ClassVar
 
@@ -2550,3 +2551,113 @@ def test_a_signed_url_that_answers_no_video_is_refused(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="403"):
         asyncio.run(clips.download_rendition(session, "p", "m", "1080p", tmp_path))
     assert not list(tmp_path.iterdir())
+
+
+# Plan AO: a 360p clip's own Download menu (measured 2026-10-03 on job an8-a, out/ao/t1_download.json).
+
+SMALL_MENU = ("270p Animated GIF", "360p Original size", "720p Upscaled")
+FULL_MENU = ("270p Animated GIF", "720p Original size", "1080p Upscaled", "4K Upscaled")
+SMALL_RECORDS = [
+    {"id": "m", "workflow_id": "w-small", "created": 1, "url": "https://lh3/zzzzzzzzzzzzzzzzzzzzsmall"}
+]
+SMALL_UPSCALE = "https://flow-content.google/video/w-small_720p_upsampled?Expires=1&KeyName=k&Signature=s"
+
+
+def _menu_world(monkeypatch, menu, answer=(200, "video/mp4", b"UPSCALED720")):
+    """A clip whose Download menu offers exactly `menu`, and the signed fetch outside the browser."""
+    fetched = []
+
+    async def fake_snapshot(session, project_id):
+        return (SMALL_RECORDS, set())
+
+    async def menu_item(session, button, item):
+        for text in menu:
+            if re.search(item, text, re.IGNORECASE):
+                found = _Clickable()
+                found.text = text
+                return found
+        raise LookupError(f"menu {button!r} has no item matching {item!r}")
+
+    async def menu_texts(page):
+        return list(menu)
+
+    def fake_fetch(url):
+        fetched.append(url)
+        return answer
+
+    monkeypatch.setattr(clips, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(clips, "_open", _none)
+    monkeypatch.setattr(clips, "_menu_item", menu_item)
+    monkeypatch.setattr(clips, "_menu_texts", menu_texts, raising=False)
+    monkeypatch.setattr(clips, "_fetch_signed", fake_fetch)
+    return fetched
+
+
+def test_the_720p_of_a_360p_clip_is_its_upscale_fetched_from_the_signed_url(monkeypatch, tmp_path):
+    # The menu's 720p item of a 360p clip is "720p Upscaled": Flow GETs a signed `_720p_upsampled` url and hands
+    # Chrome a blob, the same way the 1080p upscale goes, so it is fetched outside the browser too.
+    fetched = _menu_world(monkeypatch, SMALL_MENU)
+    page = _SignedUrlPage(
+        [_FlowRequest("https://flow-content.google/video/w-small"), _FlowRequest(SMALL_UPSCALE)]
+    )
+    session = type("_S", (), {"page": page})()
+
+    out = asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path))
+
+    assert fetched == [SMALL_UPSCALE]
+    assert out == tmp_path / "m_720p.mp4" and out.read_bytes() == b"UPSCALED720"
+
+
+def test_a_720p_upscale_is_never_the_file_of_another_rendition(monkeypatch, tmp_path):
+    # The 1080p upscale of the same workflow ends `_upsampled` too; only the `_720p_upsampled` url is this file.
+    fetched = _menu_world(monkeypatch, SMALL_MENU)
+    page = _SignedUrlPage(
+        [
+            _FlowRequest("https://flow-content.google/video/w-small_upsampled?Expires=1"),
+            _FlowRequest("https://flow-content.google/video/w-other_720p_upsampled?Expires=1"),
+        ]
+    )
+    session = type("_S", (), {"page": page})()
+
+    with pytest.raises(PlaywrightTimeoutError):
+        asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path))
+    assert fetched == [] and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("quality", ["1080p", "4k"])
+def test_a_quality_the_clip_does_not_offer_is_refused_with_what_it_offers(monkeypatch, tmp_path, quality):
+    # clip_download defaults to 1080p, which a 360p clip does not have: the bare "no item matching" said nothing
+    # of what the caller could ask for instead.
+    fetched = _menu_world(monkeypatch, SMALL_MENU)
+    session = type("_S", (), {"page": _SignedUrlPage([_FlowRequest(SMALL_UPSCALE)])})()
+
+    with pytest.raises(LookupError, match="720p Upscaled") as said:
+        asyncio.run(clips.download_rendition(session, "p", "m", quality, tmp_path))
+
+    assert "360p Original size" in str(said.value) and "nothing was downloaded" in str(said.value)
+    assert fetched == [] and not list(tmp_path.iterdir())
+
+
+def test_the_720p_of_a_720p_clip_is_still_its_own_file_from_the_editor(monkeypatch, tmp_path):
+    # "720p Original size" is no upscale: no signed url is asked for, and the editor's own download is what runs.
+    fetched = _menu_world(monkeypatch, FULL_MENU)
+    session = type("_S", (), {"page": _VersionPage()})()
+
+    out = asyncio.run(clips.download_rendition(session, "p", "m", "720p", tmp_path))
+
+    assert fetched == [] and out == tmp_path / "m_720p.mp4" and out.read_bytes() == b"x"
+
+
+def test_a_greyed_out_item_is_still_said_as_greyed_out(monkeypatch, tmp_path):
+    # 4K on a 720p clip is listed and disabled on this account: that is Flow's own answer, not a missing item.
+    _menu_world(monkeypatch, FULL_MENU)
+
+    async def greyed(session, button, item):
+        raise LookupError(f"menu {button!r} shows {item!r} greyed out, so Flow does not offer it")
+
+    monkeypatch.setattr(clips, "_menu_item", greyed)
+    session = type("_S", (), {"page": _VersionPage()})()
+
+    with pytest.raises(LookupError, match="greyed out") as said:
+        asyncio.run(clips.download_rendition(session, "p", "m", "4k", tmp_path))
+    assert "offers" not in str(said.value)
