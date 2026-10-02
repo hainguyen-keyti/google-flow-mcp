@@ -229,8 +229,11 @@ mặt, tay và món đồ.
   `balance_shared` trên dòng sổ và `charged_from` trong outcome). Job Ingredients được đọc lại recipe lúc thu, như
   `gen_video`. Cái mất khi không chờ: lý do Flow từ chối chỉ trang đã submit nghe được, nên job bị từ chối sau khi lời
   gọi đã rời đi sẽ không bao giờ hiện, sau 10 phút được quyết toán là không sinh ra gì, và không nhận `retry_of`; cần
-  biết lý do thì dùng `gen_video`. Một tool chặn chạy trong lúc job đã nộp còn render sẽ đọc số tiêu của mình trên
-  số dư mà job kia có thể làm đổi. **Đo bằng tiền thật 2026-10-03** (hai job Omni 360p 4 s nộp liền nhau, 4 credit
+  biết lý do thì dùng `gen_video` (lời từ chối nghe được khi trang còn mở thì được ghi ngay tại đó, có mã, và
+  `job_submit` nhận `retry_of` cho nó như `gen_video`). Trong lúc một job đã nộp chưa được thu, `gen_video` và
+  `gen_character` bị từ chối với cùng project và prompt: tool chặn nhận clip mới duy nhất mang prompt của nó, mà clip
+  đó có thể là của job đã nộp. Một tool chặn chạy cạnh job còn render cũng đọc số tiêu của mình trên số dư mà job kia
+  còn có thể làm đổi. **Đo bằng tiền thật 2026-10-03** (hai job Omni 360p 4 s nộp liền nhau, 4 credit
   mỗi job): mỗi `job_submit` trả lời sau **153 s** kèm workflow id do Flow nêu, số dư đã trừ ngay sau lúc nộp (không
   phải lúc xong), hai clip render cùng lúc sau khi trang đã đóng và sẵn sàng trong khoảng 4 phút; `job_status` và
   `job_collect` mỗi lượt khoảng 47 s; mỗi job thu đúng clip của mình; thu lần hai trả lời ngay từ dòng sổ; nộp lại id

@@ -80,6 +80,15 @@ def standing(ledger: gen.Ledger, job_id: str) -> dict[str, Any] | None:
     return None
 
 
+def rendering(rows: list[dict[str, Any]], project: str, prompt: str) -> bool:
+    """Whether these rows are a job that job_submit started for this project and prompt and nobody has collected."""
+    intent, started, settled = _run(rows)
+    if intent is None or started is None or settled is not None:
+        return False
+    same_prompt = composer._flat(started.get("prompt")) == composer._flat(prompt)
+    return same_prompt and intent.get("project") == project
+
+
 def _not_started(job_id: str, ledger: gen.Ledger) -> LookupError:
     return LookupError(
         f"job {job_id!r} has no started row in {ledger.path}: either a blocking tool ran it, or its job_submit ended "
@@ -103,7 +112,7 @@ def _named(theirs: dict[str, list[dict[str, Any]]]) -> set[str]:
     named: set[str] = set()
     for rows in theirs.values():
         for row in rows:
-            ids = [row.get("workflow_id")]
+            ids = [row.get("workflow_id"), _said_by_flow(row)]
             if row.get("status") in ("done", "pending"):
                 outputs = row.get("outputs") if isinstance(row.get("outputs"), list) else []
                 ids += [row.get("media_id"), *(o.get("media_id") for o in outputs if isinstance(o, dict))]
@@ -111,18 +120,52 @@ def _named(theirs: dict[str, list[dict[str, Any]]]) -> set[str]:
     return named
 
 
-def _rivals(
-    intent: dict[str, Any], started: dict[str, Any], theirs: dict[str, list[dict[str, Any]]]
-) -> list[str]:
-    """Other jobs that, like this one, were started in this project with this prompt and no workflow named, and are
-    not settled: one new clip of the prompt could be any of theirs."""
-    rivals = []
+def _said_by_flow(row: dict[str, Any]) -> str | None:
+    """The workflow Flow's replies named for a job, which a blocking run keeps only inside the `flow` of its row."""
+    flow = row.get("flow")
+    return flow.get("workflow_id") if isinstance(flow, dict) else None
+
+
+def _open(intent: dict[str, Any], theirs: dict[str, list[dict[str, Any]]]) -> dict[str, list[Any]]:
+    """The other jobs that are not over as far as this job can tell (I-read-2): one with a row after this job's
+    submit, or one whose last row is from the hour before it and whose outcome is not closed. Its charge, the refund
+    of its failure, or its clip may still be on the way."""
+    mine = intent.get("ts") or 0
+    still: dict[str, list[Any]] = {}
     for job, rows in theirs.items():
-        began, begun, settled = _run(rows)
-        if began is None or begun is None or settled is not None or begun.get("workflow_id"):
+        moves = [row for row in rows if row.get("status") in _MOVES]
+        if not moves:
             continue
-        same_prompt = composer._flat(begun.get("prompt")) == composer._flat(started.get("prompt"))
-        if same_prompt and began.get("project") == intent.get("project"):
+        later = any((row.get("ts") or 0) > mine for row in moves)
+        recent = mine - (moves[-1].get("ts") or 0) < IN_FLIGHT_S
+        if (later or recent) and outcome.classify(moves)["code"] not in _CLOSED:
+            still[job] = moves
+        elif later:
+            # Closed, and yet it moved the balance after this job's submit.
+            still[job] = []
+    return still
+
+
+def _rivals(
+    intent: dict[str, Any], record: dict[str, Any], still: dict[str, list[dict[str, Any]]]
+) -> list[str]:
+    """The open jobs of this project that no row names a workflow for and whose prompt is the record's: with no
+    workflow named for this job either, the one new clip of the prompt could be any of theirs."""
+    held = composer._flat(record.get("prompt"))
+    rivals = []
+    for job, moves in still.items():
+        began, begun, _ = _run(moves)
+        if began is None or began.get("project") != intent.get("project"):
+            continue
+        if any(row.get("workflow_id") or _said_by_flow(row) for row in moves):
+            continue
+        typed = began.get("prompt") or ""
+        texts = {
+            composer._flat(row.get(key)) for row in (began, begun or {}) for key in ("prompt", "prompt_text")
+        }
+        # The intent row keeps the first `PROMPT_KEPT` characters of what was typed.
+        cut = len(typed) >= outcome.PROMPT_KEPT and held.startswith(composer._flat(typed))
+        if held in texts - {""} or cut:
             rivals.append(job)
     return sorted(rivals)
 
@@ -131,14 +174,12 @@ def _claim(
     records: list[dict[str, Any]],
     started: dict[str, Any],
     named: set[str] | frozenset[str] = frozenset(),
-    rivals: list[str] | tuple[str, ...] = (),
 ) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]]]:
-    """Where the job's clip stands in a listing: (state, the record, the candidates when none can be taken).
+    """Where the job's clip stands in a listing: (state, the record, the candidates when there are several).
 
     I-money-5: with the workflow Flow named, only the record of that workflow is the clip, whatever else carries the
     same prompt. With none named, the one NEW record whose prompt is the job's and which no other job's rows name is
-    the clip; two are not chosen between, and one is not taken while another unnamed job of the same prompt could
-    own it."""
+    the clip, and two are not chosen between."""
     workflow = started.get("workflow_id")
     if workflow:
         mine = [record for record in records if record.get("workflow_id") == workflow]
@@ -149,29 +190,11 @@ def _claim(
             if record.get("id") not in named and record.get("workflow_id") not in named
         ]
         mine = composer.matching_outputs(fresh, started.get("prompt") or "", started.get("prompt_text"))
-        if len(mine) > 1 or (mine and rivals):
+        if len(mine) > 1:
             return "ambiguous", None, mine
     if not mine:
         return "not_listed", None, []
     return ("ready" if clips.is_done(mine[0]) else "rendering"), mine[0], []
-
-
-def _shared(job_id: str, intent: dict[str, Any], theirs: dict[str, list[dict[str, Any]]]) -> bool:
-    """Whether another job could have moved the balance inside this job's bracket (I-read-2): one with a row after
-    this job's submit, or one begun within the hour before it that is not closed, whose charge, or the refund of
-    its failure, is still to land."""
-    mine = intent.get("ts") or 0
-    for rows in theirs.values():
-        moves = [row for row in rows if row.get("status") in _MOVES]
-        if not moves:
-            continue
-        if any((row.get("ts") or 0) > mine for row in moves):
-            return True
-        began, _ = outcome.last_run(moves)
-        since = (began or moves[-1]).get("ts") or 0
-        if outcome.classify(moves)["code"] not in _CLOSED and mine - since < IN_FLIGHT_S:
-            return True
-    return False
 
 
 async def _look(
@@ -187,9 +210,13 @@ async def _look(
     credits_now = (await reader.credits(session))["balance"]
     try:
         rows: list[dict[str, Any]] | None = others() if others else []
-    except (OSError, ValueError) as exc:
-        # Another process mid-append leaves a torn last line for a moment.
-        rows, unread = None, f"{type(exc).__name__}: {str(exc)[:120]}"
+        unread = "a line that is no row" if any(not isinstance(row, dict) for row in rows) else None
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        # Another process mid-append leaves a torn last line for a moment; a line that is JSON and no row fails on
+        # the row itself.
+        unread = f"{type(exc).__name__}: {str(exc)[:120]}"
+    if unread:
+        rows = None
     if rows is None and not started.get("workflow_id"):
         raise RuntimeError(
             f"a ledger under the out folder cannot be read right now ({unread}), and Flow named no workflow for this "
@@ -197,8 +224,12 @@ async def _look(
             f"again; nothing was written; job {job_id}"
         )
     theirs = _theirs(job_id, rows or [])
-    rivals = _rivals(intent, started, theirs)
-    state, record, candidates = _claim(records, started, _named(theirs), rivals)
+    still = _open(intent, theirs)
+    state, record, candidates = _claim(records, started, _named(theirs))
+    rivals = _rivals(intent, record, still) if record is not None and not started.get("workflow_id") else []
+    if rivals:
+        # I-money-5: one clip that another unnamed job of the prompt could own is taken by neither.
+        state, record, candidates = "ambiguous", None, [record]
     return {
         "state": state,
         "record": record,
@@ -206,7 +237,7 @@ async def _look(
         "rivals": rivals,
         "credits_now": credits_now,
         # Ledgers that cannot be read may hold a job that moved the balance, so they count as one.
-        "shared": True if rows is None else _shared(job_id, intent, theirs),
+        "shared": True if rows is None else bool(still),
     }
 
 

@@ -145,8 +145,11 @@ These are not suggestions; they are enforced in code and pinned by tests.
   `balance_shared` on the row and `charged_from` in the outcome). An Ingredients clip has its recipe read back at
   the collect, as `gen_video` does. Flow charged both measured jobs at the submit, not at the finish. What not
   waiting gives up is Flow's reason for a refusal, which only the page that submitted hears: such a job never
-  shows, is settled as nothing generated ten minutes after its submit, and takes no `retry_of`. And a blocking
-  tool run while a submitted job renders reads its own spend off a balance that job may move.
+  shows, is settled as nothing generated ten minutes after its submit, and takes no `retry_of` (a refusal heard
+  while the page was still open is settled there, typed, and `job_submit` takes `retry_of` for it as `gen_video`
+  does). While a submitted job is not collected, `gen_video` and `gen_character` are refused for the same project
+  and prompt: a blocking run takes the one new clip carrying its prompt, which could be the submitted job's. And a
+  blocking tool run beside a rendering job reads its own spend off a balance that job can still move.
 - **Outputs stay inside `out/`.** Every tool that writes a file or a ledger forces its target inside `out/`.
 - **Click once, then wait.** Flow submits late, about 20 s after the click. Leaving the page early cancels the
   request in flight and looks exactly like a dead button; clicking again submits a second, paid job.

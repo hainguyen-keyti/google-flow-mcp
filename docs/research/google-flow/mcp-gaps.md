@@ -199,8 +199,11 @@ repo's source at `615bcac`.
   bracket only when no other job could have moved the balance, else the quoted price, said as such; a clip Flow
   keeps listed and unfinished is answered `rendering` for as long as it stays so; "in between" is measured from the
   intent row while the balance is read up to 90 s earlier, which only two server processes can fall into; a
-  blocking tool run while a submitted job renders has no shared-balance check of its own; two jobs that were both
-  named no workflow and carry one prompt cannot tell one clip apart and are settled unknown; whether the
+  blocking tool run while a submitted job renders has no shared-balance check of its own, and is refused outright
+  for the same project and prompt until that job is collected, since it takes the one new clip carrying its prompt
+  (the gflow tools and the editor tools are not held to that); a job named no workflow never takes a clip another
+  job's rows name, and never one that another open job of the prompt, named no workflow either, could own, so two
+  such jobs are both settled unknown and their clips are fetched with `flow_download`; whether the
   start-plus-end submit (`nprQif`) names the workflow in its reply was not measured, and a job it does not name is
   claimed by its prompt. An idea left for later: since Flow charges at the submit, a balance read right after it
   could give every job its own bracket; it was seen on two jobs only, each read 13 s or more after the submit.

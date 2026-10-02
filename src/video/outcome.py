@@ -210,4 +210,6 @@ def unreadable() -> dict[str, Any]:
 def head(said: dict[str, Any]) -> str:
     """The one line that leads an error an agent reads: it sees at most 500 characters of it."""
     charged = "unknown" if said["charged"] is None else said["charged"]
-    return f"outcome code={said['code']} charged={charged} retryable={'yes' if said['retryable'] else 'no'}"
+    # A figure that is the quoted price says so here too, since an agent may read nothing but this line.
+    quoted = f" charged_from={said['charged_from']}" if said.get("charged_from") else ""
+    return f"outcome code={said['code']} charged={charged} retryable={'yes' if said['retryable'] else 'no'}{quoted}"

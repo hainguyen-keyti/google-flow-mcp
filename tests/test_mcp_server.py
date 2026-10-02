@@ -3715,7 +3715,7 @@ def test_a_description_talks_of_retry_of_exactly_when_the_tool_takes_it():
     for name, tool in tools.items():
         takes = "retry_of" in ((tool.input_schema or {}).get("properties") or {})
         assert ("retry_of" in (tool.description or "")) is takes, name
-    for name in ("gen_video", "gen_character"):
+    for name in ("gen_video", "gen_character", "job_submit"):
         description = tools[name].description
         bound = f"at most {mcp_server.outcome_mod.MAX_RETRIES}"
         assert "NEW job_id" in description and bound in description, name
@@ -3730,15 +3730,16 @@ def test_the_instructions_name_the_outcome_and_the_one_retry_the_server_vouches_
     assert "Never call one again under a new job_id" in text
 
 
-def test_only_the_two_composer_tools_take_a_retry_of():
+def test_only_the_composer_tools_take_a_retry_of():
     # Read off the served schemas: retry_of is vouched for from Flow's own reason, which only the composer path hears.
+    # job_submit is that path too: a refusal it heard before leaving is retried through it (re-review of plan AN).
     takes = {
         name
         for name, tool in served_tool_objects().items()
         if "retry_of" in ((tool.input_schema or {}).get("properties") or {})
     }
 
-    assert takes == {"gen_video", "gen_character"}
+    assert takes == {"gen_video", "gen_character", "job_submit"}
 
 
 def test_a_gflow_job_with_no_job_id_of_its_own_still_says_what_it_came_to(monkeypatch, tmp_path):
@@ -3796,13 +3797,13 @@ def test_job_submit_runs_the_video_driver_detached_and_says_the_job_is_started(m
     assert len(gen.Ledger(tmp_path / "f" / "ledger.jsonl").rows("an-1")) == 2
 
 
-def test_job_submit_takes_what_gen_video_takes_less_the_dry_run_the_count_and_the_retry():
+def test_job_submit_takes_what_gen_video_takes_less_the_dry_run_and_the_count():
     # Read off the served schemas, so an option added to gen_video and forgotten here goes red.
     tools = served_tool_objects()
     blocking = set(tools["gen_video"].input_schema["properties"])
     detached = tools["job_submit"].input_schema
 
-    assert set(detached["properties"]) == blocking - {"dry_run", "count", "retry_of"}
+    assert set(detached["properties"]) == blocking - {"dry_run", "count"}
     assert {"project", "prompt", "job_id", "max_credits"} <= set(detached["required"])
 
 
@@ -3820,8 +3821,10 @@ def test_job_submit_takes_what_gen_video_takes_less_the_dry_run_the_count_and_th
         {"media_ids": [" "]},
         {"voices": ["Achird"]},
         {"start_frame": "M", "characters": ["E"]},
+        {"retry_of": "  "},
+        {"retry_of": "an-bad-1"},
     ],
-    ids=lambda change: "+".join(change),
+    ids=lambda change: "+".join(f"{key}={value!r}" for key, value in change.items()),
 )
 def test_job_submit_refuses_before_a_browser_opens_what_gen_video_refuses(monkeypatch, tmp_path, change):
     reached = _video_world(monkeypatch, tmp_path, [_submitted(), STARTED], answer=STARTED_ANSWER)
@@ -4063,7 +4066,9 @@ def test_job_submit_hands_the_driver_what_gen_video_hands_it(monkeypatch, tmp_pa
     ]
     schema = served_tool_objects()["job_submit"].input_schema["properties"]
     named = {key for options in option_sets for key in options}
-    assert set(schema) - named == {"project", "prompt", "job_id", "max_credits"}, "an option no set exercises"
+    # retry_of needs a refused job on record and has its own test below.
+    unexercised = {"project", "prompt", "job_id", "max_credits", "retry_of"}
+    assert set(schema) - named == unexercised, "an option no set exercises"
 
     for index, options in enumerate(option_sets):
         blocking = _payload(
@@ -4104,8 +4109,8 @@ def test_a_ledger_that_cannot_be_read_never_leaves_a_later_tool_without_an_outco
 
 
 def test_two_collects_of_one_job_at_once_fetch_and_settle_it_once(monkeypatch, tmp_path):
-    # The first collect is inside its session when the second arrives. The mark is what turns the second away:
-    # this fake session has no guard, so without the mark both would fetch and both would write a row.
+    # The first collect is inside its session when the second arrives, and the mark is what turns the second away
+    # before it opens a session of its own (the real sessions queue behind one guard; these fakes do not).
     ledger = _started_job(tmp_path / "films")
     log = _job_world(monkeypatch, tmp_path, [_video("w-job", PROMPT)])
     inside, leave = asyncio.Event(), asyncio.Event()
@@ -4190,3 +4195,115 @@ def test_a_collected_clips_path_is_spelled_as_the_out_folder_is(monkeypatch, tmp
     answer = _payload(_call("job_collect", {"job_id": "job-1"}))
 
     assert answer["path"].startswith("out/films/m-w-job_") and ledger.rows()[-1]["path"] == answer["path"]
+
+
+def test_job_submit_retries_a_refused_job_as_gen_video_does(monkeypatch, tmp_path):
+    # A refusal Flow gave while the submitting page was still open is typed retryable, and its advice says to call
+    # the same tool again with retry_of: job_submit takes it, vouched for off the same ledgers.
+    reached = _video_world(
+        monkeypatch, tmp_path, [_submitted(retry_of="am-first"), STARTED], answer=STARTED_ANSWER
+    )
+    _refused_earlier(tmp_path, folder="film-1")
+
+    answer = _payload(_call("job_submit", {**VIDEO_CALL, "job_id": "an-retry-1", "retry_of": "am-first"}))
+
+    assert answer["outcome"]["code"] == "STARTED" and len(reached) == 1
+    assert reached[0]["retry_of"] == "am-first" and reached[0]["detach"] is True
+
+    other = _call(
+        "job_submit", {**VIDEO_CALL, "prompt": "a dog", "job_id": "an-retry-2", "retry_of": "am-first"}
+    )
+    assert other.is_error and "same project and prompt" in _texts([other])[0] and len(reached) == 1
+    done = _call("job_submit", {**VIDEO_CALL, "job_id": "an-retry-3", "retry_of": "an-retry-1"})
+    assert done.is_error and "STARTED" in _texts([done])[0] and len(reached) == 1
+
+
+def _rendering_job(tmp_path, job_id="an-flying", *, project="P", prompt="a cup on a table", settled=None):
+    """A job job_submit started and nobody collected: its rows as the composer writes them."""
+    ledger = gen.Ledger(tmp_path / "films" / "ledger.jsonl")
+    ledger.append(job_id, "submitted", kind="video", project=project, prompt=prompt, credits_before=100)
+    ledger.append(job_id, "started", workflow_id="w-flying", workflows_before=[], prompt=prompt)
+    if settled:
+        ledger.append(job_id, settled, media_id="m-w-flying", spent=10)
+    return ledger
+
+
+@pytest.mark.parametrize("tool", ["gen_video", "gen_character"])
+def test_a_blocking_run_of_a_prompt_a_submitted_job_still_renders_is_refused(monkeypatch, tmp_path, tool):
+    # Re-review of plan AN (C2). A blocking run takes the one new clip that carries its prompt; beside a submitted
+    # job of the same prompt that clip may be the other job's, and both would end DONE on one clip while the
+    # blocking run's own clip is left to nobody. Before job_submit no two jobs of one server overlapped.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    _rendering_job(tmp_path)
+    call = SPEND_CALLS[tool] | {"project": "P", "prompt": "A cup  on a table", "job_id": "an-blocking-1"}
+
+    result = _call(tool, call)
+
+    text = _texts([result])[0]
+    assert result.is_error and "outcome code=NOT_SUBMITTED charged=0 retryable=no" in text, text
+    assert "an-flying" in text and "job_collect" in text and reached == []
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows() == []
+
+
+@pytest.mark.parametrize(
+    ("job", "call"),
+    [
+        ({"settled": "done"}, {}),
+        ({"prompt": "a dog on a rug"}, {}),
+        ({"project": "Q"}, {}),
+        ({}, {"dry_run": True}),
+    ],
+    ids=["collected", "another prompt", "another project", "a dry run"],
+)
+def test_a_blocking_run_no_submitted_job_can_be_confused_with_goes_ahead(monkeypatch, tmp_path, job, call):
+    reached = _spending_backend(monkeypatch, tmp_path)
+    _rendering_job(tmp_path, **job)
+    arguments = SPEND_CALLS["gen_video"] | {"project": "P", "prompt": "a cup on a table"} | call
+
+    result = _call("gen_video", arguments)
+
+    assert not result.is_error, _texts([result])
+    assert ("gen_video", "job-video") in reached
+
+
+def test_a_second_submit_of_a_prompt_a_submitted_job_still_renders_goes_ahead(monkeypatch, tmp_path):
+    # Two takes of one prompt are what job_submit is for: each is claimed by the workflow Flow named for it.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    _rendering_job(tmp_path)
+    call = SPEND_CALLS["job_submit"] | {"project": "P", "prompt": "a cup on a table", "job_id": "an-take-2"}
+
+    assert not _call("job_submit", call).is_error and ("job_submit", "an-take-2") in reached
+
+
+@pytest.mark.parametrize("tool", ["job_status", "job_collect"])
+def test_a_ledger_line_that_is_no_row_never_leaves_a_later_tool_without_an_outcome(
+    monkeypatch, tmp_path, tool
+):
+    # `[1, 2]` is valid JSON, so no ValueError: the read for a job id fails on the row itself.
+    opened = _job_backend(monkeypatch, tmp_path)
+    _started_job(tmp_path / "films")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other" / "ledger.jsonl").write_text("[1, 2]\n", encoding="utf-8")
+
+    text = _texts([_call(tool, {"job_id": "job-1"})])[0]
+
+    assert "outcome code=UNKNOWN charged=unknown retryable=no" in text and "cannot be read" in text, text
+    assert opened == []
+
+
+def test_a_ledger_reached_by_two_spellings_is_one_ledger_and_the_clip_lands_beside_the_real_one(
+    monkeypatch, tmp_path
+):
+    # A ledger linked into another folder under out/: the job is in one file, not in two, and its clip belongs
+    # beside that file, whichever spelling sorts last.
+    opened = _job_backend(monkeypatch, tmp_path)
+    ledger = _started_job(tmp_path / "films")
+    (tmp_path / "zz-alias").mkdir()
+    (tmp_path / "zz-alias" / "ledger.jsonl").symlink_to(ledger.path)
+    log = _job_world(monkeypatch, tmp_path, [_video("w-job", PROMPT)])
+
+    answer = _payload(_call("job_collect", {"job_id": "job-1"}))
+
+    assert answer["state"] == "collected" and opened == ["browser"]
+    assert Path(answer["path"]).parent == tmp_path / "films" and len(log.fetched) == 1
+    assert [row["status"] for row in ledger.rows()] == ["submitted", "started", "done"]

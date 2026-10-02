@@ -278,13 +278,17 @@ class Backend:
         *,
         retry_of: str | None = None,
         request: dict[str, str] | None = None,
+        claims_by_prompt: bool = False,
     ) -> Any:
         """One job per job_id through MCP (DECISIONS 2026-09-15), decided before a browser opens: refused while a call
         with that id still runs in this server, and when any ledger under the out folder, or the one out_dir names,
         holds a row for it, `opening` included.
 
         `retry_of` names a job Flow refused. It is vouched for here, off the same ledgers and before a browser opens
-        (plan AM, I-money-4: `outcome.retry_refusal`), and one refused job takes one retry at a time."""
+        (plan AM, I-money-4: `outcome.retry_refusal`), and one refused job takes one retry at a time.
+
+        `claims_by_prompt` is a blocking composer run, which takes the one new clip carrying its prompt: it is refused
+        while a job that job_submit started with the same project and prompt is not collected (plan AN, I-money-5)."""
         if retry_of and (not job_id or retry_of == job_id):
             raise self._not_started(
                 "a job cannot be its own retry: retry_of names the job Flow refused, job_id is a new id for this run"
@@ -317,6 +321,18 @@ class Backend:
                     # What that earlier run came to, so the caller learns it without a second look (plan AM).
                     refused.outcome = self._came_to(rows)
                     raise refused
+            if claims_by_prompt and request:
+                twin = self._rendering_twin(list(ledgers), **request)
+                if twin:
+                    # Before job_submit no two jobs of one server overlapped. Beside a submitted job of the same
+                    # prompt the one new clip may be that job's: both would end DONE on it and this run's own clip
+                    # would be left to nobody (re-review of plan AN).
+                    raise self._not_started(
+                        f"job {twin!r} was submitted with this project and prompt and is not collected yet, and a "
+                        "blocking run takes the one new clip that carries its prompt, which could be that job's: "
+                        "fetch it with job_collect first (job_status says when it is ready), or start this one with "
+                        "job_submit too; nothing was started"
+                    )
             if retry_of:
                 if retry_of in self._retrying:
                     raise self._not_started(
@@ -363,6 +379,17 @@ class Backend:
         if isinstance(result, dict) and said is not None and said["code"] != "NOT_SUBMITTED":
             result["outcome"] = said
         return result
+
+    def _rendering_twin(self, ledgers: list[Path], project: str, prompt: str) -> str | None:
+        """A job that job_submit started for this project and prompt and nobody has collected, if any ledger holds
+        one."""
+        jobs: dict[str, list[dict[str, Any]]] = {}
+        for each in ledgers:
+            for row in gen_mod.Ledger(each).rows():
+                jobs.setdefault(str(row.get("job_id")), []).append(row)
+        return next(
+            (job for job, rows in sorted(jobs.items()) if jobs_mod.rendering(rows, project, prompt)), None
+        )
 
     def _not_started(self, why: str) -> ValueError:
         """A refusal before anything ran under the job id, typed as such: the id stays free to use."""
@@ -699,7 +726,12 @@ class Backend:
         if dry_run:
             return await run()
         return await self._spend_once(
-            job_id, target, run, retry_of=retry_of, request={"project": project, "prompt": prompt}
+            job_id,
+            target,
+            run,
+            retry_of=retry_of,
+            request={"project": project, "prompt": prompt},
+            claims_by_prompt=True,
         )
 
     async def gen_video(self, project: str, prompt: str, **options: Any) -> dict[str, Any]:
@@ -722,6 +754,7 @@ class Backend:
             run,
             retry_of=options.get("retry_of"),
             request={"project": project, "prompt": prompt},
+            claims_by_prompt=True,
         )
 
     async def job_submit(self, project: str, prompt: str, **options: Any) -> dict[str, Any]:
@@ -736,13 +769,25 @@ class Backend:
                 )
             )
 
-        return await self._spend_once(options.get("job_id"), target, run)
+        # No `claims_by_prompt`: a detached job claims nothing here, and its clip is fetched by its workflow.
+        return await self._spend_once(
+            options.get("job_id"),
+            target,
+            run,
+            retry_of=options.get("retry_of"),
+            request={"project": project, "prompt": prompt},
+        )
 
     def _ledgers(self) -> list[Path]:
         """Every ledger under the out folder, each once, spelled as the out folder is: a clip fetched beside one is
         then written to its row as `out/...`, the way the blocking tools write theirs."""
         found = sorted(self.out_dir.rglob("ledger.jsonl", case_sensitive=False))
-        return list({path.resolve(): path for path in found if path.is_file()}.values())
+        ledgers: dict[Path, Path] = {}
+        for path in found:
+            # A ledger linked into another folder is the same ledger: the file's own place is the one kept.
+            if path.is_file() and (path.resolve() not in ledgers or not path.is_symlink()):
+                ledgers[path.resolve()] = path
+        return list(ledgers.values())
 
     def _every_row(self) -> list[dict[str, Any]]:
         return [row for path in self._ledgers() for row in gen_mod.Ledger(path).rows()]
@@ -753,7 +798,8 @@ class Backend:
         typed too: the job may be started and paid, and an error with no outcome line reads as "nothing started"."""
         try:
             held = [path for path in self._ledgers() if gen_mod.Ledger(path).rows(job_id)]
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, AttributeError, TypeError) as exc:
+            # A torn last line is a ValueError; a line that is JSON and no row fails on the row itself.
             unread = LookupError(
                 f"a ledger under {self.out_dir} cannot be read right now ({type(exc).__name__}: {str(exc)[:120]}), "
                 f"so job {job_id!r} was not looked up: call again, and tell the owner if it stays; nothing was "
@@ -2085,16 +2131,20 @@ async def gen_video(
         "rules, and the request is checked as it leaves: a mismatch is an error that still names the started job; "
         "the recipe of an Ingredients clip is read back by job_collect. When the submit request is never seen "
         "leaving, or Flow fails the job while this call is still on the page, the call stays and settles the job as "
-        "gen_video does, with gen_video's own answer or error and no state started. A job Flow refuses after this "
-        "call has left never shows in the listing, and Flow's reason is heard only by a call that waits: "
-        "job_collect settles such a job as nothing generated and it cannot be retried from here, so use gen_video "
-        "when the reason matters. While a submitted job renders, a blocking tool run beside it reads its own spend "
-        "off a balance the submitted job may move, so its spent and balance_moved can include that job's price. "
-        "Measured 2026-10-03 on two omni-flash 360p 4 s jobs submitted back to back: each call answered in 153 s "
+        "gen_video does, with gen_video's own answer or error and no state started; a refusal heard that way may "
+        "say retryable=yes, and retry_of is taken here as gen_video takes it. A job Flow refuses after this call "
+        "has left never shows in the listing, and Flow's reason is heard only by a call that waits: job_collect "
+        "settles such a job as nothing generated, with no reason and no retry, so use gen_video when the reason "
+        "matters. While a submitted job is not collected, gen_video and gen_character are refused for the same "
+        "project and prompt, since a blocking run takes the one new clip carrying its prompt and that could be the "
+        "submitted job's; a second job_submit of the prompt is fine. A blocking tool run beside a rendering job "
+        "also reads its own spend off a balance that job can still move (Flow charged at the submit in both "
+        "measured jobs, so what is left to land is a refund if Flow fails it): its spent and balance_moved can be "
+        "off by that. Measured 2026-10-03 on two omni-flash 360p 4 s jobs submitted back to back: each call answered in 153 s "
         "(most of it setting the composer up; allow 2-4 min), Flow named the workflow both times, the balance had "
         "dropped by the price when it was read right after each submit, not at the finish, and both clips went on "
         "rendering after the page had closed and were ready within about 4 min of their submits. "
-        "out_dir must be inside out/." + _JOB_ID_RULE
+        "out_dir must be inside out/." + _JOB_ID_RULE + _RETRY_RULE
     ),
 )
 async def job_submit(
@@ -2112,8 +2162,10 @@ async def job_submit(
     media_ids: list[str] | None = None,
     out_dir: str | None = None,
     voices: list[str] | None = None,
+    retry_of: str | None = None,
 ) -> str:
     _video_named(project, prompt)
+    _retry_named(retry_of, False)
     _video_request(
         model=model,
         aspect=aspect,
@@ -2143,6 +2195,7 @@ async def job_submit(
             media_ids=media_ids or [],
             voices=voices or [],
             out_dir=out_dir,
+            **({"retry_of": retry_of} if retry_of else {}),
         )
     )
 
@@ -2188,10 +2241,12 @@ async def job_status(job_id: str) -> str:
         f"{int(jobs_mod.NOT_LISTED_S // 60)} minutes after its submit is settled as an error: nothing generated when "
         "the balance did not move, unknown otherwise; Flow's reason for a refusal is not heard here. With no "
         "workflow named at the submit, a clip another job's rows name is never taken, and neither is one of several "
-        "candidates. A job already settled is answered from its row with no browser, so collecting twice never "
+        "candidates, nor one that another job of the same prompt, still open and named no workflow either, could "
+        "own. A job already settled is answered from its row with no browser, so collecting twice never "
         "fetches or writes twice. It never clicks Start generation and never types in the prompt box, so it cannot "
         "start or pay for anything: the credits were spent by job_submit; the one thing it may click is the "
-        "editor's own Download menu, when every direct link to the file fails. Every answer and every error "
+        "editor's own download (the clip's version entry and the Download menu), when every direct link to the "
+        "file fails. Every answer and every error "
         "carries the job's outcome. Fetching a 4 s 360p clip took 47 s, and a second collect of it answered from "
         "the row at once (measured 2026-10-03). Free."
     ),

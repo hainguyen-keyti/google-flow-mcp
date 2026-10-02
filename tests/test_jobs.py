@@ -266,18 +266,25 @@ def _started_job(
     at=T0,
     prompt_text=None,
     references=None,
+    prompt=PROMPT,
 ):
     """The two rows a detached submit leaves, written at `at`."""
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     ledger.append(
-        job_id, "submitted", kind="video", project="p-1", prompt=PROMPT, quoted_credits=10, credits_before=200
+        job_id,
+        "submitted",
+        kind="video",
+        project="p-1",
+        prompt=prompt[: outcome.PROMPT_KEPT],
+        quoted_credits=10,
+        credits_before=200,
     )
     ledger.append(
         job_id,
         "started",
         workflow_id=workflow,
         workflows_before=list(before),
-        prompt=PROMPT,
+        prompt=prompt,
         prompt_text=prompt_text,
         flow={"workflow_id": workflow, "statuses": [6], "reasons": []},
         **({"body_check": body_check} if body_check else {}),
@@ -400,9 +407,9 @@ def test_with_no_workflow_named_two_new_records_of_the_prompt_are_never_chosen_b
     assert outcome.classify(ledger.rows())["code"] == "UNKNOWN"
 
 
-def _theirs(*rows):
+def _theirs(*rows, prompt=PROMPT):
     """Rows of job-B as another ledger holds them: submitted five seconds after this job, then whatever follows."""
-    first = {"job_id": "job-B", "status": "submitted", "project": "p-1", "prompt": PROMPT, "ts": T0 + 5}
+    first = {"job_id": "job-B", "status": "submitted", "project": "p-1", "prompt": prompt, "ts": T0 + 5}
     return [first, *({"job_id": "job-B", "ts": T0 + 30, **row} for row in rows)]
 
 
@@ -412,8 +419,22 @@ def _theirs(*rows):
         {"status": "started", "workflow_id": "w-B"},
         {"status": "done", "media_id": "m-w-B"},
         {"status": "done", "outputs": [{"media_id": "m-w-B", "path": None}]},
+        {"status": "pending", "media_id": "m-w-B"},
+        # A row job_collect wrote for a named job that never showed in time: the workflow is on the row itself.
+        {"status": "unknown", "workflow_id": "w-B"},
+        # A blocking run keeps the workflow Flow named only inside what Flow said (re-review of plan AN, C1).
+        {"status": "failed", "spent": 10, "flow": {"workflow_id": "w-B", "statuses": [6, 2]}},
+        {"status": "unknown", "candidates": ["m-w-B"], "flow": {"workflow_id": "w-B", "statuses": [6]}},
     ],
-    ids=["its started row", "its done row", "its outputs"],
+    ids=[
+        "its started row",
+        "its done row",
+        "its outputs",
+        "its pending row",
+        "a settled row naming the workflow",
+        "a blocking row, charged with no output",
+        "a blocking row, unknown",
+    ],
 )
 def test_with_no_workflow_named_a_clip_another_job_names_is_never_this_jobs(monkeypatch, tmp_path, named):
     # Review of plan AN: Flow dropped this job and job-B, same prompt, made w-B. Taking it would settle one clip
@@ -424,15 +445,47 @@ def test_with_no_workflow_named_a_clip_another_job_names_is_never_this_jobs(monk
 
     assert _status(ledger, others=others)["state"] == "not_listed"
     assert _collect(ledger, others=others)["state"] == "not_listed" and len(ledger.rows()) == 2
-    # With nothing naming it, the one new clip of the prompt is this job's, as before.
-    assert _status(ledger, others=_theirs())["media_id"] == "m-w-B"
+    # With no other job at all, the one new clip of the prompt is this job's, as before.
+    assert _status(ledger)["media_id"] == "m-w-B"
 
 
-def test_two_unnamed_jobs_of_one_prompt_cannot_tell_one_clip_apart(monkeypatch, tmp_path):
-    # Both submits went unheard and one clip shows: whose it is cannot be told, so neither takes it.
+UNNAMED = {"status": "started", "workflow_id": None, "prompt": PROMPT}
+REFUSED_BY_FLOW = {"statuses": [6, 2, 4], "reasons": ["PUBLIC_ERROR_AUDIO_FILTERED"]}
+INTENT_ONLY = [
+    {"job_id": "job-B", "status": "submitted", "kind": "video", "project": "p-1", "prompt": PROMPT}
+]
+
+
+@pytest.mark.parametrize(
+    "rival",
+    [
+        _theirs(UNNAMED),
+        # Its collect came first and was refused over this very clip (re-review of plan AN, F1).
+        _theirs(UNNAMED, {"status": "unknown", "candidates": ["m-w-new"]}),
+        # Never shown within ten minutes and settled as nothing generated: it may still finish.
+        _theirs(UNNAMED, {"status": "failed", "spent": 0}),
+        # Another process is running it, or its job_submit was cut off before the started row.
+        [{**INTENT_ONLY[0], "ts": T0 + 5}],
+        [{**INTENT_ONLY[0], "ts": T0 - 120}],
+        # A blocking run that ended unknown with nothing naming its workflow.
+        _theirs({"status": "unknown", "candidates": ["m-w-new"], "flow": {"statuses": [6, 2]}}),
+        _theirs({**UNNAMED, "prompt": f"  {PROMPT.upper()}  "}),
+    ],
+    ids=[
+        "started, unnamed",
+        "refused over this clip",
+        "never shown",
+        "only its intent row",
+        "begun two minutes before",
+        "a blocking run left unknown",
+        "the prompt in other spacing and case",
+    ],
+)
+def test_one_clip_that_another_open_unnamed_job_could_own_is_never_taken(monkeypatch, tmp_path, rival):
+    # Neither submit was heard naming a workflow and one clip of the prompt shows: whose it is cannot be told, so
+    # neither takes it, whichever is collected first.
     ledger = _started_job(tmp_path, workflow=None)
     _world(monkeypatch, tmp_path, [_video("w-new", PROMPT)])
-    rival = _theirs({"status": "started", "workflow_id": None, "prompt": PROMPT})
 
     assert _status(ledger, others=rival)["state"] == "ambiguous"
     with pytest.raises(RuntimeError, match="job-B") as said:
@@ -444,24 +497,58 @@ def test_two_unnamed_jobs_of_one_prompt_cannot_tell_one_clip_apart(monkeypatch, 
 
 
 @pytest.mark.parametrize(
-    "rival",
+    "other",
     [
-        _theirs({"status": "started", "workflow_id": None, "prompt": "another prompt"}),
-        _theirs(
-            {"status": "started", "workflow_id": None, "prompt": PROMPT}, {"status": "failed", "spent": 0}
-        ),
-        [
-            {**row, "project": "p-2"}
-            for row in _theirs({"status": "started", "workflow_id": None, "prompt": PROMPT})
-        ],
+        _theirs({**UNNAMED, "prompt": "another prompt"}, prompt="another prompt"),
+        [{**row, "project": "p-2"} for row in _theirs(UNNAMED)],
+        # Flow failed it, and said so: it has no clip.
+        _theirs(UNNAMED, {"status": "failed", "spent": 0, "flow": REFUSED_BY_FLOW}),
+        # It has its own clip, and the rows name it.
+        _theirs(UNNAMED, {"status": "done", "media_id": "m-w-other"}),
+        # Flow named its workflow, which is not this clip's (the two-takes-of-one-prompt case).
+        _theirs({**UNNAMED, "workflow_id": "w-other"}),
+        _theirs({"status": "unknown", "flow": {"workflow_id": "w-other", "statuses": [6]}}),
+        # Left with only its intent row longer ago than a run lasts: a clip new since this submit is not its own.
+        [{**INTENT_ONLY[0], "ts": T0 - jobs.IN_FLIGHT_S - 1}],
     ],
-    ids=["another prompt", "already settled", "another project"],
+    ids=[
+        "another prompt",
+        "another project",
+        "refused by Flow",
+        "settled on its own clip",
+        "named another workflow",
+        "a blocking run that named another workflow",
+        "left long ago",
+    ],
 )
-def test_an_unnamed_job_that_cannot_own_the_clip_is_no_rival(monkeypatch, tmp_path, rival):
+def test_a_job_that_cannot_own_the_clip_is_no_rival(monkeypatch, tmp_path, other):
     ledger = _started_job(tmp_path, workflow=None)
     _world(monkeypatch, tmp_path, [_video("w-new", PROMPT)])
 
-    assert _status(ledger, others=rival)["state"] == "ready"
+    assert _status(ledger, others=other)["state"] == "ready"
+
+
+def test_a_rival_is_told_by_what_its_record_would_hold(monkeypatch, tmp_path):
+    # With chips the record holds what the prompt box read, and an intent row keeps only the head of a long prompt.
+    boxed = f"Thu {PROMPT}"
+    with_chips = _started_job(tmp_path / "chips", workflow=None, prompt_text=boxed)
+    _world(monkeypatch, tmp_path, [_video("w-new", boxed)])
+    rival = _theirs({**UNNAMED, "prompt_text": boxed})
+
+    assert _status(with_chips, others=rival)["state"] == "ambiguous"
+
+    long = "a slow pan over a harbour at dawn, " * 10
+    assert len(long) > outcome.PROMPT_KEPT
+    typed = _started_job(tmp_path / "long", workflow=None, prompt=long)
+    _world(monkeypatch, tmp_path, [_video("w-new", long)])
+    cut_off = [{**INTENT_ONLY[0], "prompt": long[: outcome.PROMPT_KEPT], "ts": T0 + 5}]
+    other = [{**INTENT_ONLY[0], "prompt": ("another " + long)[: outcome.PROMPT_KEPT], "ts": T0 + 5}]
+    short = [{**INTENT_ONLY[0], "prompt": long[:40], "ts": T0 + 5}]
+
+    assert _status(typed, others=cut_off)["state"] == "ambiguous"
+    assert _status(typed, others=other)["state"] == "ready"
+    # A prompt shorter than the cut was kept whole, so the head of this one is another prompt.
+    assert _status(typed, others=short)["state"] == "ready"
 
 
 def test_an_unnamed_job_is_not_claimed_while_the_ledgers_cannot_be_read(monkeypatch, tmp_path):
@@ -528,6 +615,9 @@ def test_a_file_left_by_a_collect_that_died_is_kept_and_does_not_block_the_next(
     assert answer["state"] == "collected" and Path(answer["path"]) != orphan
     assert Path(answer["path"]).read_bytes() == b"clip" and orphan.read_bytes() == b"half a clip"
     assert len(log.fetched) == 1 and ledger.rows()[-1]["path"] == answer["path"]
+    # Two leftovers: the second name is held too, so the third is taken.
+    assert Path(answer["path"]).stem == f"{orphan.stem}_2"
+    assert jobs._free_stem(orphan.with_suffix("")).name == f"{orphan.stem}_3"
 
 
 ASKED = [
@@ -612,6 +702,8 @@ def test_a_balance_other_jobs_moved_is_never_written_as_this_jobs_own_spend(monk
     # The typed outcome says the figure is the quote: "charged" otherwise reads as what left the account.
     said = outcome.classify(ledger.rows())
     assert (said["code"], said["charged"], said["charged_from"]) == ("DONE", 10, "quoted")
+    # The line an error opens with says it too: an agent may read nothing else.
+    assert outcome.head(said) == "outcome code=DONE charged=10 retryable=no charged_from=quoted"
 
 
 def test_a_balance_that_cannot_be_read_is_never_written_as_a_bracket(monkeypatch, tmp_path):
@@ -645,8 +737,11 @@ def test_two_candidates_on_a_shared_balance_say_nothing_of_what_was_charged(monk
         {"status": "pending", "spent": 10},
         {"status": "unknown", "spent": None},
         {"status": "failed", "spent": 0, "flow": {"statuses": [6, 2], "reasons": []}},
+        {"status": "failed", "spent": 10},
+        {"status": "failed", "spent": 0, "exit_code": 1},
+        {"status": "failed", "spent": 0, "exit_code": 10},
     ],
-    ids=["pending", "unknown", "never shown"],
+    ids=["pending", "unknown", "never shown", "charged with no output", "a tool error", "unusual activity"],
 )
 def test_a_job_that_ended_open_before_this_submit_shares_the_balance(monkeypatch, tmp_path, ended):
     # Its own outcome says it may still finish and bill; a charge landing later lands in this job's bracket.
@@ -728,6 +823,39 @@ def test_ledgers_that_cannot_be_read_are_taken_as_sharing_the_balance(monkeypatc
 
     assert (answer["state"], answer["spent"], answer["spent_from"]) == ("collected", 10, "quoted")
     assert ledger.rows()[-1]["status"] == "done"
+
+
+def test_a_ledger_line_that_is_no_row_counts_as_a_ledger_that_cannot_be_read(monkeypatch, tmp_path):
+    # `[1, 2]` is valid JSON and no row: reading it for a job id ends in an AttributeError, not a ValueError.
+    ledger = _started_job(tmp_path)
+    _world(monkeypatch, tmp_path, [_video("w-job", PROMPT)], balance=190)
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other" / "ledger.jsonl").write_text("[1, 2]\n", encoding="utf-8")
+
+    def others():
+        return gen.Ledger(tmp_path / "other" / "ledger.jsonl").rows("nobody")
+
+    answer = asyncio.run(jobs.collect(_Reader(), ledger, "job-1", now=T0 + 60, others=others))
+
+    assert (answer["state"], answer["spent_from"]) == ("collected", "quoted")
+    # The same line handed over as a row, by a read that does not look inside it.
+    again = _started_job(tmp_path / "again")
+    seen = asyncio.run(jobs.collect(_Reader(), again, "job-1", now=T0 + 60, others=lambda: [[1, 2]]))
+    assert (seen["state"], seen["spent_from"]) == ("collected", "quoted")
+
+
+def test_a_job_that_finished_after_this_submit_shares_the_balance_though_it_is_closed(monkeypatch, tmp_path):
+    # It is over, and its charge or its refund landed inside this job's bracket all the same.
+    ledger = _started_job(tmp_path)
+    _world(monkeypatch, tmp_path, [_video("w-job", PROMPT)], balance=180)
+    finished = [
+        {"job_id": "job-2", "status": "submitted", "kind": "video", "ts": T0 - 20},
+        {"job_id": "job-2", "status": "done", "spent": 10, "ts": T0 + 40},
+    ]
+
+    answer = _collect(ledger, others=finished)
+
+    assert (answer["spent"], answer["spent_from"]) == (10, "quoted")
 
 
 def test_the_other_jobs_rows_are_read_after_the_balance(monkeypatch, tmp_path):
