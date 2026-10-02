@@ -105,7 +105,7 @@ guess about; the tool says so too.
 | `clip_extend` (Veo clips only) | 10 |
 | `clip_edit` (Omni 1.1 Flash) | 20 measured, Flow's table says 40 |
 | `gen_t2i` / `gen_i2i` (Nano Banana 2) | 0 credits, but a daily image quota |
-| `clip_download` at 1080p | 0 |
+| `clip_download` at 1080p, or at 720p on a 360p clip (its upscale; a 360p clip has no 1080p and is refused with what its menu offers) | 0 |
 | `clip_download` at 4k (a Flow upscale) | not offered on Pro: greyed out, refused before any click (Flow's table: Ultra, 50) |
 | Every read: lane, projects, media, credits, characters, scenes, voices, what a clip was made from (`clip_recipe`), and this table as data (`flow_capabilities`: every model's cells, lengths and caps, no browser) | 0 |
 
@@ -186,7 +186,7 @@ These are not suggestions; they are enforced in code and pinned by tests.
   tools (`clip_extend`, `clip_edit`) do not, so turn it off with `agent_mode` before using them.
 - Trimming a clip's head or tail inside a scene is not implemented.
 - Deliberately out of scope: collections, media rename, media trash, project zip export, the Tools gallery,
-  Flow's own agent mode beyond an on/off switch, Omni 360p and upscale, project settings, GIF export, share
+  Flow's own agent mode beyond an on/off switch, project settings, GIF export, share
   links and publishing to YouTube.
 
 ## When Flow changes

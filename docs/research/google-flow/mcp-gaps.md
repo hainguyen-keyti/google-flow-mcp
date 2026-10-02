@@ -11,6 +11,9 @@ marked done.
 **Status after plans AM and AN (2026-10-03): 48 tools. G5 and G7 are closed** as well; G8 and what is left of sections
 2 and 3 are plan AO's.
 
+**Status after plan AO (2026-10-03): 49 tools. G8 is closed**, and so are the 360p row of section 2 and the upload
+row of section 3. What plan AO left standing, and why, is said under each table.
+
 Scope line, unchanged: the MCP exposes Flow and guards the money. How a film is made (script, shots, QA, edit) is the
 skill set's job (`skill-design.md`).
 
@@ -223,13 +226,23 @@ repo's source at `615bcac`.
 - Proposed: `flow_capabilities(project_id)` answering the live map: per model and mode the lengths, resolutions,
   counts, price line, and the caps for images and voices; tool descriptions point to it instead of quoting numbers.
 - Tier 3.
+- **Closed by plan AO** (`b54d77c`), narrower than proposed on two points, both on purpose. `flow_capabilities()`
+  takes no project and opens no browser: it answers what the repo has surveyed and measured, each part with its
+  date, and says so in its `note`. Per video model: the modes, resolutions, lengths, counts, aspects, the price of
+  every cell, and the caps for images and voices; then the image models, `gen_character`'s prices by length, and
+  the editor's measured prices. Every number is read from the file or constant the tools themselves refuse and
+  charge by (`flow_options.json`, `ingredients.VOICE_CAPS`, gflow's `reference_cap_for`, `clips.MEASURED_PRICE`,
+  `ingredients.price_for`), so the map cannot drift from the guards; the smoke row calls the served tool and holds
+  each cell to `flow_options.json` read straight from the file. The live price of one cell stays
+  `gen_video(dry_run=true)` and the live walk stays `uv run video flow survey`. The tool descriptions keep their
+  numbers (an agent reads a description before it calls anything) and point to the tool.
 
 ## 2. Flow features with no tool
 
 | Feature | Evidence | Proposed |
 |---|---|---|
 | Voice preview audio | the voice maker's Preview answers a pending record and the page then fetches a wav from `flow-content.google/audio/<id>`; 16 previews and one saved sample were captured for 0 credits | `voice_preview(preset, performance, sample)` answering a wav, so a voice is heard and measured before it is used |
-| 360p draft, then upscale | a 360p clip's Download menu offers "720p Upscaled" (url tail `_720p_upsampled`, 0 credits) and no 1080p; `clip_download` knows only the 1080p tail (`ak-d1`) | `clip_download` takes the upscale the clip offers; `gen_video` says what a draft is good for |
+| 360p draft, then upscale | a 360p clip's Download menu offers "720p Upscaled" (url tail `_720p_upsampled`, 0 credits) and no 1080p; `clip_download` knows only the 1080p tail (`ak-d1`) | done in plan AO (`2092f1d`): `clip_download quality=720p` on a 360p clip fetches the signed url of its "720p Upscaled" (measured 2026-10-03 on `an8-a`: 720x1280, 4.000 s, 1,091,951 bytes, 0 credits), and a quality the clip's menu lacks, the default 1080p included, is refused with the items the menu shows. Its own 360p file comes with `flow_download`. What a draft is good for is the skill set's to say |
 | Extend with speech | 8 + 7 = 15.0 s, the words asked for, the voice not held, the extension's own file downloadable this time (`ak-x1`) | done in plan AL for the length: `clip_extend` says 8 + 7 s and no longer "overlapping the source's last second"; what the voice does is left out until the owner has judged it by ear |
 | Video as an ingredient | `ak-n3`: rpc `jIps6`, 20 credits, an edit | keep it out of `gen_video`; it is `clip_edit` under another door |
 | Delete media | lane 4 (one other MCP, one proxy) | `media_delete` |
@@ -240,6 +253,12 @@ repo's source at `615bcac`.
 | A budget across calls | this campaign needed one by hand | `budget_set(max_credits)` refusing any spend past it |
 | Avatars, collections | none on this account | not now |
 
+Left out of plan AO, each for its reason: `budget_set` guards every spending tool, so it is tier 1 and a plan of its
+own; `voice_preview` waits, since the owner judged every clip with a voice ingredient less real than one without
+(2026-10-01) and nothing is built on voices until the owner asks; `media_delete` is a permanent deletion, which the
+repo's agent does not run even to test it; character update, `tool_run`, the agent's approve and reject and image
+upscale may each spend and none was measured.
+
 ## 3. Hazards in today's code (fix when the file is next touched)
 
 | Where | Hazard | Evidence |
@@ -248,7 +267,7 @@ repo's source at `615bcac`.
 | `src/video/flow/composer.py:605-611` | the chip counter counts every chip in the prompt box: ledger rows of an empty composer read `"chips": 4` | v7 ledger rows, `left_over` |
 | `src/video/flow/video.py:299`, `src/video/flow/ingredients.py:403` | the submit check looks only at gflow's four rpcs; a composer submit with a video ingredient leaves as `jIps6` | `ak-n3` |
 | `clip_edit` | no live price is read before the click (its own description says so) | tool description |
-| 720p and gif downloads | still go through Chrome's own download, after which Chrome 154 crashes on this Mac (eight crash reports on 2026-10-01); `clip_download` knows the 1080p url tail only, not `_720p_upsampled` | plan AJ, `ak-d1`; possibly playwright issue 42506, whose reports name Windows only |
+| 720p and gif downloads | a 720p clip's own 720p and every gif still go through Chrome's own download, after which Chrome 154 crashes on this Mac (eight crash reports on 2026-10-01). Since plan AO the 720p UPSCALE of a 360p clip does not: it is fetched from the signed url ending `_720p_upsampled`, as the 1080p upscale is | plan AJ, `ak-d1`; possibly playwright issue 42506, whose reports name Windows only |
 | gflow pin | repo 0.78.0, `uv tool` 0.73.1, upstream 0.81.0 | lane 4 section 1 |
 | Whisper on a silent clip | not MCP code, but any QA tool must know: it returns a stock sentence | `ak-c1`, `ak-n2a` |
 | `src/video/flow/parsers.py` `_record_fields` | a voice saved with `character_make_voice` is listed by `flow_media` as `kind: "video"` (any record of eight or more fields is one); `parsers.custom_voices` now tells it by its speech arm, the `kind` is unchanged | found in plan AL T5, 2026-10-01 |
@@ -264,9 +283,16 @@ repo's source at `615bcac`.
 | an image with several records | its row in the "+" dialog is told by the url of the first one listed, while any of its workflow ids passes the chip check | review of plan AL; none of 67 images holds two records |
 | `Backend.generate` (the tools that run gflow) | a cookie notice the driver could NOT press, met only in that tool's own sessions (Agent mode, the listing read), is named when it made one of them fail and not when they went through; the next browser tool names it, since every session meets a standing notice again | scoped re-review of plan AL, 2026-10-02; a pressed notice is carried, a standing one is not |
 | `src/video/gen.py:231-236` `read_credits_live`, called by `run_job` before and after every gflow run | each balance read opens a session of its own, outside `Backend._with`: a cookie notice pressed there, or left standing there, is written to the server's stderr and to no answer. Rare, since the Agent-mode session of the same call opens the project page first and presses the notice there | round two of that re-review; `gen.py` was outside plan AL's radius, and `tests/test_mcp_server.py` pins that the backend hands `run_job` no balance reader of its own |
-| `src/video/flow/uploads.py` `upload` (`flow_upload`, `video flow upload`) | on the account signed in on 2026-10-02 it raised `upload: rpc maseQ not observed; saw []` twice running while the image DID reach the project each time (the listing then held two `v5_talk_t1_57.png`); a caller that retries on the error litters the project, and twin titles are a hazard of their own. Which request carries the upload now was not looked for | 2026-10-02, project `014020b7`; the last upload seen answering on `maseQ` was on the previous account |
+| `src/video/flow/uploads.py` `upload` (`flow_upload`, `video flow upload`) | on the account signed in on 2026-10-02 it raised `upload: rpc maseQ not observed; saw []` twice running while the image DID reach the project each time (the listing then held two `v5_talk_t1_57.png`); a caller that retries on the error litters the project, and twin titles are a hazard of their own. **Done in plan AO (`b360bc0`), the cause not found**: on 2026-10-03 every upload tried on this account answered on `maseQ` (the probes timed it at 7.8 to 9.1 s after the file was chosen), and the false failure did not come back. The tool now reads the project's images before the file is chosen and, when the reply is not seen, settles by the listing: the one new image carrying the file's name is the upload (`found_by: "listing"`), none means nothing was uploaded and a second try is safe, two are not chosen between, and a video is sent to `flow_media` since its title in the listing was never measured. That branch is proven by tests only | 2026-10-02, project `014020b7`; 2026-10-03, scratch project `6177057c` |
 | `overlays.watch_cookie_notice`, the press itself | Playwright runs a click's pre-checks, which wait on the handler once the action that met the notice has timed out: a press begun after that fails at its own 3 s and the notice is left for the next session, named as not pressed | read off `coreBundle.js:21698-21725`, never seen live; the watch for the bar to leave uses no such check |
 | `ingredients._card` | a pane that comes up between the read of the standing panes and the first read after the hover (0.4 s) is taken for the chip's card; one that then stays over 3 s refuses the run, with no click | scoped re-review of plan AL; fails closed |
+
+Plan AO meant to fix three more of these rows and did not: the `composer.INGREDIENTS` selector, the chip counter
+and the notices of `gen.read_credits_live`. All three sit on the setup of a paid run (`composer._submit` and
+`gen.run_job`), which is tier 1, and plan AO was a tier 2 plan that forbade itself the money path; the first two are
+reached only by the story layer, which is out of the MCP's scope. They stand as written, with the two rows on
+`composer._submit` (a covered Start click recorded `unknown`; no second price read after `verify`) and the recipe
+verdict that is not written to the ledger, for a tier 1 plan.
 
 ## 4. Proposed order (plans to write after approval)
 
@@ -275,7 +301,7 @@ repo's source at `615bcac`.
 | AL (done 2026-10-01) | G6 overlays first (the bar blocked every composer tool), then G3 recipe read-back, G2 picker attach, G1 voices, G4 wording | 1 | 22 credits spent of a ceiling of 40 |
 | AM (done 2026-10-02) | G5 typed outcomes and `retry_of` | 1 | 0 to 10 |
 | AN (done 2026-10-03) | G7 submit, status, collect | 1 | 12 credits spent of a ceiling of 20 |
-| AO | G8 capability map, section 2 rows, section 3 hazards | 2 to 3 | 0 |
+| AO (done 2026-10-03) | G8 capability map, the 360p row of section 2, the upload row of section 3 | 2 | 0 credits spent of a ceiling of 0 |
 
 Each plan follows the repo's rules: red test first, mutants on every guard, a live run of the exact case that failed,
 one commit per task.

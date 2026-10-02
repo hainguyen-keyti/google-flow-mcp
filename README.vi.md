@@ -38,7 +38,7 @@ uv run video flow project create --title T | rename <id> T | delete <id> --yes
 uv run video flow character create <project> "<face prompt>" --name N --personality P | delete <project> <entity> --yes
 uv run video flow scene list <project> [--all] | create <project> --title T | delete <project> <scene_id> --yes
 uv run video flow agent mode <project> on|off
-uv run video flow clip download <project> <media_id> --quality gif|720p|1080p|4k --out out/   # 1080p, 4K = upscale
+uv run video flow clip download <project> <media_id> --quality gif|720p|1080p|4k --out out/   # 1080p, 4K = upscale; clip 360p: 720p = upscale, không có 1080p
 ```
 
 Lệnh trên clip editor và agent, tốn credit, cùng ledger `out/ledger.jsonl`:
@@ -324,8 +324,16 @@ mặt, tay và món đồ.
   rồi mới bấm, trang không bao giờ sáng thì từ chối; lần đo lại: 53 s, ảnh 372 KB, YAVG 113,6. **Và nó không phải
   lúc nào cũng chạy**: 5 cú bấm thật ngày 2026-09-18 chỉ ra 3 ảnh, 2 lần Flow hiện snackbar "Saving frame..." rồi
   không đẻ ra media nào trong 160 s. Tool nói rõ rơi vào ca nào thay vì bịa media id.
-- **`clip_download`**: bản 1080p đã đo là $0; bản `4k` do Flow upscale thì **chưa đo giá, có thể tốn credit**, phải
-  hỏi chủ repo trước khi dùng (gflow ghi 4K upscale là tier-gated).
+- **`clip_download`**: bản 1080p đã đo là $0; bản `4k` bị Flow làm mờ trên account Pro này (đo 2026-09-29; bảng giá
+  của Flow chỉ bán từ gói Ultra, 50 credit) nên tool từ chối trước khi bấm, không tốn gì. **Clip 360p có menu khác**
+  (đo 2026-10-03): "270p Animated GIF", "360p Original size", "720p Upscaled", không có 1080p. `quality=720p` trên clip
+  360p tải bản upscale qua link đã ký (720x1280, $0); mức mà menu của clip không có, kể cả 1080p mặc định, bị từ chối
+  kèm đúng các mục menu đang có; file 360p gốc lấy bằng `flow_download`.
+- **`flow_upload`**: đọc danh sách ảnh của project TRƯỚC khi chọn file. Flow trả lời (rpc `maseQ`, đo 7,8 tới 9,1 s)
+  thì dùng câu trả lời đó. Không thấy câu trả lời thì quyết toán bằng listing: đúng một ảnh mới mang tên file là bản
+  vừa upload (`found_by: "listing"`); không có ảnh mới nào thì báo "chưa upload gì, upload lại an toàn"; có hai thì
+  không chọn bừa; file video thì bảo xem `flow_media` vì chưa ai đo tên video trong listing. Lý do: ngày 2026-10-02
+  tool báo lỗi hai lần trong khi ảnh đã lên, và lần gọi lại để lại hai ảnh trùng tên.
 
 Không có chế độ no-spend: chủ repo chốt agent được gọi mọi thứ. Chuỗi `instructions` mà server gửi cho agent lúc
 `initialize` nêu đích danh nhóm tốn credit, thời gian chờ và luật giữ `job_id`, và có test canh để nó không lệch
