@@ -15,7 +15,9 @@ Viết 2026-10-01, sau bảy lần làm lại (v1 tới v7.1). Mọi con số tr
 4. **Một clip, một việc.** Một động tác, một chuyển động máy. Nhồi hai ba việc thì model bỏ bớt.
 5. **Chọn model theo việc.** Veo 3.1 Fast cho cảnh hình (nét gấp đôi, đáp đúng khung cuối), Omni cho cảnh nói (nói
    tiếng Việt khớp miệng, độ dài tuỳ chọn, rẻ).
-6. **Một giọng = một lần quay.** Cả ba câu thoại nằm trong một clip 10 s, rồi cắt ra dùng.
+6. **Giọng thật đến từ câu thoại viết như nói chuyện.** Mỗi clip 6 s một câu ngắn nói với người xem, không gắn giọng
+   (chủ repo nghe và chấm 8 clip ngày 2026-10-02, xem mục 11). Cách cũ vẫn dùng được khi cần đúng một lần quay: cả ba
+   câu thoại nằm trong một clip 10 s, rồi cắt ra dùng.
 7. **Phim "như người làm" nằm ở khâu dựng.** Cắt 2-3 s một lần, cắt đúng lúc đang chuyển động, lời nói chạy đè lên
    cảnh khác, màu các cảnh cân về một ảnh, xuất đúng 24 khung/giây.
 
@@ -318,15 +320,37 @@ nhiều lượt đọc 0 credit để trả lời những câu còn bỏ ngỏ �
 
 | Cách | Hình | Giọng | Giá |
 |---|---|---|---|
+| Khung đầu, Omni 6 s, KHÔNG gắn giọng, MỘT câu ngắn viết như nói chuyện | Đúng ảnh | Chủ repo chấm: thật, dứt khoát, cùng một người (4 trên 4 clip, hai tài khoản) | 10 cho 6 s |
+| Như trên nhưng câu thoại là câu mô tả sản phẩm | Đúng ảnh | Chủ repo chấm: giả như máy đọc, khác người, chậm (4 trên 4 clip) | 10 cho 6 s |
 | Mọi câu trong MỘT lần quay Omni 10 s, cắt ra khi dựng | Đúng ảnh | Một giọng | 15 |
-| Gắn giọng Flow làm ingredient + một ảnh, Veo 3.1 Lite | Vẽ lại sát ảnh | Đúng giọng đó, clip nào cũng vậy | 10 cho 8 s |
-| Gắn giọng Flow làm ingredient + một ảnh, Omni | Vẽ lại lỏng | Đúng giọng đó; hai giọng thì mỗi giọng vào đúng người | 10 đến 12 |
-| Khung đầu + cùng một câu tả giọng ở mọi prompt | Đúng ảnh | Một "họ giọng" na ná nhau, không phải một giọng | 10 đến 12 |
+| Gắn giọng Flow làm ingredient + một ảnh, Veo 3.1 Lite | Vẽ lại sát ảnh | Đúng giọng đó, clip nào cũng vậy; chủ repo chấm: kém thật hơn hàng đầu | 10 cho 8 s |
+| Gắn giọng Flow làm ingredient + một ảnh, Omni | Vẽ lại lỏng | Đúng giọng đó; hai giọng thì mỗi giọng vào đúng người; chủ repo chấm: kém thật hơn hàng đầu | 10 đến 12 |
+| Khung đầu + cùng một câu tả giọng ở mọi prompt, hai câu trong clip 8 s | Đúng ảnh | Một "họ giọng" na ná nhau, không phải một giọng; chủ repo chấm: không clip nào thật | 10 đến 12 |
 | Kéo dài (Extend) một clip Veo đang nói | Liền hình, 8 + 7 = 15 s | Thước của tôi không thấy giữ giọng | 10 cho 7 s |
 
 - Hai clip nói cùng một câu: có gắn giọng thì lệch 1,0 đến 1,2; không gắn thì 2,5 đến 3,5; clip có gắn so với clip
   không gắn là 3,3 đến 6,2 (thước tự viết, thô; hai giọng nữ na ná nhau nó không phân biệt chắc được).
 - Vì thước thô, tai người là trọng tài: `out/flow_research/listen_voices.mp4` xếp các clip theo nhóm để nghe.
+- **Tai chủ repo đã chấm (2026-10-01 và 2026-10-02), và lời chấm đứng trên các số đo ở trên.** Mọi clip gắn giọng đều
+  kém thật hơn clip `ak-a3` không gắn. Tám clip cùng công thức của `ak-a3` (Omni, khung đầu `v5_talk_t1_57.png`, 6 s,
+  720p, không gắn giọng, một câu 9 tới 11 âm tiết), trên hai tài khoản:
+
+  | Câu thoại | Kiểu câu | Chủ repo chấm |
+  |---|---|---|
+  | "Hôm nay mình mặc váy ren đen đi cà phê nè." | nói chuyện | đạt |
+  | "Mọi người thấy bộ này có dễ thương không?" | nói chuyện | đạt, cùng người |
+  | "Mình mặc váy này cả ngày vẫn thấy thoải mái nè." | nói chuyện | đạt |
+  | "Tối nay mình mặc bộ này đi chơi nha mọi người." | nói chuyện | đạt, cùng người |
+  | "Váy này mềm lắm, mặc cả ngày vẫn thấy thoải mái." (hai lần) | mô tả | không đạt |
+  | "Váy này mặc cả ngày vẫn thấy thoải mái." | mô tả | không đạt |
+  | "Chất vải của váy này rất mềm và thoáng mát." | mô tả | không đạt |
+
+- **Luật viết thoại**: mỗi clip một câu, viết như đang nói chuyện với người xem: xưng "mình", có từ đệm ("nè", "nha"),
+  hoặc hỏi thẳng ("Mọi người thấy ... không?"). Không viết câu mô tả sản phẩm kiểu quảng cáo ("Váy này ...", "Chất vải
+  ..."): model đọc nó như đọc văn bản, chậm hơn (3,9 tới 4,6 so với 4,9 tới 5,2 âm tiết một giây), thường trầm hơn, và
+  nghe ra người khác. Một vế hay hai vế không đổi kết quả. Ý nào cần nói thì đổi sang lời nói chuyện trước khi gửi.
+- Luật này mới thử trên một nhân vật, một ảnh khung đầu, giọng nữ miền Nam, clip 6 s. Dài hơn, hai câu trong một clip,
+  nhân vật khác: chưa thử.
 - Cao độ (Hz) ở mục 8 là thước yếu: hai người khác nhau vẫn có thể cùng cao độ.
 - Sửa lời bằng Omni edit hay bằng video tham chiếu đều không được: tiếng giữ nguyên, lời mới bị in thành phụ đề.
 
@@ -343,5 +367,5 @@ Quality không nhận ảnh, nhân vật hay giọng nào. Hai nhân vật cùng
 khoản này chỉ có 8 giây. (Lượt đo đầu của tôi đọc sai dấu hiệu từ chối nên từng ghi "không model nào từ chối ảnh";
 đã đo lại bằng dấu hiệu đúng.)
 
-**Còn mở**: tai người nghe nhóm "không gắn giọng" có ra một người không; hai người cùng giới thì giọng nào vào ai; gắn
-giọng trên Veo Fast; kéo dài nhiều lần liên tiếp.
+**Còn mở**: luật viết thoại có đứng ở clip dài hơn 6 s, hai câu nói chuyện trong một clip, nhân vật hay ảnh khung đầu
+khác không; hai người cùng giới thì giọng nào vào ai; gắn giọng trên Veo Fast; kéo dài nhiều lần liên tiếp.

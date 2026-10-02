@@ -116,18 +116,32 @@ Talking shots:
 
 | Need | Route | Credits | Look | Voice | Evidence |
 |---|---|---|---|---|---|
+| A real, decisive voice, one person over many clips | Omni Frames, 6 s, a start frame, NO voice ingredient, ONE short line said as talk | 10 per 6 s | exact | the owner's ear: pass, one person, 4 clips of 4 over two accounts | `ak-a3`, `voice-a3-rep-1`, `voice-a3-rep-5`, `new-acct-talk-1` |
 | All lines fit in 10 s | ONE Omni take from a start frame, timed beats, cut apart in the edit | 15 | exact | one take, one voice | v7 (`v7-talk-onetake`) |
 | Up to about 15 s in one shot | Veo Lite from a start frame, then Extend | 20 | exact start, picture continues | not held across the join by our ruler | `ak-x0`, `ak-x1` |
-| The same voice over many clips | Ingredients: one image and the Flow voice, Veo 3.1 Lite | 10 per 8 s | faithful redraw; check for invented accessories and a fading tail | the Flow voice, clip after clip | `ak-a7`, `ak-a7b`, `ak-v3~r2`, `ak-v4`, `ak-a7c` |
+| A voice the user made in Flow, over many clips | Ingredients: one image and the Flow voice, Veo 3.1 Lite | 10 per 8 s | faithful redraw; check for invented accessories and a fading tail | the Flow voice, clip after clip; the owner's ear: less real than the first row | `ak-a7`, `ak-a7b`, `ak-v3~r2`, `ak-v4`, `ak-a7c` |
 | Two speakers | Ingredients on Omni: an image and one voice per speaker | 12 per 8 s | loose redraw | each voice went to the right speaker (a woman and a man) | `ak-f1` |
-| Look matters more than one voice | Frames with the same voice sentence in every prompt | 10 to 12 | exact | a family of voices, not one | `ak-v1`, `ak-v2`, `ak-v5`, `ak-v6` |
+| Two lines in one 8 s clip (not a route for speech) | Frames with the same voice sentence in every prompt | 10 to 12 | exact | a family of voices, not one; the owner's ear: none of them real | `ak-v1`, `ak-v2`, `ak-v5`, `ak-v6` |
 
 Not routes: a character typed into a Frames prompt (Flow drops it, `ak-a3`); a video ingredient or an Omni edit to
 change words (it copies the audio, `ak-n3`, `ak-n1-edit-line`).
 
-When speech falls in more than one clip, the skill does not choose. It puts the trade to the user in plain words:
-exact look with one take; one Flow voice with a redrawn look; or exact look with voices that are only alike. The
-listening file of this campaign (`out/flow_research/listen_voices.mp4`) is the kind of evidence it shows.
+How a spoken line is written, settled by the owner's ear on eight clips (2026-10-02, `test-results.md` section 3):
+
+- One line a clip, 9 to 11 syllables, said as talk to the viewers: first person ("mình"), a particle ("nè", "nha"),
+  or a question ("Mọi người thấy bộ này có dễ thương không?"). Four of four passed and were heard as one person.
+- Never a line that describes the product the way an advert does ("Váy này ...", "Chất vải của váy này ..."). Four of
+  four came out fake, slow and as another person, with one clause as much as with two.
+- An idea that reads as a description is turned into talk before it is sent: "Váy này mặc cả ngày vẫn thấy thoải
+  mái." failed, "Mình mặc váy này cả ngày vẫn thấy thoải mái nè." passed.
+- This is one character, one start frame, a young Southern Vietnamese woman's voice, 6 s on Omni Frames. Past that the
+  skill says it is untried and plays the first clip to the user before the rest are made.
+
+When speech falls in more than one clip, the skill starts from the first row above and still does not decide alone.
+It puts the trade to the user in plain words: the real voice with one short line a clip; exact look with one take;
+or the Flow voice the user made, with a redrawn look and a voice the owner heard as less real. The listening files
+of this campaign (`out/flow_research/listen_voices.mp4`, `out/al/voice/`, `out/al/voice2/`) are the kind of evidence
+it shows.
 
 ## 6. Rule four: money
 
@@ -176,7 +190,8 @@ live from the MCP (G8), not copied into prose: two behaviours of Flow's page and
 three days.
 
 Untested today, and marked so: two speakers of the same gender; a voice ingredient on Veo Fast; more than one Extend
-in a row; Veo Quality; speech in any language but Vietnamese; 16:9.
+in a row; Veo Quality; speech in any language but Vietnamese; 16:9; the line-writing rule past 6 s, with two lines of
+talk in one clip, with another character or start frame, or with a voice that is not a young Southern woman's.
 
 ## 10. How the skills are tested before they are trusted
 

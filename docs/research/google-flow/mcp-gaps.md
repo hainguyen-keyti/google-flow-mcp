@@ -55,7 +55,10 @@ repo's source at `615bcac`.
     rendering when the wait ends says what the request check heard only when that check failed;
   - the owner's ear, the same day: every clip made with a voice ingredient sounds less real than `ak-a3`, which
     carried none (Omni, Frames, one short line). A voice ingredient holds one voice across clips; it is not the
-    way to the most lifelike one;
+    way to the most lifelike one. On 2026-10-02 the ear settled what is: with A3's recipe a short line said as talk
+    passed in 4 clips of 4 and a line that describes the product failed in 4 of 4, over two accounts
+    (`test-results.md` section 3). So `voices` serves a voice the user made in Flow, and the most lifelike speech
+    needs no tool that is missing;
   - paid once each: Veo 3.1 Lite, one image, LilyVoice, 10 credits; Omni 1.1 Flash 8 s, one image, LilyVoice and
     Achird, 12 credits; request and recipe carried exactly those voices.
   - Not built: `flow_voices` without a character (its signature was a non-goal).
@@ -212,6 +215,7 @@ repo's source at `615bcac`.
 | an image with several records | its row in the "+" dialog is told by the url of the first one listed, while any of its workflow ids passes the chip check | review of plan AL; none of 67 images holds two records |
 | `Backend.generate` (the tools that run gflow) | a cookie notice the driver could NOT press, met only in that tool's own sessions (Agent mode, the listing read), is named when it made one of them fail and not when they went through; the next browser tool names it, since every session meets a standing notice again | scoped re-review of plan AL, 2026-10-02; a pressed notice is carried, a standing one is not |
 | `src/video/gen.py:231-236` `read_credits_live`, called by `run_job` before and after every gflow run | each balance read opens a session of its own, outside `Backend._with`: a cookie notice pressed there, or left standing there, is written to the server's stderr and to no answer. Rare, since the Agent-mode session of the same call opens the project page first and presses the notice there | round two of that re-review; `gen.py` was outside plan AL's radius, and `tests/test_mcp_server.py` pins that the backend hands `run_job` no balance reader of its own |
+| `src/video/flow/uploads.py` `upload` (`flow_upload`, `video flow upload`) | on the account signed in on 2026-10-02 it raised `upload: rpc maseQ not observed; saw []` twice running while the image DID reach the project each time (the listing then held two `v5_talk_t1_57.png`); a caller that retries on the error litters the project, and twin titles are a hazard of their own. Which request carries the upload now was not looked for | 2026-10-02, project `014020b7`; the last upload seen answering on `maseQ` was on the previous account |
 | `overlays.watch_cookie_notice`, the press itself | Playwright runs a click's pre-checks, which wait on the handler once the action that met the notice has timed out: a press begun after that fails at its own 3 s and the notice is left for the next session, named as not pressed | read off `coreBundle.js:21698-21725`, never seen live; the watch for the bar to leave uses no such check |
 | `ingredients._card` | a pane that comes up between the read of the standing panes and the first read after the hover (0.4 s) is taken for the chip's card; one that then stays over 3 s refuses the run, with no click | scoped re-review of plan AL; fails closed |
 

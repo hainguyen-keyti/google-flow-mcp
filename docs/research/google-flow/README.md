@@ -139,9 +139,11 @@ Routes to one voice across separate clips, measured (rulers and their limits: `t
 
 | Route | Look | Voice | Cost | Evidence |
 |---|---|---|---|---|
+| Omni Frames, 6 s, no voice ingredient, ONE short line said as talk | exact (Frames) | the owner's ear: real, decisive, one person, 4 clips of 4 over two accounts | 10 per 6 s | [M] `ak-a3`, `voice-a3-rep-1`, `voice-a3-rep-5`, `new-acct-talk-1`; `test-results.md` section 3 |
+| The same, with a line that describes the product | exact (Frames) | the owner's ear: fake, another person, slow, 4 clips of 4 | 10 per 6 s | [M] `voice-a3-rep-2` to `-4`, `new-acct-describe-1` |
 | All lines in ONE Omni 10 s take, cut apart in the edit | exact (Frames) | one take, one voice | 15 per 10 s | [M] v7 |
-| Voice ingredient + image, Veo 3.1 Lite | faithful redraw, small inventions | the Flow voice, clip after clip | 10 per 8 s | [M] `ak-a7`, `ak-a7b`, `ak-v3~r2`, `ak-v4`, `ak-a7c` |
-| Voice ingredient + image, Omni | loose redraw | the Flow voice; up to 5 voices, two went to the right two speakers | 10 per 6 s | [M] `ak-a1`, `ak-a2`, `ak-f1` |
+| Voice ingredient + image, Veo 3.1 Lite | faithful redraw, small inventions | the Flow voice, clip after clip; the owner's ear: less real than the first row | 10 per 8 s | [M] `ak-a7`, `ak-a7b`, `ak-v3~r2`, `ak-v4`, `ak-a7c` |
+| Voice ingredient + image, Omni | loose redraw | the Flow voice; up to 5 voices, two went to the right two speakers; the owner's ear: less real than the first row | 10 per 6 s | [M] `ak-a1`, `ak-a2`, `ak-f1` |
 | Frames + the same voice sentence in every prompt | exact | a family of similar voices, not one | 10 to 12 per 8 s | [M] `ak-v1`, `ak-v2`, `ak-v5`, `ak-v6` |
 | Extend a talking Veo clip | continues the picture: 8 + 7 = 15 s in one shot | not held across the join by our ruler | 10 per 7 s | [M] `ak-x0`, `ak-x1` |
 | Video ingredient, or Omni edit, with a new line | copies the source | cannot change speech; the edit burns the line in as a subtitle | 20 | [M] `ak-n3`, `ak-n1-edit-line` |
@@ -151,8 +153,11 @@ Routes to one voice across separate clips, measured (rulers and their limits: `t
   ingredient and 2.5 to 3.5 apart without it (across the two models: 2.1 to 2.6 with it, 1.9 to 4.4 without);
   ingredient against no ingredient, 3.3 to 6.2. Clips with the ingredient sound most like the preset behind the Flow
   voice in two of three; clips without it sound most like other presets every time.
-- What is not settled: whether an ear hears one person in the clips without an ingredient. The ruler cannot say
-  (1.5 to 4.7 straddles its line); `out/flow_research/listen_voices.mp4` is for the owner's ear.
+- Settled by the owner's ear on 2026-10-01 and 2026-10-02, where the ruler could not say (1.5 to 4.7 straddles its
+  line): every clip with a voice ingredient sounds less real than `ak-a3`, and without an ingredient the kind of line
+  decides. A short line said as talk (first person, a particle such as "nè" or "nha", or a question to the viewers)
+  gave a real, decisive voice heard as one person in 4 clips of 4; a line that describes the product failed in 4 of
+  4. Tried at 6 s on Omni Frames with one start frame and one kind of voice only (`test-results.md` section 3).
 - Community: since Omni 1.1 the Agent no longer carries one voice across clips ([C] `L3.D3`); one voice description
   pasted into every prompt kept three Frames clips close enough to pass as one take for one author ([C] `L3.U1`).
 - With several speakers Veo mixes up who speaks when descriptions are alike: tie each line to a visible trait ([C]
@@ -320,8 +325,10 @@ possibly playwright issue 42506, whose reports name Windows only ([G] lane 4 sec
 
 ## 16. Open questions
 
-1. Does an ear hear one person in the clips made without a voice ingredient? Our ruler cannot say. The owner decided
-   on 2026-10-01 to judge voices by ear, with no speaker model: `out/flow_research/listen_voices.mp4` awaits that.
+1. Answered on 2026-10-02 (section on voice routes, and `test-results.md` section 3): the owner heard one person in
+   the four clips whose line is said as talk, and a fake, other voice in the four whose line describes the product.
+   What is still open under it: does the rule hold past 6 s, with two lines of talk in one clip, with another
+   character or start frame, with a male or a Northern voice?
 2. Two speakers of one gender: which voice goes to whom, and is there a way to bind them?
 3. A voice ingredient on Veo Fast: the composer allows one; never run.
 4. Does anything a prompt controls change the Veo audio filter's odds? Five of eleven two-frame jobs failed; one

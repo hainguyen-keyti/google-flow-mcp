@@ -160,6 +160,44 @@ Findings:
 6. **A video ingredient or an Omni edit cannot change speech**: the first copies the source's audio, the second also
    writes the new words on screen.
 
+### The owner's ear, 2026-10-01 and 2026-10-02: what the rulers above could not say
+
+The owner listened to the labelled files and judged; no number below decided anything. Two verdicts stand over
+findings 1 and 2.
+
+**Every clip made with a voice ingredient sounds less real than `ak-a3`, which carried none** (2026-10-01, on
+`out/flow_research/listen_voices.mp4`: only A3 "sounds most real, speaks with decision, like a real person"). The
+distance ruler was right that the ingredient holds ONE voice; it had no way to say that voice sounds like a machine.
+
+**Without an ingredient, the kind of line decides.** Eight clips with A3's recipe, over two Google accounts: Omni 1.1
+Flash, Frames, 6 s, 720p, the start frame `v5_talk_t1_57.png`, no voice ingredient, the same prompt around one line
+of 9 to 11 syllables (request `eb1hJf`, key `abra_i2v_6s`, 10 credits each).
+
+| Clip | Job | The line | Kind | Starts at | Pace | Pitch | The owner |
+|---|---|---|---|---|---|---|---|
+| A3 | `ak-a3` | "Hôm nay mình mặc váy ren đen đi cà phê nè." | said as talk | 1.22 s | 5.02 syll/s | 242 Hz | pass |
+| NEW 1 | `voice-a3-rep-1` | "Mọi người thấy bộ này có dễ thương không?" | said as talk | 1.24 s | 5.06 | 258 Hz | pass, the same person as A3 |
+| NEW 5 | `voice-a3-rep-5` | "Mình mặc váy này cả ngày vẫn thấy thoải mái nè." | said as talk | 1.22 s | 4.91 | 239 Hz | pass |
+| NEW 6 | `new-acct-talk-1` | "Tối nay mình mặc bộ này đi chơi nha mọi người." | said as talk | 1.72 s | 5.21 | 225 Hz | pass, the same person as A3 |
+| NEW 2 | `voice-a3-rep-2` | "Váy này mềm lắm, mặc cả ngày vẫn thấy thoải mái." | a description | ruler broken by a hum | about 3 | ruler broken | fail |
+| NEW 3 | `voice-a3-rep-3` | "Váy này mặc cả ngày vẫn thấy thoải mái." | a description | 1.64 s | 4.55 | 208 Hz | fail |
+| NEW 4 | `voice-a3-rep-4` | NEW 2's line again | a description | 1.84 s | 3.90, one pause of 0.32 s | 234 Hz | fail |
+| NEW 7 | `new-acct-describe-1` | "Chất vải của váy này rất mềm và thoáng mát." | a description | 1.11 s | 4.46 | 205 Hz | fail |
+
+- Said as talk: first person ("mình"), a particle ("nè", "nha"), or a question put to the viewers. Four of four pass.
+- A description: the product is the subject, as in an advert. Four of four fail, in the owner's words "fake, like a
+  machine reading", "another person", "slow, without decision". One clause or two made no difference (NEW 3 is one
+  clause), and NEW 5 says NEW 3's idea as talk and passes.
+- NEW 6 and NEW 7 were made on another account with words none of the earlier lines used, so the kind of line
+  decides, not a few words.
+- The crude ruler (`out/al/prosody.py`) separates the two groups by pace on every clip it could read: the passes
+  speak at 4.9 to 5.2 syllables a second, the fails at 3.9 to 4.6. Pitch leans the same way and overlaps (passes 225
+  to 258 Hz, fails 205 to 234 Hz), and the moment speech starts separates nothing. No verdict was taken from it.
+- A first guess, "one clause, no comma", was refuted by NEW 3. It is kept here because it cost 20 credits to learn.
+- Not tried: a clip longer than 6 s, two lines of talk in one clip, another character or start frame, a voice that is
+  not a young Southern Vietnamese woman's. Files: `out/al/voice/`, `out/al/voice2/`, each with its ledger and its
+  listening file.
+
 ## 4. Look: what holds the picture
 
 - **Frames holds it.** Six talking start-frame clips at 720p on two models (`ak-a3` for 6 s; `ak-v1`, `ak-v2`,
