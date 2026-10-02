@@ -1,4 +1,4 @@
-# Manual test of the `video` MCP server: 48 tools, with prices and guard rails
+# Manual test of the `video` MCP server: 49 tools, with prices and guard rails
 
 A pass to run by hand, or to hand to another agent that calls the tools over MCP. Every result shape below was
 **measured on a real account** between 2026-09-14 and 2026-09-29, not inferred from the code. For the generated
@@ -44,7 +44,7 @@ If tier 0 is red, stop: the fault is below anything you would test by hand.
 **`project_delete` permanently deletes clips, ingredients and prompts.** Read the id twice before calling it. Never
 paste a real project's id into this tool.
 
-## 3. The 48 tools
+## 3. The 49 tools
 
 Prices were measured on the Pro plan. Groups A and B are safe on any project; group C belongs in the scratch project.
 
@@ -55,6 +55,7 @@ Prices were measured on the Pro plan. Groups A and B are safe on any project; gr
 | `flow_lane` | none | `{"verdict": "MIGRATED", "projects": <n>, "roots": {...}}` |
 | `flow_projects` | none | list of `{id, title, created, cover_media_id, thumbnail_url}`. **An id need not be a UUID**: one account has `8822142b-ca75-46b7-aac8-03d2831_backfill` |
 | `flow_credits` | none | `{"balance": <int>, "raw": [...]}` |
+| `flow_capabilities` | none | no browser, answers at once: `{note, video: {measured, modes, aspects, counts, models: {<model>: {label, modes, resolutions, seconds, chooses_length, credits_x1: [{resolution, seconds, credits}], image_ingredients, voice_ingredients}}, caps_measured}, character_video, image, editor}`. Every number is the one the tools refuse and charge by (the surveyed `flow_options.json` and the measured constants), with its date; it is not a live read: `gen_video(dry_run=true)` is the live price of one cell |
 | `flow_media` | `project_id`, `all_versions=False`, `kind`, `since`, `limit`, `brief=False` | `{"meta": {id, title}, "media": [...], "models": [...]}`. `all_versions=true` adds a `versions` key: records with `type` and `workflow_id`. Filters: `kind` is `video` or `image`; `since` takes an epoch or an ISO date (a date without a zone is read in local time); `limit` keeps the N newest rows of EACH list, newest first; `brief=true` drops `url` and cuts `prompt` to 120 characters plus an ellipsis. With any filter the result adds `media_total` and `truncated` (and `versions_total` with `all_versions=true`); `truncated` counts dropped ROWS, so `brief` alone leaves it false. Unfiltered, the order is Flow's listing order, NOT newest first: read `created`. Bad values (`kind="clip"`, `limit=0`, `since="yesterday"`) are REFUSED. Measured 2026-09-17: unfiltered 28,378 characters, `all_versions=true` 122,919 |
 | `flow_characters` | `project_id` | list of `{entity_id, name, portrait_media_id, portrait_workflow_id}`. Download the portrait with `portrait_media_id` (`null` while the listing has no record of the image); a new project gives `[]` |
 | `flow_tools` | `project_id` optional | the community tool gallery, the same in every project; its size changes over time. With no `project_id` the server opens the first project on the grid, because Flow only loads the gallery inside a project |

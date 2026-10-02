@@ -33,6 +33,7 @@ import asyncio
 import json
 import re
 import sys
+from pathlib import Path
 
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
@@ -48,7 +49,9 @@ MEDIA_LIMIT = 20
 MEDIA_CEILING = 20_000
 
 # Free AND side-effect free: safe to call on the owner's live account on every run.
-READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits", "flow_tools")
+READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits", "flow_tools", "flow_capabilities")
+# The surveyed table itself, read here off the file and not through the code under test.
+OPTIONS_FILE = Path(mcp_server.__file__).with_name("flow") / "flow_options.json"
 READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_uploads", "scene_list")
 # Read-only too, but it needs a scene id, which only scene_list's own answer can supply.
 READ_ONLY_PER_SCENE = ("scene_clips",)
@@ -184,6 +187,31 @@ def a_balance(payload):
     balance = payload.get("balance") if isinstance(payload, dict) else None
     if isinstance(balance, bool) or not isinstance(balance, int) or balance < 0:
         return f"balance is {balance!r}, expected an int of 0 or more"
+    return None
+
+
+def a_capability_map(payload):
+    """An agent budgets a film from this answer, so its video cells have to be the surveyed file's, which is read
+    here off the file itself: an answer of the right shape with one price a credit off is a wrong budget."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("video"), dict):
+        return f"expected an object holding a video table, got {str(payload)[:60]}"
+    surveyed = json.loads(OPTIONS_FILE.read_text(encoding="utf-8"))
+    models = payload["video"].get("models")
+    if not isinstance(models, dict) or sorted(models) != sorted(surveyed["video"]["models"]):
+        return f"the models are {sorted(models) if isinstance(models, dict) else models!r}, the surveyed file holds others"
+    for name, entry in surveyed["video"]["models"].items():
+        cells = models[name].get("credits_x1") if isinstance(models[name], dict) else None
+        said = sorted(cell.get("credits") for cell in cells) if isinstance(cells, list) else cells
+        if said != sorted(entry["price_x1"].values()):
+            return f"{name} costs {said}, the surveyed file says {sorted(entry['price_x1'].values())}"
+        for cap in ("image_ingredients", "voice_ingredients"):
+            held = models[name].get(cap)
+            if isinstance(held, bool) or not isinstance(held, int) or held < 0:
+                return f"{name} has no {cap} cap: {held!r}"
+    if payload["video"].get("measured") != surveyed["measured"]:
+        return (
+            f"dated {payload['video'].get('measured')!r}, the surveyed file is dated {surveyed['measured']!r}"
+        )
     return None
 
 
@@ -463,6 +491,7 @@ async def run(findings):
                     "flow_credits": a_balance,
                     # Called with no project on purpose: that is the path that opens the first project itself.
                     "flow_tools": a_tool_list,
+                    "flow_capabilities": a_capability_map,
                 }
                 projects = None
                 for name in READ_ONLY_NO_ARGS:

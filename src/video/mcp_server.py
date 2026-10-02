@@ -25,6 +25,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from video import gen as gen_mod
 from video import outcome as outcome_mod
 from video.flow import agent as agent_mod
+from video.flow import capabilities as capabilities_mod
 from video.flow import characters as characters_mod
 from video.flow import clips as clips_mod
 from video.flow import download as download_mod
@@ -461,6 +462,10 @@ class Backend:
 
     async def credits(self) -> dict[str, Any]:
         return await self._with(reader.credits)
+
+    async def capabilities(self) -> dict[str, Any]:
+        # No session: the answer is the repo's own measured table, the one the tools refuse and charge by.
+        return capabilities_mod.capabilities()
 
     async def media(
         self,
@@ -1081,7 +1086,8 @@ server = TellingServer(
         "table offers only from the Ultra plan, at 50 credits; on this Pro account Flow greys it out, so it is "
         "refused before any click. gen_t2i and gen_i2i are credit-free but draw on a daily image quota. Check a tool's description "
         "for its cost before calling it: each carries what was MEASURED here and, where Flow's published table "
-        "disagrees, that figure too (Omni Flash Edit is listed at 40 and measured 20). Every call drives a real Chrome "
+        "disagrees, that figure too (Omni Flash Edit is listed at 40 and measured 20); flow_capabilities answers "
+        "the prices, lengths and caps as data, with no browser. Every call drives a real Chrome "
         "session and blocks until Flow answers: a read takes about 15-50 s and a change about 50 s, a generation "
         "2-5 min, clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. To start a video "
         "without waiting for its render, job_submit runs gen_video's own guards and click and answers once the "
@@ -1237,6 +1243,22 @@ async def flow_projects() -> str:
 @server.tool(name="flow_credits", description="Current Flow credit balance. Free.")
 async def flow_credits() -> str:
     return _json(await backend.credits())
+
+
+@server.tool(
+    name="flow_capabilities",
+    description=(
+        "What Flow offers and what it costs on this account, as data and with no browser: for each video model its "
+        "modes, resolutions, lengths, the price of every cell at x1, and how many image and voice ingredients it "
+        "takes; the counts and aspects; the image models; gen_character's prices by length; and the measured prices "
+        "of clip_extend, clip_edit and agent_send. Every number is the one the tools themselves refuse and charge "
+        "by, each part with the date it was measured; it is the surveyed table, not a live read. The live price of "
+        "one cell is gen_video with dry_run=true, and a paid call is refused when Flow's own price line is over its "
+        "max_credits, so budget from this table and let the live line decide. Free."
+    ),
+)
+async def flow_capabilities() -> str:
+    return _json(await backend.capabilities())
 
 
 @server.tool(
@@ -1973,7 +1995,7 @@ def _longer_lengths() -> str:
         "listing, and a clip that dropped or gained a reference is an error even though it was paid. It spends "
         "credits and is ledgered, at x1: "
         "8 s by default, omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 "
-        "credits by Flow's own price table, unmeasured. "
+        "credits by Flow's own price table, unmeasured (flow_capabilities answers these as data). "
         + _longer_lengths()
         + " Veo 3.1 Lite showed no length choice here (measured); veo-fast stays at 8 s, unmeasured. The live price line is read first and a different price is refused "
         "before the click. dry_run=true returns the quote and the chips, clicks nothing, writes no ledger row, leaves "
@@ -2064,7 +2086,7 @@ def _video_options(*, count: bool = True) -> str:
         f"Models and x1 prices from Flow's price line on {video_mod.OPTIONS['measured']}: "
         + "; ".join(parts)
         + (f". count {video['counts'][0]}-{video['counts'][-1]} multiplies the price; " if count else ". ")
-        + f"aspect one of {video['aspects']}."
+        + f"aspect one of {video['aspects']}. flow_capabilities answers this table as data."
     )
 
 

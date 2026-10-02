@@ -80,6 +80,8 @@ EXPECTED_TOOLS = {
     "job_submit",
     "job_status",
     "job_collect",
+    # Plan AO: prices, lengths and caps as data, 48 to 49 on purpose.
+    "flow_capabilities",
 }
 
 
@@ -169,6 +171,7 @@ TOOL_CALLS: dict[str, dict] = {
     "job_submit": {"prompt": "a boat", "project": "P", "job_id": "job-submit", "max_credits": 20},
     "job_status": {"job_id": "job-status"},
     "job_collect": {"job_id": "job-collect"},
+    "flow_capabilities": {},
 }
 
 
@@ -4591,3 +4594,33 @@ def test_a_blocking_run_in_its_session_is_not_refused_for_a_submit_that_only_wai
     assert [entry[0] for entry in waiting] == ["an-behind"], "the submit was in the queue when the run looked"
     assert not first.is_error and not second.is_error, _texts([first, second])
     assert reached == [("gen_video", "an-first"), ("job_submit", "an-behind")]
+
+
+# Plan AO: what Flow offers and costs, as data.
+
+
+def test_flow_capabilities_answers_the_measured_table_with_no_browser(monkeypatch, tmp_path):
+    from video.flow import capabilities
+
+    opened = _job_backend(monkeypatch, tmp_path)
+
+    answer = _payload(_call("flow_capabilities", {}))
+
+    assert answer == json.loads(json.dumps(capabilities.capabilities())) and opened == []
+    # The cells an agent budgets from are the ones gen_video charges by.
+    cells = answer["video"]["models"]["omni-flash"]["credits_x1"]
+    assert {(c["resolution"], c["seconds"]): c["credits"] for c in cells} == {
+        (resolution, seconds): mcp_server.video_mod.price("omni-flash", resolution, seconds, 1)
+        for resolution in mcp_server.video_mod.VIDEO["models"]["omni-flash"]["resolutions"]
+        for seconds in mcp_server.video_mod.VIDEO["models"]["omni-flash"]["durations"]
+    }
+
+
+def test_the_tools_that_quote_prices_in_prose_point_to_the_table():
+    tools = served_tool_objects()
+
+    assert tools["flow_capabilities"].description.endswith("Free.")
+    assert "dry_run" in tools["flow_capabilities"].description
+    for name in ("gen_video", "job_submit", "gen_character"):
+        assert "flow_capabilities" in tools[name].description, name
+    assert "flow_capabilities" in mcp_server.server.instructions

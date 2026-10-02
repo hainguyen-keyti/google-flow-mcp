@@ -131,6 +131,11 @@ class _Account(mcp_server.Backend):
         super().__init__(out_dir=_STATE["out"])
         self.replies = replies
 
+    async def capabilities(self):
+        if "capabilities" in self.replies:
+            return self.replies["capabilities"]
+        return await super().capabilities()
+
     async def job_status(self, job_id):
         self.replies.setdefault("job_asked_for", []).append(job_id)
         if "job_status" in self.replies:
@@ -202,7 +207,7 @@ def _failing(rows):
 def test_a_healthy_account_passes_every_row(monkeypatch):
     rows = _rows(monkeypatch, _replies())
 
-    assert len(rows) == 18
+    assert len(rows) == 19
     assert _failing(rows) == {}
 
 
@@ -304,7 +309,7 @@ def test_an_empty_project_passes_every_row(monkeypatch):
 
     rows = _rows(monkeypatch, replies)
 
-    assert len(rows) == 18
+    assert len(rows) == 19
     assert _failing(rows) == {
         "scene_clips": "the project holds no scene to read",
         "flow_voices": "the project holds no character to read voices from",
@@ -430,6 +435,33 @@ def _done_job_said_to_be_unknown(replies):
     replies["job_status"] = {**SETTLED, "outcome": {"code": "UNKNOWN"}}
 
 
+def _real_map():
+    from video.flow import capabilities
+
+    return capabilities.capabilities()
+
+
+def _a_cell_at_another_price(replies):
+    # The table an agent budgets from: one cell a credit off the surveyed file is a wrong budget.
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["models"]["omni-flash"]["credits_x1"][0]["credits"] += 1
+
+
+def _a_model_the_survey_holds_left_out(replies):
+    replies["capabilities"] = _real_map()
+    del replies["capabilities"]["video"]["models"]["veo-fast"]
+
+
+def _a_map_dated_another_day(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["measured"] = "2020-01-01"
+
+
+def _a_model_with_no_cap(replies):
+    replies["capabilities"] = _real_map()
+    replies["capabilities"]["video"]["models"]["veo-lite"]["voice_ingredients"] = None
+
+
 CORRUPTIONS = [
     ("flow_lane", _signed_out),
     ("flow_projects", _repeated_project_id),
@@ -457,6 +489,10 @@ CORRUPTIONS = [
     ("job_status", _status_of_another_job),
     ("job_status", _settled_job_with_no_outcome),
     ("job_status", _done_job_said_to_be_unknown),
+    ("flow_capabilities", _a_cell_at_another_price),
+    ("flow_capabilities", _a_model_the_survey_holds_left_out),
+    ("flow_capabilities", _a_map_dated_another_day),
+    ("flow_capabilities", _a_model_with_no_cap),
 ]
 
 

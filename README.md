@@ -13,7 +13,7 @@ not been measured, it says so.
 
 ## What it is, and what it is not
 
-**It is** a control layer: 48 MCP tools plus a CLI, with a spend ledger, a double-charge guard, and prices in
+**It is** a control layer: 49 MCP tools plus a CLI, with a spend ledger, a double-charge guard, and prices in
 every tool description.
 
 **It is not** a video maker. The script, the shot list, the camera angles and the quality of the result are the
@@ -76,7 +76,7 @@ cp .mcp.json.example .mcp.json
 ```
 
 Edit the copy if `uv` is not on your PATH, then open the folder with an MCP client (Claude Code reads
-`.mcp.json` from the project root). The server serves **48 tools**; every description carries its price.
+`.mcp.json` from the project root). The server serves **49 tools**; every description carries its price.
 
 A server that is already running does **not** pick up new code, and an open session keeps the old tool
 descriptions: after changing anything here, start a new session.
@@ -107,7 +107,7 @@ guess about; the tool says so too.
 | `gen_t2i` / `gen_i2i` (Nano Banana 2) | 0 credits, but a daily image quota |
 | `clip_download` at 1080p | 0 |
 | `clip_download` at 4k (a Flow upscale) | not offered on Pro: greyed out, refused before any click (Flow's table: Ultra, 50) |
-| Every read: lane, projects, media, credits, characters, scenes, voices, and what a clip was made from (`clip_recipe`) | 0 |
+| Every read: lane, projects, media, credits, characters, scenes, voices, what a clip was made from (`clip_recipe`), and this table as data (`flow_capabilities`: every model's cells, lengths and caps, no browser) | 0 |
 
 Timing, so a slow call is not mistaken for a broken one: a read takes 15 to 50 s, a change about 50 s, a
 generation 2 to 5 min, `clip_extend` and `clip_edit` up to 7 min. `job_submit` answered in 153 s with the balance

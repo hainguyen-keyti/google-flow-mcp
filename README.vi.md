@@ -154,7 +154,7 @@ mặt, tay và món đồ.
 `.mcp.json` của repo cắm server vào Claude Code (`uv run --project <repo> --no-sync video mcp run`). Server
 đang chạy không tự nạp code mới, và phiên đang mở còn giữ mô tả tool cũ: sửa code xong phải mở phiên mới.
 
-48 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
+49 tool, chia theo đúng mô tả chi phí của từng tool (mô tả nào cũng nêu giá: "Free.", con số credit, hoặc
 "unmeasured"); bảng đầy đủ sinh từ server ở `docs/tools.md`:
 
 - **Tốn credit**, ghi ledger (`out/ledger.jsonl` mặc định): `gen_t2v`, `gen_i2v`, `gen_r2v`, `clip_extend`,
@@ -240,7 +240,9 @@ mặt, tay và món đồ.
   `job_collect` mỗi lượt khoảng 47 s; mỗi job thu đúng clip của mình; thu lần hai trả lời ngay từ dòng sổ; nộp lại id
   cũ bị từ chối kèm `outcome code=DONE charged=4`.
 - **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
-- **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media` (luôn trả một object,
+- **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_capabilities` (giá từng ô, độ dài, trần
+  ảnh và giọng của từng model thành DỮ LIỆU, đọc từ chính bảng mà tool dùng để từ chối và tính tiền; không mở trình
+  duyệt, không phải số đọc sống: giá sống của một ô là `gen_video` với `dry_run=true`), `flow_media` (luôn trả một object,
   `all_versions=true` thêm khoá `versions`; bốn bộ lọc `kind` là `video` hay `image`, `since` nhận epoch hoặc ngày
   ISO, `limit` giữ N dòng mới nhất của từng list và xếp mới trước, `brief=true` bỏ `url` và cắt `prompt` còn 120 ký
   tự. Không lọc thì thứ tự là thứ tự listing của Flow, KHÔNG sắp theo tuổi: đọc `created`. Có lọc thì kết quả mang

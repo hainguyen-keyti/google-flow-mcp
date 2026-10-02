@@ -92,12 +92,12 @@ def test_the_table_lists_the_arguments_the_server_actually_takes():
 
 
 def test_the_tools_that_really_take_nothing_are_the_only_ones_saying_none():
-    """The three reads that take no argument are the whole of the honest "none"; 43 of them was the bug."""
+    """The four reads that take no argument are the whole of the honest "none"; 43 of them was the bug."""
     rendered = asyncio.run(gen.render())
     served = asyncio.run(gen.tools())
 
     nothing = sorted(t.name for t in served if not (t.input_schema or {}).get("properties"))
-    assert nothing == ["flow_credits", "flow_lane", "flow_projects"], nothing
+    assert nothing == ["flow_capabilities", "flow_credits", "flow_lane", "flow_projects"], nothing
     assert rendered.count("**Arguments**: none") == len(nothing), rendered.count("**Arguments**: none")
 
 
