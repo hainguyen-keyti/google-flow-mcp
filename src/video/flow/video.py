@@ -373,6 +373,7 @@ async def generate(
     wait: float = 480.0,
     voices: list[str] | tuple[str, ...] = (),
     retry_of: str | None = None,
+    detach: bool = False,
 ) -> dict[str, Any]:
     """One gen_video run: every check that needs no browser first, then one of the two composer modes."""
     offers_length = bool(_model(model)["durations"])
@@ -415,6 +416,7 @@ async def generate(
                 "r2v", references, length, resolution if offers_length else None
             ),
             retry_of=retry_of,
+            detach=detach,
         )
         return {"mode": mode, "table_credits": table, **result}
 
@@ -484,6 +486,7 @@ async def generate(
             count=count,
             max_credits=max_credits if max_credits is not None else table,
             retry_of=retry_of,
+            detach=detach,
         )
     except BaseException:
         if was:
@@ -497,12 +500,21 @@ async def generate(
             result["agent_mode_restored"] = f"no: {type(exc).__name__}"
     body = result.get("body_check") or {}
     if not dry_run and body and not body.get("ok"):
+        heard = (
+            f"({kind}, {length or 'no'} s length, frames {[r.id for r in refs]}): model keys "
+            f"{body.get('model_keys')}, missing {body.get('missing')}, rpc {body.get('rpcid')}"
+        )
+        if result.get("state") == "started":
+            # A detached job (plan AN) has no balance read after it yet, and it is rendering: say what is true now.
+            raise RuntimeError(
+                f"the job was started, but Flow's submit request did not match what was asked {heard}. It renders "
+                "all the same: fetch it with job_collect and judge the clip. Do not run this job again under a new "
+                f"job_id; its ledger row holds the body check. job {job_id}"
+            )
         spent = result.get("spent", (result.get("credits_before") or 0) - (result.get("credits_after") or 0))
         raise RuntimeError(
-            f"{spent} credits were spent, but Flow's submit request did not match what was asked ({kind}, "
-            f"{length or 'no'} s length, frames {[r.id for r in refs]}): model keys {body.get('model_keys')}, missing "
-            f"{body.get('missing')}, rpc {body.get('rpcid')}. The clip ({result.get('path') or result.get('media_id')}) "
-            f"may not be what was asked. Do not run this job again under a new job_id; its ledger row holds the body "
-            f"check. job {job_id}"
+            f"{spent} credits were spent, but Flow's submit request did not match what was asked {heard}. The clip "
+            f"({result.get('path') or result.get('media_id')}) may not be what was asked. Do not run this job again "
+            f"under a new job_id; its ledger row holds the body check. job {job_id}"
         )
     return {"mode": mode, "table_credits": table, **result}

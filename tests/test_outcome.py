@@ -227,6 +227,7 @@ def test_the_codes_are_a_closed_set_with_one_line_of_advice_each():
         "PENDING",
         "NOT_SUBMITTED",
         "UNKNOWN",
+        "STARTED",
         "CHARGED_NO_OUTPUT",
         "AUDIO_FILTERED",
         "NO_REASON",

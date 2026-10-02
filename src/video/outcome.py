@@ -38,6 +38,8 @@ CODES = {
     "same job_id",
     "UNKNOWN": "the job was started and no settled outcome is on record, so credits may be gone: check flow_media and "
     f"flow_credits (clip_reconcile for an editor job) and {_NEVER}",
+    "STARTED": "the request left and the job is Flow's to render, or waits to be fetched: ask job_status, fetch it "
+    f"with job_collect, and {_NEVER}",
     "CHARGED_NO_OUTPUT": "the balance moved and no output was taken: look for the clip with flow_media, tell the "
     f"owner, and {_NEVER}",
     "AUDIO_FILTERED": "Flow's audio filter refused the clip and charged nothing; it is random on Veo",
@@ -106,7 +108,9 @@ def classify(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if intent is None and settled is None:
         return _said("NOT_SUBMITTED", 0)
     if settled is None:
-        return _said("UNKNOWN", None)
+        # A detached submit (plan AN) writes `started` once its request has left; nothing after it means in flight.
+        after = rows[max(i for i, row in enumerate(rows) if row is intent) :]
+        return _said("STARTED" if any(row.get("status") == "started" for row in after) else "UNKNOWN", None)
     status, charged = settled.get("status"), _charged(settled)
     if status == "done":
         return _said("DONE", charged)

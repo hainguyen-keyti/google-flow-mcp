@@ -995,6 +995,7 @@ async def generate(
     table_credits: int = 0,
     voices: list[str] | tuple[str, ...] = (),
     retry_of: str | None = None,
+    detach: bool = False,
 ) -> dict[str, Any]:
     """One video from characters, project images and voices, or with dry_run the quote and the chips, never a click.
 
@@ -1145,6 +1146,7 @@ async def generate(
             verify=verify,
             click_box=False,
             retry_of=retry_of,
+            detach=detach,
         )
     except BaseException as failed:
         # A restore that fails must never replace why the run failed, which may say credits were spent.
@@ -1171,11 +1173,20 @@ async def generate(
     # reported as done (review of plan U, F1: off 8 s gflow warns Flow drops them, at the same 15 credits).
     check = result.get("body_check") or {}
     if not dry_run and check and not check.get("ok"):
+        heard = (
+            f"model keys {check.get('model_keys')}, missing {check.get('missing')}"
+            f"{', voices sent ' + str(check['voices']) if 'voices' in check else ''}, rpc {check.get('rpcid')}"
+        )
+        if result.get("state") == "started":
+            # A detached job (plan AN) has no balance read after it yet, and it is rendering: say what is true now.
+            raise RuntimeError(
+                f"the job was started, but Flow's submit request did not match what was asked: {heard}. It renders "
+                "all the same: fetch it with job_collect and judge the clip. Do not run this job again under a new "
+                f"job_id; its ledger row holds the body check. job {job_id}"
+            )
         spent = result.get("spent", (result.get("credits_before") or 0) - (result.get("credits_after") or 0))
         raise RuntimeError(
-            f"{spent} credits were spent, but Flow's submit request did not match what was asked: model keys "
-            f"{check.get('model_keys')}, missing {check.get('missing')}"
-            f"{', voices sent ' + str(check['voices']) if 'voices' in check else ''}, rpc {check.get('rpcid')}. The clip "
+            f"{spent} credits were spent, but Flow's submit request did not match what was asked: {heard}. The clip "
             f"({result.get('path') or result.get('media_id')}) may not be what was asked. Do not run this job again "
             f"under a new job_id; its ledger row holds the body check. job {job_id}"
         )

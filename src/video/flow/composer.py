@@ -755,8 +755,13 @@ async def _submit(
     count: int = 1,
     max_credits: int | None = None,
     retry_of: str | None = None,
+    detach: bool = False,
 ) -> dict[str, Any]:
     """The one money path: every mode goes through the same price guard, single click and ledger.
+
+    detach (plan AN) leaves once a submit request has been seen going out: it writes a `started` row holding what a
+    later call needs to find the clip (the workflow Flow's reply named, the workflows listed before, the prompt) and
+    returns; nothing is waited for, read or fetched. With no submit request seen it runs on as a blocking call does.
 
     dry_run stops once the price is read: no balance read, no ledger row, no click, and the composer is emptied again.
     watch hears every request of the click window and its report lands in the outcome row. strict_output takes only
@@ -766,6 +771,11 @@ async def _submit(
     the price check, replaces it. click_box=False types the prompt where the caret already is. A refusal before the click empties the composer again; anything that goes wrong
     after the click still writes an outcome row and says credits may be spent.
     """
+    if detach and count != 1:
+        # How Flow names the workflows of x2 to x4 was never measured, so a later call could not claim their clips.
+        raise ValueError(
+            f"a detached submit makes one clip, got count {count}: x2 to x4 go through gen_video"
+        )
     ledger = gen.Ledger(out_dir / "ledger.jsonl")
     before: set[str] = set()
     credits_before = None
@@ -862,6 +872,36 @@ async def _submit(
         # why is to look at the screen while the refusal is still on it (measured 2026-09-13 on tryon2-04).
         with contextlib.suppress(Exception):
             await session.page.screenshot(path=str(out_dir / f"submitted_{digest}.png"))
+
+        if detach and any(rpcid in mc.SUBMIT_RPCS for rpcid in frames):
+            # The request is out, so the job is Flow's now and leaving the page cancels nothing (plan AN).
+            flow = await replies.report()
+            session.page.remove_listener("response", replies.on_response)
+            watched = {"body_check": watch.report()} if watch is not None else {}
+            ledger.append(
+                job_id,
+                "started",
+                workflow_id=flow.get("workflow_id"),
+                workflows_before=sorted(before),
+                prompt=prompt,
+                prompt_text=checked.get("prompt_text"),
+                rpcids=sorted(frames),
+                notice=notice,
+                **watched,
+                flow=flow,
+                page_after_click=page_after_click,
+            )
+            return {
+                "job_id": job_id,
+                "kind": kind,
+                "state": "started",
+                "workflow_id": flow.get("workflow_id"),
+                "quoted_credits": confirm["price"],
+                "credits_before": credits_before,
+                **extra,
+                **checked,
+                **watched,
+            }
 
         deadline = asyncio.get_running_loop().time() + wait
         while True:
