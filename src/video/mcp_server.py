@@ -1007,8 +1007,9 @@ server = TellingServer(
         "session and blocks until Flow answers: a read takes about 15-50 s and a change about 50 s, a generation "
         "2-5 min, clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. To start a video "
         "without waiting for its render, job_submit runs gen_video's own guards and click and answers once the "
-        "request has left; job_status then says where the job stands and job_collect fetches the clip and writes "
-        "its ledger row, both free, and several submitted jobs render at once. The "
+        "request has left (153 s measured, the balance already charged); job_status then says where the job stands "
+        "and job_collect fetches the clip and writes its ledger row, both free and about 47 s each, and several "
+        "submitted jobs render at once. The "
         "credit-spending tools require a job_id. Never call one again under a new job_id because it was slow, "
         "errored or timed out: check flow_media and flow_credits first, and if you do call again keep the same "
         "job_id, which the ledger refuses instead of charging twice. Every answer of a real run carries an outcome "
@@ -2089,6 +2090,10 @@ async def gen_video(
         "job_collect settles such a job as nothing generated and it cannot be retried from here, so use gen_video "
         "when the reason matters. While a submitted job renders, a blocking tool run beside it reads its own spend "
         "off a balance the submitted job may move, so its spent and balance_moved can include that job's price. "
+        "Measured 2026-10-03 on two omni-flash 360p 4 s jobs submitted back to back: each call answered in 153 s "
+        "(most of it setting the composer up; allow 2-4 min), Flow named the workflow both times, the balance had "
+        "dropped by the price when it was read right after each submit, not at the finish, and both clips went on "
+        "rendering after the page had closed and were ready within about 4 min of their submits. "
         "out_dir must be inside out/." + _JOB_ID_RULE
     ),
 )
@@ -2158,7 +2163,8 @@ async def job_submit(
         "the media_id once the clip is listed, the price quoted before the click, the balance before the click and "
         "now, the seconds since the submit, and the job's outcome. A job_id no ledger under the out folder holds, "
         "a job with no started row (a blocking tool ran it, or its job_submit ended before the request left) and "
-        "ledgers that cannot be read are errors that open with an outcome line. Free."
+        "ledgers that cannot be read are errors that open with an outcome line. A look at Flow took 47 s (measured "
+        "2026-10-03). Free."
     ),
 )
 async def job_status(job_id: str) -> str:
@@ -2186,7 +2192,8 @@ async def job_status(job_id: str) -> str:
         "fetches or writes twice. It never clicks Start generation and never types in the prompt box, so it cannot "
         "start or pay for anything: the credits were spent by job_submit; the one thing it may click is the "
         "editor's own Download menu, when every direct link to the file fails. Every answer and every error "
-        "carries the job's outcome. Free."
+        "carries the job's outcome. Fetching a 4 s 360p clip took 47 s, and a second collect of it answered from "
+        "the row at once (measured 2026-10-03). Free."
     ),
 )
 async def job_collect(job_id: str) -> str:

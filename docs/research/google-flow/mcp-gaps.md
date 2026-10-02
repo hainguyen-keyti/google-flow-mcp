@@ -8,6 +8,9 @@ not give, each with its evidence and a proposed surface. Plan AK built none of i
 with its commit and with what closing it measured. G5, G7, G8, sections 2 and 3 stand as written, except the rows
 marked done.
 
+**Status after plans AM and AN (2026-10-03): 48 tools. G5 and G7 are closed** as well; G8 and what is left of sections
+2 and 3 are plan AO's.
+
 Scope line, unchanged: the MCP exposes Flow and guards the money. How a film is made (script, shots, QA, edit) is the
 skill set's job (`skill-design.md`).
 
@@ -180,6 +183,27 @@ repo's source at `615bcac`.
 - Proposed: `job_submit` (the same guards, returns after the request is seen leaving), `job_status`, `job_collect`
   (downloads, writes the ledger's `done` row). The blocking tools stay as they are for simple callers.
 - Tier 1 (the one-click rule and the ledger row before the click must hold across two calls).
+- **Closed by plan AN**: `job_submit` is `gen_video`'s own run with `detach`, so the checks, the job id guard, the
+  row before the click and the one click are the blocking tool's, shared by code and not by copy; it leaves once a
+  submit rpc is seen and writes a `started` row with the workflow Flow's reply named. `job_status` and `job_collect`
+  (`src/video/flow/jobs.py`) work from the ledger, the listing and the balance and cannot click Start generation or
+  type; a settled job is answered from its row with no browser, so one job has one settled row. Paid proof,
+  2026-10-03, two omni-flash 360p 4 s jobs back to back, 8 credits: each submit answered in 153 s with a workflow
+  id (rpc `YhhmEf`); the balance had dropped by 4 right after each submit, so Flow charges at the submit and not at
+  the finish; both clips rendered after the page had closed and were ready within about 4 minutes; each collect
+  fetched its own clip (looked at: the boat and the kite), 360x640, 4.000 s; a second collect answered from the row;
+  a used job id was refused with `outcome code=DONE charged=4`. What it gives up and where it is narrower than the
+  blocking tools, each named by its tier 1 review: Flow's reason for a refusal after the call has left is not heard,
+  so such a job is settled as nothing generated ten minutes after its submit and takes no `retry_of` (a refusal
+  heard while the page is still open is settled there, typed, as `gen_video` does); a job's `spent` is its own
+  bracket only when no other job could have moved the balance, else the quoted price, said as such; a clip Flow
+  keeps listed and unfinished is answered `rendering` for as long as it stays so; "in between" is measured from the
+  intent row while the balance is read up to 90 s earlier, which only two server processes can fall into; a
+  blocking tool run while a submitted job renders has no shared-balance check of its own; two jobs that were both
+  named no workflow and carry one prompt cannot tell one clip apart and are settled unknown; whether the
+  start-plus-end submit (`nprQif`) names the workflow in its reply was not measured, and a job it does not name is
+  claimed by its prompt. An idea left for later: since Flow charges at the submit, a balance read right after it
+  could give every job its own bracket; it was seen on two jobs only, each read 13 s or more after the submit.
 
 ### G8. Prices, lengths and caps are prose in tool descriptions
 
@@ -219,8 +243,8 @@ repo's source at `615bcac`.
 | gflow pin | repo 0.78.0, `uv tool` 0.73.1, upstream 0.81.0 | lane 4 section 1 |
 | Whisper on a silent clip | not MCP code, but any QA tool must know: it returns a stock sentence | `ak-c1`, `ak-n2a` |
 | `src/video/flow/parsers.py` `_record_fields` | a voice saved with `character_make_voice` is listed by `flow_media` as `kind: "video"` (any record of eight or more fields is one); `parsers.custom_voices` now tells it by its speech arm, the `kind` is unchanged | found in plan AL T5, 2026-10-01 |
-| `scripts/gen_tool_docs.py` `GROUPS` | the groups are typed by hand, so a new tool lands under "Ungrouped" (`clip_recipe` does) | plan AL T3; the script was outside that plan's radius |
-| `docs/mcp-manual-test.md` | written for 44 tools; `clip_recipe` and `gen_video`'s `voices` are not in it | plan AL T6; the file was outside that plan's radius |
+| `scripts/gen_tool_docs.py` `GROUPS` | done in plan AN: every served tool is filed under a group, and a test fails the moment one is not (the groups are still typed by hand) | plan AL T3; `tests/test_tool_docs.py` |
+| `docs/mcp-manual-test.md` | done in plan AN: it names all 48 tools, `clip_recipe` and `gen_video`'s `voices` among them, and a test holds its count and its rows to the served roster | plan AL T6; `tests/test_tool_docs.py` |
 | the `@` picker | it is the "+" dialog and keeps the category that dialog last showed, under which it offers no character; `ingredients.generate` mentions characters before it opens the dialog, any new caller must do the same | $0 probes `out/al/t4.json`, `t4b.json`, 2026-10-01 |
 | `src/video/flow/ingredients.py` `generate`, after `composer._submit` returns | the recipe verdict of a paid clip is raised to the caller and never written to the ledger, whose `done` row is written before the read | review of plan AL, 2026-10-02; the ledger was a non-goal of that plan |
 | `src/video/flow/composer.py` `_submit`, the click on Start generation | a click that times out because something covers the button is recorded `unknown` with "credits may already be spent", though no click was made | review of plan AL; a card left by a hover is now refused before the click, any other cover is not |
@@ -241,7 +265,7 @@ repo's source at `615bcac`.
 |---|---|---|---|
 | AL (done 2026-10-01) | G6 overlays first (the bar blocked every composer tool), then G3 recipe read-back, G2 picker attach, G1 voices, G4 wording | 1 | 22 credits spent of a ceiling of 40 |
 | AM (done 2026-10-02) | G5 typed outcomes and `retry_of` | 1 | 0 to 10 |
-| AN | G7 submit, status, collect | 1 | about 20 |
+| AN (done 2026-10-03) | G7 submit, status, collect | 1 | 8 credits spent of a ceiling of 20 |
 | AO | G8 capability map, section 2 rows, section 3 hazards | 2 to 3 | 0 |
 
 Each plan follows the repo's rules: red test first, mutants on every guard, a live run of the exact case that failed,

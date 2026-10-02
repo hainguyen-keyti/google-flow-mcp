@@ -217,6 +217,24 @@ mặt, tay và món đồ.
   lúc request đi ra tool kiểm chính trường giọng của nó, và sau lượt trả tiền tool đọc lại recipe của clip: Flow bỏ mất
   giọng hay ảnh thì báo lỗi dù đã trả tiền. Đo bằng tiền thật 2026-10-01: Veo Lite + ảnh + giọng tự tạo **10**, Omni 8 s
   + ảnh + hai giọng **12**.
+- **Nộp rồi quay lại lấy, vẫn đúng một cú bấm: `job_submit`, `job_status`, `job_collect`.** `job_submit` là chính lượt
+  chạy của `gen_video` (cùng các phép kiểm, cùng rào `job_id`, cùng một cú bấm duy nhất, mỗi lần một clip, không có
+  `dry_run`), nhưng trả lời ngay khi THẤY request submit của Flow rời đi, với `outcome STARTED`, thay vì chờ render.
+  `job_status` đọc job đang ở đâu (`rendering`, `ready`, `not_listed`, `ambiguous`, `settled`, `in_another_call`) và
+  không ghi gì; `job_collect` tải clip đã xong về cạnh sổ của job và ghi ĐÚNG MỘT dòng quyết toán, job đã quyết toán thì
+  trả lời từ dòng đó, không mở trình duyệt. Hai tool này không bấm và không gõ được gì. Clip chỉ được nhận theo
+  workflow id do chính reply submit của Flow nêu; không nghe được reply thì nhận clip mới DUY NHẤT mang đúng prompt, có
+  hai ứng viên thì không chọn. `spent` chỉ là hiệu số dư của riêng job khi không job nào khác có thể đã làm số dư đổi
+  trong lúc đó; còn lại ghi theo giá Flow báo trước cú bấm, và dòng sổ nói rõ là cái nào (`spent_from`, kèm
+  `balance_shared` trên dòng sổ và `charged_from` trong outcome). Job Ingredients được đọc lại recipe lúc thu, như
+  `gen_video`. Cái mất khi không chờ: lý do Flow từ chối chỉ trang đã submit nghe được, nên job bị từ chối sau khi lời
+  gọi đã rời đi sẽ không bao giờ hiện, sau 10 phút được quyết toán là không sinh ra gì, và không nhận `retry_of`; cần
+  biết lý do thì dùng `gen_video`. Một tool chặn chạy trong lúc job đã nộp còn render sẽ đọc số tiêu của mình trên
+  số dư mà job kia có thể làm đổi. **Đo bằng tiền thật 2026-10-03** (hai job Omni 360p 4 s nộp liền nhau, 4 credit
+  mỗi job): mỗi `job_submit` trả lời sau **153 s** kèm workflow id do Flow nêu, số dư đã trừ ngay sau lúc nộp (không
+  phải lúc xong), hai clip render cùng lúc sau khi trang đã đóng và sẵn sàng trong khoảng 4 phút; `job_status` và
+  `job_collect` mỗi lượt khoảng 47 s; mỗi job thu đúng clip của mình; thu lần hai trả lời ngay từ dòng sổ; nộp lại id
+  cũ bị từ chối kèm `outcome code=DONE charged=4`.
 - **Miễn credit nhưng tính quota ảnh theo ngày**: `gen_t2i`, `gen_i2i`.
 - **Miễn phí, chỉ đọc Flow**: `flow_lane`, `flow_projects`, `flow_credits`, `flow_media` (luôn trả một object,
   `all_versions=true` thêm khoá `versions`; bốn bộ lọc `kind` là `video` hay `image`, `since` nhận epoch hoặc ngày
@@ -230,6 +248,8 @@ mặt, tay và món đồ.
   `flow_download` (ghi file vào thư mục đích),
   `clip_recipe` (đọc lại từ listing một clip được tạo từ gì: model, khung đầu và khung cuối, ảnh tham chiếu, giọng,
   nhân vật, và clip nguồn của một lượt edit hay extend, mỗi thứ kèm id và tên),
+  `job_status` (job do `job_submit` nộp đang ở đâu; chỉ đọc listing và số dư), `job_collect` (tải clip của job đó về
+  và ghi dòng quyết toán vào sổ; không bấm gì trên Flow),
   `clip_reconcile` (đọc listing và số dư, ghi ledger, không sinh gì; trả kèm đường dẫn sổ đã đọc, sổ có tồn tại
   không và số dòng, để `jobs: []` không bị hiểu nhầm là sạch khi đọc nhầm chỗ; job gen, job agent và job editor của
   project khác ra `skipped`; sổ không có gì để chấm thì trả ngay, không mở Chrome).
@@ -333,7 +353,7 @@ uv run pytest -q
 ```
 
 Test tay qua MCP, kèm giá từng tool, rào chắn và prompt sẵn để giao cho một agent khác:
-`docs/mcp-manual-test.md` (tài liệu đó tự ghi số tool nó phủ; `clip_recipe` chưa có trong đó).
+`docs/mcp-manual-test.md` (số tool và tên từng tool trong đó được test so với server đang phục vụ).
 
 `ledger_integrity.py` canh đúng một luật: **không credit nào rời tài khoản qua clip editor mà không có
 dòng ledger trỏ tới nó**. Nó lái editor bằng stub hỏng đúng chỗ đã hỏng thật ngày 2026-09-13, lúc 20

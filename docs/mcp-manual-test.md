@@ -1,4 +1,4 @@
-# Manual test of the `video` MCP server: 44 tools, with prices and guard rails
+# Manual test of the `video` MCP server: 48 tools, with prices and guard rails
 
 A pass to run by hand, or to hand to another agent that calls the tools over MCP. Every result shape below was
 **measured on a real account** between 2026-09-14 and 2026-09-29, not inferred from the code. For the generated
@@ -44,7 +44,7 @@ If tier 0 is red, stop: the fault is below anything you would test by hand.
 **`project_delete` permanently deletes clips, ingredients and prompts.** Read the id twice before calling it. Never
 paste a real project's id into this tool.
 
-## 3. The 44 tools
+## 3. The 48 tools
 
 Prices were measured on the Pro plan. Groups A and B are safe on any project; group C belongs in the scratch project.
 
@@ -62,6 +62,8 @@ Prices were measured on the Pro plan. Groups A and B are safe on any project; gr
 | `scene_list` | `project_id`, `include_trashed=False` | list of `{scene_id, title, trashed, created, updated}`. Trashed scenes are hidden unless `include_trashed=true` |
 | `flow_voices` | `project_id`, `entity_id` | list of `{name, description, custom}`: Flow's 30 presets plus every saved custom voice (`custom: true`, listed first). It needs a character because the character page is the ONLY place Flow lists voices; the list renders a window at a time, so the tool scrolls |
 | `scene_clips` | `project_id`, `scene_id` | the timeline read from the listing: `{scene_id, title, trashed, aspect, seconds, clips}`, `clips` in play order, each `{position, clip_id, title, seconds}`, `position` from 0. `clip_id` is the timeline clip's id, not a media id: adding one media twice gives two `clip_id`s. The page's `Total duration` label changes before Flow saves (measured 2026-09-17), so read this tool again after every change |
+| `clip_recipe` | `project_id`, `media_id`, `workflow_id` optional | what one clip was made from, read back off the listing: `{media_id, workflow_id, model_key, kind, frames, reference_images, voices, characters, source}`. `kind` is `frames`, `ingredients`, `derived` (an edit or an upscale), `extend` or `unknown`; a voice row says whether it is `custom`. Defaults to the newest version of the media. An image keeps no recipe and is refused |
+| `job_status` | `job_id` | where a job that `job_submit` started stands: `{job_id, state, workflow_id, media_id, project, quoted_credits, credits_before, credits_now, age_s, outcome}`. `state` is `rendering`, `ready` (fetch it with `job_collect`), `not_listed`, `ambiguous`, `settled` (the job's ledger row is the answer, read with no browser) or `in_another_call`. It reads the listing and the balance: no click, no keystroke, no ledger row. A `job_id` no ledger under `out/` holds is an error that opens with `outcome code=NOT_SUBMITTED` |
 
 ### B. Writes files on this machine, $0
 
@@ -70,6 +72,7 @@ Prices were measured on the Pro plan. Groups A and B are safe on any project; gr
 | `flow_download` | `project_id`, `media_id`, `out_dir` | returns a path inside `out/`; `out_dir` must be inside `out/` (outside it, or naming a file, is refused before a browser opens). `media_id` is the listing `id` from `flow_media`; a workflow id is refused |
 | `clip_download` | `project_id`, `media_id`, `quality="1080p"`, `out_dir`, `workflow_id` | `out_dir` must be inside `out/`. Defaults to the NEWEST finished version; pass `workflow_id` to fetch one version (measured 2026-09-28: all four versions of an edited clip, each distinct). 1080p measured 0 credits. **`quality="4k"`: Flow greys it out on this Pro account** (measured 2026-09-29 on every clip tried; Flow's table offers it from Ultra at 50), so it is refused before any click and costs nothing. A media the listing marks `listed: false` lives only inside a scene (an extension does): it is refused at once, and `scene_download` fetches it |
 | `clip_reconcile` | `project_id`, `out_dir` | `out_dir` must be inside `out/` (a ledger outside it escapes the `job_id` guard). Closes the books for orphaned editor jobs; returns `{"ledger": <absolute path>, "ledger_exists", "ledger_rows", "jobs"}`. `jobs: []` means clean only when `ledger_exists` is `true` and the path is the ledger you meant. Verdicts: `done` (for `clip_edit` only: exactly one new finished version on the source clip carrying the job's prompt, not already claimed as `generated` by another job in the same ledger, and no rival job on the same clip with the same prompt still open or closed without a version on that clip, unless its last row is a `failed` written by `clip_reconcile`; written to `outputs`; a 1080p upscale or a copy made by extend is never claimed), `failed` (balance unchanged AND no new record in the project; `clip_extend` can end `failed` too), `unknown` (for a person to decide; for `clip_extend` every case that is not `failed`; also while a version is still generating, with two versions, with a rival job as above, when the listing no longer holds a record of the source clip the job saw, and for an old `opening` row missing its workflow set or prompt, or with an empty workflow set), `skipped` (gen or agent jobs, or editor jobs of another project given `project`; never written). A ledger with nothing to judge returns at once, without Chrome. The `spent` a reconcile row writes is the balance change since the job opened and can include other spends: never add those rows up as a total |
+| `job_collect` | `job_id` | fetches the finished clip of a `job_submit` job at 720p beside the job's ledger and writes the job's ONE settled row: `{job_id, state: "collected", media_id, path, spent, spent_from, credits_before, credits_after, workflow_id, outcome}`. `spent_from` is `bracket` (the job's own balance change) or `quoted` (another job could have moved the balance meanwhile, so the price quoted before the click is written instead). A clip still `rendering`, or `not_listed` yet, is answered as such with nothing written: call again later. A job already settled is answered from its row with no browser, so a second collect fetches nothing and writes nothing. It never clicks and never types |
 
 ### C. Changes Flow data, $0, scratch project ONLY
 
@@ -99,7 +102,7 @@ Prices were measured on the Pro plan. Groups A and B are safe on any project; gr
 
 ### D. Spends credits, run only on purpose
 
-All 8 spending tools **require a `job_id`** (except `gen_character` and `gen_video` with `dry_run=true`, which click nothing). A
+Every spending tool **requires a `job_id`** (except `gen_character` and `gen_video` with `dry_run=true`, which click nothing). A
 `job_id` that already has any row in any `ledger.jsonl` under `out/` (any letter case in the file name) is refused
 before a browser opens; a `job_id` that looks like a session secret (a cookie name or an `Authorization` header) is
 refused; a `job_id` running in another call is refused, and then you wait and call again with the SAME `job_id`, never
@@ -116,7 +119,8 @@ moved by anything other than the measured price; when the call ends in an error,
 
 | Tool | Measured price | Notes |
 |---|---|---|
-| `gen_video` | Flow's live price line, which must not exceed the `max_credits` you pass. Surveyed 2026-09-29: Omni 1.1 Flash 720p 4/6/8/10 s = 7/10/12/15, 360p = 4/5/6/7; Veo 3.1 Lite 10, Fast 20, Quality 100 (8 s, 720p); x2-x4 multiply | every video option in one tool. Text alone runs Frames; `start_frame` and `end_frame` (project image media ids) fill Frames' Start and End, the picker tile chosen by the image's listing url; `characters` and `media_ids` run Ingredients. `model`, `aspect`, `resolution` and `duration` (omni-flash only), `count` 1-4. **Call `dry_run=true` first**: $0, returns the live quote and the settings. A real run needs `job_id` and `max_credits`; the settings are read back before the click and the submit body is checked afterwards for the mode and length asked |
+| `gen_video` | Flow's live price line, which must not exceed the `max_credits` you pass. Surveyed 2026-09-29: Omni 1.1 Flash 720p 4/6/8/10 s = 7/10/12/15, 360p = 4/5/6/7; Veo 3.1 Lite 10, Fast 20, Quality 100 (8 s, 720p); x2-x4 multiply | every video option in one tool. Text alone runs Frames; `start_frame` and `end_frame` (project image media ids) fill Frames' Start and End, the picker tile chosen by the image's listing url; `characters` and `media_ids` run Ingredients, and `voices` (names from `flow_voices`) ride beside at least one image or character. `model`, `aspect`, `resolution` and `duration` (omni-flash only), `count` 1-4. **Call `dry_run=true` first**: $0, returns the live quote and the settings. A real run needs `job_id` and `max_credits`; the settings are read back before the click and the submit body is checked afterwards for the mode and length asked |
+| `job_submit` | the same price as `gen_video`, read off Flow's live line and held to the `max_credits` you pass. Measured 2026-10-03: omni-flash 360p 4 s **4**, twice | `gen_video`'s own run, one clip per call and no dry run, that answers once the submit request has left instead of waiting for the render: `{job_id, state: "started", workflow_id, quoted_credits, credits_before, body_check, outcome: {code: "STARTED"}}`. Then `job_status` until `ready`, then `job_collect`. Measured on two jobs submitted back to back: each call answered in **153 s**, the balance had dropped by the price right after each submit (not at the finish), both clips rendered after the page had closed and were ready within about 4 min. A `job_id` with rows is refused before a browser opens, with that job's outcome (`outcome code=DONE charged=4`). A job Flow refuses after the call has left never shows: `job_collect` settles it as nothing generated ten minutes after the submit, with no reason and no `retry_of`; when the reason matters, use `gen_video` |
 | `gen_t2i`, `gen_i2i` | **0 credits** (nano2) | counts against a daily image quota, not credits |
 | `gen_t2v` | **15** with no model (omni-flash 10 s, count 1); **10** with `model="veo-lite"` (8 s) | `count` multiplies the price (veo-lite `count=2` is 20); `count` is 1-4, `aspect` only `9:16` or `16:9` |
 | `gen_r2v` | **12** with no model (omni-flash, always 8 s, measured 2026-09-15); **10** with `model="veo-lite"` | through gflow r2v runs 8 s only: leave `duration` out. For 10 s from images, upload them and use `gen_character` with `media_ids`. Images: omni-flash up to 7, veo-lite and veo-fast up to 3, veo-quality none; more is refused before any spend. Flow refuses images of people in underwear |
@@ -136,8 +140,9 @@ You have an MCP server "video" that drives Google Flow. Test it and report back.
 GUARD RAILS, not to be broken:
 - Work only in project <SCRATCH ID>. Touch no other project.
 - Never call project_delete with any id other than <SCRATCH ID>.
-- Do not call a credit-spending tool (gen_t2v, gen_i2v, gen_r2v, gen_character, clip_extend, clip_edit,
-  agent_send). gen_character with dry_run=true is free and allowed. If spending seems needed, STOP and ask me.
+- Do not call a credit-spending tool (gen_video, job_submit, gen_t2v, gen_i2v, gen_r2v, gen_character, clip_extend,
+  clip_edit, agent_send). gen_character and gen_video with dry_run=true are free and allowed. If spending seems
+  needed, STOP and ask me.
 - If any tool reports that Google flagged unusual activity, STOP completely: no retry, no new sign-in, tell me.
 
 Do these in order, and after each step paste the JSON returned, verbatim:
@@ -175,6 +180,21 @@ Finally: list which tools worked, and which failed or errored, with the exact er
    nothing. Decide success or failure from `flow_media` plus the balance, never by calling again. If you do call the
    same job again, keep the SAME `job_id`: the ledger refuses it at once (`already has ledger rows`) and nothing is
    charged twice.
+
+The same without waiting for the render, as run on 2026-10-03 (8 credits for two clips):
+
+1. `gen_video(..., dry_run=true)` with the settings you mean to pay for: the quote must be the price you expect (4 for
+   omni-flash 360p 4 s).
+2. `job_submit(project, prompt, job_id="try-submit-1", max_credits=4, model="omni-flash", resolution="360p",
+   duration=4)`: `state: "started"`, a `workflow_id`, `outcome.code: "STARTED"`; the ledger holds a `submitted` and a
+   `started` row, and `flow_credits()` already reads 4 lower.
+3. `job_status(job_id="try-submit-1")` until `state` is `ready` (`rendering` and `not_listed` mean ask again later;
+   it took under 4 minutes).
+4. `job_collect(job_id="try-submit-1")`: `state: "collected"`, a `path` inside the job's own folder, one `done` row.
+   Open the file: it must be the clip of THIS prompt. With another job in flight `spent_from` is `quoted` and the
+   outcome says `charged_from: "quoted"`.
+5. `job_collect` once more answers `state: "settled"` from the row at once, and `job_submit` with the same `job_id`
+   is refused with `outcome code=DONE`.
 
 ## 6. Measured traps you will meet by hand
 

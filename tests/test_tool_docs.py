@@ -119,7 +119,22 @@ README_COUNTS = [
     ("README.md", r"(\d+) MCP tools plus a CLI"),
     ("README.md", r"serves \*\*(\d+) tools\*\*"),
     ("README.vi.md", r"(?m)^(\d+) tool, chia theo"),
+    # The manual test guide said 44 through three plans that added tools (2026-10-02, with 48 served).
+    ("docs/mcp-manual-test.md", r"(?m)^# Manual test of the `video` MCP server: (\d+) tools"),
+    ("docs/mcp-manual-test.md", r"(?m)^## 3\. The (\d+) tools"),
 ]
+
+
+def test_the_manual_test_guide_names_every_served_tool():
+    # Its tables are typed by hand: clip_recipe was served for a plan and a half before the guide named it.
+    guide = (ROOT / "docs" / "mcp-manual-test.md").read_text(encoding="utf-8")
+    served = {tool.name for tool in asyncio.run(gen.tools())}
+    # A tool is named by the first cell of a table row, which may hold two (`gen_t2i`, `gen_i2i`).
+    rows = [line.split("|")[1] for line in guide.splitlines() if line.startswith("| `")]
+    named = {name for cell in rows for name in re.findall(r"`([a-z0-9_]+)`", cell)}
+
+    assert sorted(served - named) == []
+    assert sorted(named - served) == [], "the guide has a row for a tool the server does not serve"
 
 
 @pytest.mark.parametrize(("name", "pattern"), README_COUNTS)

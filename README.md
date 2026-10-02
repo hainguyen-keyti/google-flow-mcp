@@ -93,6 +93,8 @@ guess about; the tool says so too.
 |---|---|
 | `gen_video`: any option Flow's composer offers, guarded by Flow's live price line and your `max_credits` | Omni 1.1 Flash 720p 4/6/8/10 s: 7/10/12/15; 360p: 4/5/6/7; Veo 3.1 Lite 10, Fast 20, Quality 100 (8 s); x2-x4 multiply (Flow's price line, 2026-09-29) |
 | `gen_video` with `voices` (a preset or a voice of your own, beside an image or a character) | the same price: Veo 3.1 Lite with one image and one voice 10, Omni 1.1 Flash 8 s with one image and two voices 12 (paid 2026-10-01) |
+| `job_submit`: `gen_video` that does not wait for the render (one clip per call, no dry run) | the same price as `gen_video`; omni-flash 360p 4 s paid twice at 4 (2026-10-03) |
+| `job_status`, `job_collect`: where a submitted job stands, and fetching its clip | 0 |
 | `gen_t2v` / `gen_r2v`, veo-lite, 8 s | 10 |
 | `gen_t2v` / `gen_i2v`, omni-flash, 10 s | 15 |
 | `gen_r2v`, omni-flash, 8 s (the only length gflow offers it) | 12 |
@@ -108,7 +110,9 @@ guess about; the tool says so too.
 | Every read: lane, projects, media, credits, characters, scenes, voices, and what a clip was made from (`clip_recipe`) | 0 |
 
 Timing, so a slow call is not mistaken for a broken one: a read takes 15 to 50 s, a change about 50 s, a
-generation 2 to 5 min, `clip_extend` and `clip_edit` up to 7 min.
+generation 2 to 5 min, `clip_extend` and `clip_edit` up to 7 min. `job_submit` answered in 153 s with the balance
+already charged, `job_status` and `job_collect` in about 47 s each, and two clips submitted back to back were both
+ready within about 4 min of their submits (measured 2026-10-03, omni-flash 360p 4 s, 4 credits each).
 
 ## How the money is guarded
 
@@ -130,6 +134,19 @@ These are not suggestions; they are enforced in code and pinned by tests.
   failed uncharged, the project and prompt must be the same (the settings are not compared), a job is retried once
   (a second retry is refused once the first has clicked, and while it runs in the same server), and one original
   gets at most two retries. Any other new `job_id` after an error is still wrong.
+- **Submit now, collect later, still one click.** `job_submit` is `gen_video`'s own run (the same checks, the same
+  `job_id` guard, the same single click) that answers once Flow's submit request has been seen leaving, with
+  `outcome STARTED`. `job_status` reads where the job stands and writes nothing; `job_collect` downloads the
+  finished clip and writes the job's one settled row, and a job already settled is answered from that row with no
+  browser. Neither can click or type. A clip is claimed only by the workflow id Flow's own submit reply named, or,
+  when no reply was heard, by the single new clip carrying the exact prompt: two candidates are never chosen
+  between. `spent` is the job's own balance bracket only when no other job could have moved the balance
+  meanwhile; otherwise it is the price quoted before the click, and the row says which (`spent_from`, with
+  `balance_shared` on the row and `charged_from` in the outcome). An Ingredients clip has its recipe read back at
+  the collect, as `gen_video` does. Flow charged both measured jobs at the submit, not at the finish. What not
+  waiting gives up is Flow's reason for a refusal, which only the page that submitted hears: such a job never
+  shows, is settled as nothing generated ten minutes after its submit, and takes no `retry_of`. And a blocking
+  tool run while a submitted job renders reads its own spend off a balance that job may move.
 - **Outputs stay inside `out/`.** Every tool that writes a file or a ledger forces its target inside `out/`.
 - **Click once, then wait.** Flow submits late, about 20 s after the click. Leaving the page early cancels the
   request in flight and looks exactly like a dead button; clicking again submits a second, paid job.
