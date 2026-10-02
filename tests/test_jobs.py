@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import random
 
 import pytest
 from test_ingredients import (
@@ -514,6 +515,59 @@ def test_a_collected_clip_whose_request_went_out_wrong_is_an_error_though_it_was
         _collect(ledger)
 
     assert ledger.rows()[-1]["status"] == "done" and "abra_t2v_10s" in str(said.value)
+
+
+def test_any_order_of_later_calls_settles_a_job_once_and_only_reads(monkeypatch, tmp_path):
+    """I-money-6 and I-read-2 as laws over sequences, not single calls: whatever order status and collect come in
+    while Flow's listing moves from nothing to rendering to ready, whether a download fails, whether the call is
+    late, and whether another job is in flight, a job gets at most one settled row, a settled job is never looked
+    up or fetched again, status writes nothing, a clip is downloaded once, a shared balance is never written as
+    the job's own bracket, and no call touches the page (`_Reader` raises if one does)."""
+    rng = random.Random(20261002)
+    listings = [[], [_video("w-job", PROMPT, done=False)], [_video("w-job", PROMPT)]]
+    flying = [{"job_id": "job-0", "status": "submitted", "ts": T0 - 30}]
+    seen = set()
+    for trial in range(300):
+        folder = tmp_path / str(trial)
+        ledger = _started_job(folder)
+        stage, downloads = 0, 0
+        for _ in range(10):
+            stage = min(2, stage + rng.choice([0, 0, 1]))
+            broken = rng.random() < 0.3
+            log = _world(
+                monkeypatch,
+                folder,
+                listings[stage],
+                balance=rng.choice([190, 200]),
+                fetch_error=RuntimeError("x") if broken else None,
+            )
+            before = ledger.rows()
+            others = rng.choice([(), flying])
+            call = rng.choice(["status", "collect"])
+            now = T0 + rng.choice([60, jobs.NOT_LISTED_S + 1])
+            try:
+                _status(ledger, now=now) if call == "status" else _collect(ledger, now=now, others=others)
+            except RuntimeError:
+                pass
+            after = ledger.rows()
+            settled = [row for row in after if row["status"] in outcome.SETTLED]
+            assert len(settled) <= 1, (trial, after)
+            assert after[: len(before)] == before, "a row was rewritten"
+            if call == "status" or len(before) == 3:
+                assert after == before, (trial, call)
+            if len(before) == 3:
+                assert log == [], (trial, "a settled job was looked up again", log)
+            downloads += sum(1 for step in log if step.startswith("fetch") and not broken)
+            done = [row for row in settled if row["status"] == "done"]
+            assert len(done) == downloads <= 1, (trial, after, downloads)
+            if len(after) > len(before) and others:
+                written = after[-1]
+                assert written.get("spent_from") != "bracket" and written["spent"] in (None, 10), written
+                assert written["status"] != "failed", "a shared balance cannot say nothing was charged"
+            if settled:
+                seen.add(settled[0]["status"])
+    # The walk reached every way a job can end, or the laws above were checked on less than they claim.
+    assert seen == {"done", "failed", "unknown"}, seen
 
 
 @pytest.mark.parametrize(
