@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -198,6 +199,8 @@ class Backend:
         self.out_dir = out_dir
         self._running: set[str] = set()
         self._retrying: set[str] = set()
+        # What each job_submit call still in its session asked for: it has no ledger row until it clicks.
+        self._submitting: list[tuple[str, str, str]] = []
         self._unreported: list[str] = []
 
     async def _with(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
@@ -328,8 +331,8 @@ class Backend:
                     # prompt the one new clip may be that job's: both would end DONE on it and this run's own clip
                     # would be left to nobody (re-review of plan AN).
                     raise self._not_started(
-                        f"job {twin!r} was submitted with this project and prompt and is not collected yet, and a "
-                        "blocking run takes the one new clip that carries its prompt, which could be that job's: "
+                        f"job {twin!r} was submitted with this project and prompt and its clip may still show, and "
+                        "a blocking run takes the one new clip that carries its prompt, which could be that job's: "
                         "fetch it with job_collect first (job_status says when it is ready), or start this one with "
                         "job_submit too; nothing was started"
                     )
@@ -381,14 +384,21 @@ class Backend:
         return result
 
     def _rendering_twin(self, ledgers: list[Path], project: str, prompt: str) -> str | None:
-        """A job that job_submit started for this project and prompt and nobody has collected, if any ledger holds
-        one."""
+        """A job that job_submit ran for this project whose clip a blocking run of this prompt could take: one a
+        job_submit call is still in its session for (it has no row until it clicks), or one the ledgers hold
+        (`jobs.rendering`)."""
+        typed = jobs_mod.composer._flat(prompt)
+        for job, theirs, asked in self._submitting:
+            if theirs == project and jobs_mod.composer._flat(asked) == typed:
+                return job
         jobs: dict[str, list[dict[str, Any]]] = {}
         for each in ledgers:
             for row in gen_mod.Ledger(each).rows():
                 jobs.setdefault(str(row.get("job_id")), []).append(row)
+        now = time.time()
         return next(
-            (job for job, rows in sorted(jobs.items()) if jobs_mod.rendering(rows, project, prompt)), None
+            (job for job, rows in sorted(jobs.items()) if jobs_mod.rendering(rows, project, prompt, now=now)),
+            None,
         )
 
     def _not_started(self, why: str) -> ValueError:
@@ -769,14 +779,20 @@ class Backend:
                 )
             )
 
-        # No `claims_by_prompt`: a detached job claims nothing here, and its clip is fetched by its workflow.
-        return await self._spend_once(
-            options.get("job_id"),
-            target,
-            run,
-            retry_of=options.get("retry_of"),
-            request={"project": project, "prompt": prompt},
-        )
+        # Said before anything else: until its click this job has no row for a blocking run of its prompt to see.
+        asked = (str(options.get("job_id")), project, prompt)
+        self._submitting.append(asked)
+        try:
+            # No `claims_by_prompt`: a detached job claims nothing here, and its clip is fetched by its workflow.
+            return await self._spend_once(
+                options.get("job_id"),
+                target,
+                run,
+                retry_of=options.get("retry_of"),
+                request={"project": project, "prompt": prompt},
+            )
+        finally:
+            self._submitting.remove(asked)
 
     def _ledgers(self) -> list[Path]:
         """Every ledger under the out folder, each once, spelled as the out folder is: a clip fetched beside one is
@@ -1055,7 +1071,8 @@ server = TellingServer(
         "without waiting for its render, job_submit runs gen_video's own guards and click and answers once the "
         "request has left (153 s measured, the balance already charged); job_status then says where the job stands "
         "and job_collect fetches the clip and writes its ledger row, both free and about 47 s each, and several "
-        "submitted jobs render at once. The "
+        "submitted jobs render at once; gen_video and gen_character are refused while a job that job_submit started "
+        "with the same project and prompt may still show its clip, so collect it first. The "
         "credit-spending tools require a job_id. Never call one again under a new job_id because it was slow, "
         "errored or timed out: check flow_media and flow_credits first, and if you do call again keep the same "
         "job_id, which the ledger refuses instead of charging twice. Every answer of a real run carries an outcome "
@@ -1106,6 +1123,12 @@ _RETRY_RULE = (
     "retry of it is refused once the first has clicked, and while the first runs in this server), and one original "
     f"job gets at most {outcome_mod.MAX_RETRIES} retries; for any other code a new job_id after an error is still "
     "wrong."
+)
+_TWIN_RULE = (
+    " A real run is refused while a job that job_submit started with the same project and prompt may still show its "
+    "clip (not collected yet, or settled with no clip within the last hour): a blocking run takes the one new clip "
+    "that carries its prompt, which could be that job's. Fetch that job with job_collect first, or start this one "
+    "with job_submit too."
 )
 
 
@@ -1944,6 +1967,7 @@ def _longer_lengths() -> str:
         "included. For a real run,"
         + _JOB_ID_RULE
         + _RETRY_RULE
+        + _TWIN_RULE
         + " Flow can refuse a run under its content filters and charges nothing for it: the error then opens with that "
         "and carries Flow's own status, reason and words, for example status 4 with "
         "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED for a character made from a real person's photo (measured "
@@ -2055,6 +2079,7 @@ def _video_options(*, count: bool = True) -> str:
         + _BALANCE_MOVED
         + _JOB_ID_RULE
         + _RETRY_RULE
+        + _TWIN_RULE
     ),
 )
 async def gen_video(
@@ -2135,7 +2160,8 @@ async def gen_video(
         "say retryable=yes, and retry_of is taken here as gen_video takes it. A job Flow refuses after this call "
         "has left never shows in the listing, and Flow's reason is heard only by a call that waits: job_collect "
         "settles such a job as nothing generated, with no reason and no retry, so use gen_video when the reason "
-        "matters. While a submitted job is not collected, gen_video and gen_character are refused for the same "
+        "matters. While a submitted job may still show its clip (not collected yet, or settled with no clip within "
+        "the last hour, and from the moment this call starts), gen_video and gen_character are refused for the same "
         "project and prompt, since a blocking run takes the one new clip carrying its prompt and that could be the "
         "submitted job's; a second job_submit of the prompt is fine. A blocking tool run beside a rendering job "
         "also reads its own spend off a balance that job can still move (Flow charged at the submit in both "

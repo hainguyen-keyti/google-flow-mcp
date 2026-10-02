@@ -52,6 +52,9 @@ def test_a_detached_submit_returns_once_the_request_has_left_and_says_how_to_fin
     assert started["workflow_id"] == JOB_WORKFLOW and started["workflows_before"] == ["w-before"]
     assert started["prompt"] == PROMPT and started["rpcids"] == ["MZZa6b"]
     assert outcome.classify(_rows(tmp_path))["code"] == "STARTED"
+    # The intent row says the run was detached, so a submit cut off before its started row is told from a blocking
+    # run that crashed: the server holds blocking runs of the prompt back for the first and not for the second.
+    assert submitted["detach"] is True
 
 
 @pytest.mark.parametrize(
@@ -106,6 +109,7 @@ def test_a_run_that_is_not_detached_is_what_it_was(monkeypatch, tmp_path):
 
     assert [row["status"] for row in _rows(tmp_path)] == ["submitted", "done"]
     assert "state" not in result and result["spent"] == 12
+    assert "detach" not in _rows(tmp_path)[0], "a blocking run records what it did before plan AN"
 
 
 def test_a_started_job_is_neither_a_failure_nor_a_retry():
@@ -549,6 +553,23 @@ def test_a_rival_is_told_by_what_its_record_would_hold(monkeypatch, tmp_path):
     assert _status(typed, others=other)["state"] == "ready"
     # A prompt shorter than the cut was kept whole, so the head of this one is another prompt.
     assert _status(typed, others=short)["state"] == "ready"
+    # Another long prompt with the same first characters: once its rows hold the whole of it (its started row, or
+    # what its prompt box read, which a real intent row carries), the cut says nothing.
+    longer = long + "then a gull lands"
+    whole_on_started = [*cut_off, {**UNNAMED, "job_id": "job-B", "prompt": longer, "ts": T0 + 30}]
+    whole_in_the_box = [{**cut_off[0], "prompt_text": longer}]
+    assert _status(typed, others=whole_on_started)["state"] == "ready"
+    assert _status(typed, others=whole_in_the_box)["state"] == "ready"
+
+
+def test_a_job_flow_named_a_workflow_for_is_never_held_up_by_a_rival(monkeypatch, tmp_path):
+    # Its clip is the record of its workflow: an open unnamed job of the same prompt is no reason to leave it.
+    ledger = _started_job(tmp_path)
+    _world(monkeypatch, tmp_path, [_video("w-job", PROMPT)])
+    rival = _theirs(UNNAMED)
+
+    assert _status(ledger, others=rival)["state"] == "ready"
+    assert _collect(ledger, others=rival)["state"] == "collected"
 
 
 def test_an_unnamed_job_is_not_claimed_while_the_ledgers_cannot_be_read(monkeypatch, tmp_path):
@@ -747,8 +768,10 @@ def test_a_job_that_ended_open_before_this_submit_shares_the_balance(monkeypatch
     # Its own outcome says it may still finish and bill; a charge landing later lands in this job's bracket.
     ledger = _started_job(tmp_path)
     _world(monkeypatch, tmp_path, [_video("w-job", PROMPT)], balance=180)
+    # Begun over an hour before and ended a minute before: the hour runs from its last row, which is when it was
+    # last known to be open.
     earlier = [
-        {"job_id": "job-0", "status": "submitted", "kind": "video", "ts": T0 - 90},
+        {"job_id": "job-0", "status": "submitted", "kind": "video", "ts": T0 - jobs.IN_FLIGHT_S - 90},
         {"job_id": "job-0", "ts": T0 - 60, **ended},
     ]
 

@@ -80,13 +80,33 @@ def standing(ledger: gen.Ledger, job_id: str) -> dict[str, Any] | None:
     return None
 
 
-def rendering(rows: list[dict[str, Any]], project: str, prompt: str) -> bool:
-    """Whether these rows are a job that job_submit started for this project and prompt and nobody has collected."""
-    intent, started, settled = _run(rows)
-    if intent is None or started is None or settled is not None:
+def _could_hold(intent: dict[str, Any], started: dict[str, Any] | None, text: str) -> bool:
+    """Whether a record whose prompt is `text` (flattened) could be this job's: its typed prompt or what its prompt
+    box held, which is what `composer.matching_outputs` takes for it. A job that left only an intent row, with no
+    box text on it, kept just the first `PROMPT_KEPT` characters of a long prompt: any text starting with them
+    could then be its own."""
+    texts = {
+        composer._flat(row.get(key)) for row in (intent, started or {}) for key in ("prompt", "prompt_text")
+    }
+    if text in texts - {""}:
+        return True
+    typed = intent.get("prompt") or ""
+    whole = started is not None or bool(intent.get("prompt_text"))
+    return not whole and len(typed) >= outcome.PROMPT_KEPT and text.startswith(composer._flat(typed))
+
+
+def rendering(rows: list[dict[str, Any]], project: str, prompt: str, *, now: float) -> bool:
+    """Whether these rows are a job that job_submit ran for this project whose clip a blocking run of this prompt
+    could take for its own: a detached run (the mark on its intent row, or its started row), not closed, its last
+    row no older than the hour a clip can still show in, and the prompt one its record could hold. A clip listed
+    longer ago is in the blocking run's own `before` listing and cannot be taken."""
+    intent, started, _ = _run(rows)
+    if intent is None or intent.get("project") != project or not (intent.get("detach") or started):
         return False
-    same_prompt = composer._flat(started.get("prompt")) == composer._flat(prompt)
-    return same_prompt and intent.get("project") == project
+    moves = [row for row in rows if row.get("status") in _MOVES]
+    if outcome.classify(moves)["code"] in _CLOSED or now - (moves[-1].get("ts") or 0) >= IN_FLIGHT_S:
+        return False
+    return _could_hold(intent, started, composer._flat(prompt))
 
 
 def _not_started(job_id: str, ledger: gen.Ledger) -> LookupError:
@@ -159,13 +179,7 @@ def _rivals(
             continue
         if any(row.get("workflow_id") or _said_by_flow(row) for row in moves):
             continue
-        typed = began.get("prompt") or ""
-        texts = {
-            composer._flat(row.get(key)) for row in (began, begun or {}) for key in ("prompt", "prompt_text")
-        }
-        # The intent row keeps the first `PROMPT_KEPT` characters of what was typed.
-        cut = len(typed) >= outcome.PROMPT_KEPT and held.startswith(composer._flat(typed))
-        if held in texts - {""} or cut:
+        if _could_hold(began, begun, held):
             rivals.append(job)
     return sorted(rivals)
 

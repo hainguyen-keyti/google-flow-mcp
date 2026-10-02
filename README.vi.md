@@ -230,7 +230,8 @@ mặt, tay và món đồ.
   `gen_video`. Cái mất khi không chờ: lý do Flow từ chối chỉ trang đã submit nghe được, nên job bị từ chối sau khi lời
   gọi đã rời đi sẽ không bao giờ hiện, sau 10 phút được quyết toán là không sinh ra gì, và không nhận `retry_of`; cần
   biết lý do thì dùng `gen_video` (lời từ chối nghe được khi trang còn mở thì được ghi ngay tại đó, có mã, và
-  `job_submit` nhận `retry_of` cho nó như `gen_video`). Trong lúc một job đã nộp chưa được thu, `gen_video` và
+  `job_submit` nhận `retry_of` cho nó như `gen_video`). Trong lúc clip của một job đã nộp còn có thể hiện ra (từ lúc
+  gọi `job_submit` tới khi thu xong, hoặc một giờ sau khi nó được quyết toán mà không có clip), `gen_video` và
   `gen_character` bị từ chối với cùng project và prompt: tool chặn nhận clip mới duy nhất mang prompt của nó, mà clip
   đó có thể là của job đã nộp. Một tool chặn chạy cạnh job còn render cũng đọc số tiêu của mình trên số dư mà job kia
   còn có thể làm đổi. **Đo bằng tiền thật 2026-10-03** (hai job Omni 360p 4 s nộp liền nhau, 4 credit

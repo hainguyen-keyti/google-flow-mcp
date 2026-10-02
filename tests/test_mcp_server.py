@@ -4218,24 +4218,78 @@ def test_job_submit_retries_a_refused_job_as_gen_video_does(monkeypatch, tmp_pat
     assert done.is_error and "STARTED" in _texts([done])[0] and len(reached) == 1
 
 
-def _rendering_job(tmp_path, job_id="an-flying", *, project="P", prompt="a cup on a table", settled=None):
-    """A job job_submit started and nobody collected: its rows as the composer writes them."""
+CUP = "a cup on a table"
+LONG_CUP = "a cup on a table, " * 20
+REFUSED_ROW = (
+    "failed",
+    {"spent": 0, "flow": {"statuses": [6, 2, 4], "reasons": ["PUBLIC_ERROR_AUDIO_FILTERED"]}},
+)
+
+
+def _submitted_job(
+    tmp_path,
+    job_id="an-flying",
+    *,
+    project="P",
+    prompt=CUP,
+    started=True,
+    detach=True,
+    settled=None,
+    age=0.0,
+    prompt_text=None,
+):
+    """The rows of a job as the composer writes them for job_submit (`detach` false: for a blocking run), the last
+    of them `age` seconds old."""
     ledger = gen.Ledger(tmp_path / "films" / "ledger.jsonl")
-    ledger.append(job_id, "submitted", kind="video", project=project, prompt=prompt, credits_before=100)
-    ledger.append(job_id, "started", workflow_id="w-flying", workflows_before=[], prompt=prompt)
+    box = {"prompt_text": prompt_text} if prompt_text else {}
+    mark = {"detach": True} if detach else {}
+    kept = prompt[: mcp_server.outcome_mod.PROMPT_KEPT]
+    ledger.append(
+        job_id, "submitted", kind="video", project=project, prompt=kept, credits_before=100, **mark, **box
+    )
+    if started:
+        ledger.append(job_id, "started", workflow_id="w-flying", workflows_before=[], prompt=prompt, **box)
     if settled:
-        ledger.append(job_id, settled, media_id="m-w-flying", spent=10)
+        ledger.append(job_id, settled[0], **settled[1])
+    rows = [{**row, "ts": time.time() - age} for row in ledger.rows()]
+    ledger.path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     return ledger
 
 
+@pytest.mark.parametrize(
+    ("job", "prompt"),
+    [
+        ({}, "A cup  on a table"),
+        ({"started": False}, CUP),
+        ({"settled": ("unknown", {"spent": None, "candidates": ["m-x"]})}, CUP),
+        ({"settled": ("failed", {"spent": 0})}, CUP),
+        ({"prompt_text": f"Thu {CUP}"}, f"Thu {CUP}"),
+        ({"prompt": LONG_CUP}, LONG_CUP),
+        ({"prompt": LONG_CUP, "started": False}, LONG_CUP),
+        ({"age": 3000}, CUP),
+    ],
+    ids=[
+        "rendering",
+        "cut off before its started row",
+        "settled unknown",
+        "never shown",
+        "the text its prompt box held",
+        "a prompt longer than the intent row keeps",
+        "a long prompt and only the intent row",
+        "fifty minutes old",
+    ],
+)
 @pytest.mark.parametrize("tool", ["gen_video", "gen_character"])
-def test_a_blocking_run_of_a_prompt_a_submitted_job_still_renders_is_refused(monkeypatch, tmp_path, tool):
-    # Re-review of plan AN (C2). A blocking run takes the one new clip that carries its prompt; beside a submitted
-    # job of the same prompt that clip may be the other job's, and both would end DONE on one clip while the
-    # blocking run's own clip is left to nobody. Before job_submit no two jobs of one server overlapped.
+def test_a_blocking_run_that_could_take_a_submitted_jobs_clip_is_refused(
+    monkeypatch, tmp_path, tool, job, prompt
+):
+    # Re-reviews of plan AN (C2, F1, G1, G2). A blocking run takes the one new clip that carries its prompt; beside
+    # a submitted job of that prompt whose clip may still show, the clip could be the other job's: both would end
+    # DONE on it and the blocking run's own clip would be left to nobody. Before job_submit no two jobs of one
+    # server overlapped.
     reached = _spending_backend(monkeypatch, tmp_path)
-    _rendering_job(tmp_path)
-    call = SPEND_CALLS[tool] | {"project": "P", "prompt": "A cup  on a table", "job_id": "an-blocking-1"}
+    _submitted_job(tmp_path, **job)
+    call = SPEND_CALLS[tool] | {"project": "P", "prompt": prompt, "job_id": "an-blocking-1"}
 
     result = _call(tool, call)
 
@@ -4248,17 +4302,41 @@ def test_a_blocking_run_of_a_prompt_a_submitted_job_still_renders_is_refused(mon
 @pytest.mark.parametrize(
     ("job", "call"),
     [
-        ({"settled": "done"}, {}),
+        ({"settled": ("done", {"media_id": "m-w-flying", "spent": 10})}, {}),
+        ({"settled": REFUSED_ROW}, {}),
         ({"prompt": "a dog on a rug"}, {}),
         ({"project": "Q"}, {}),
         ({}, {"dry_run": True}),
+        ({"started": False, "detach": False}, {}),
+        ({"age": 3601}, {}),
+        ({"started": False, "age": 3601}, {}),
+        ({"prompt": LONG_CUP}, {"prompt": LONG_CUP + "and a spoon"}),
+        (
+            {"prompt": LONG_CUP, "started": False, "prompt_text": LONG_CUP},
+            {"prompt": LONG_CUP + "and a spoon"},
+        ),
+        ({"prompt_text": f"Thu {CUP}", "prompt": "walks in"}, {}),
     ],
-    ids=["collected", "another prompt", "another project", "a dry run"],
+    ids=[
+        "collected",
+        "refused by Flow",
+        "another prompt",
+        "another project",
+        "a dry run",
+        "a blocking run that left only its intent row",
+        "started over an hour ago",
+        "cut off over an hour ago",
+        "another long prompt with the same head",
+        "another long prompt, the whole one known from the box",
+        "another typed prompt and another box text",
+    ],
 )
 def test_a_blocking_run_no_submitted_job_can_be_confused_with_goes_ahead(monkeypatch, tmp_path, job, call):
+    # A clip listed over an hour ago is in the blocking run's own "before" listing, so it cannot be taken; and what
+    # a blocking run did before job_submit existed (run beside a crashed blocking job) is not changed.
     reached = _spending_backend(monkeypatch, tmp_path)
-    _rendering_job(tmp_path, **job)
-    arguments = SPEND_CALLS["gen_video"] | {"project": "P", "prompt": "a cup on a table"} | call
+    _submitted_job(tmp_path, **job)
+    arguments = SPEND_CALLS["gen_video"] | {"project": "P", "prompt": CUP} | call
 
     result = _call("gen_video", arguments)
 
@@ -4266,11 +4344,50 @@ def test_a_blocking_run_no_submitted_job_can_be_confused_with_goes_ahead(monkeyp
     assert ("gen_video", "job-video") in reached
 
 
+def test_a_blocking_run_called_while_a_submit_of_its_prompt_is_in_its_session_is_refused(
+    monkeypatch, tmp_path
+):
+    # Re-review two (F1). A submit writes its first row about two minutes into its call; a blocking run called
+    # before then found no row to be warned by, queued for the browser and ran right after the submit.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    inside, leave = asyncio.Event(), asyncio.Event()
+    sessions = []
+
+    async def held_with(self, fn):
+        sessions.append(fn)
+        if len(sessions) == 1:
+            inside.set()
+            await leave.wait()
+        else:
+            # The blocking run got as far as a session: let the submit go, so this test fails instead of hanging.
+            leave.set()
+        return await fn(object())
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", held_with)
+    submit = SPEND_CALLS["job_submit"] | {"project": "P", "prompt": CUP, "job_id": "an-in-session"}
+    beside = SPEND_CALLS["gen_video"] | {"project": "P", "prompt": "A cup on  a table", "job_id": "an-beside"}
+
+    async def both(session):
+        first = asyncio.create_task(session.call_tool("job_submit", submit))
+        await inside.wait()
+        second = await session.call_tool("gen_video", beside)
+        leave.set()
+        return await first, second
+
+    first, second = with_client(both)
+
+    text = _texts([second])[0]
+    assert not first.is_error and second.is_error, text
+    assert "outcome code=NOT_SUBMITTED charged=0 retryable=no" in text and "an-in-session" in text, text
+    assert reached == [("job_submit", "an-in-session")] and len(sessions) == 1
+    assert mcp_server.backend._submitting == [] and mcp_server.backend._running == set()
+
+
 def test_a_second_submit_of_a_prompt_a_submitted_job_still_renders_goes_ahead(monkeypatch, tmp_path):
     # Two takes of one prompt are what job_submit is for: each is claimed by the workflow Flow named for it.
     reached = _spending_backend(monkeypatch, tmp_path)
-    _rendering_job(tmp_path)
-    call = SPEND_CALLS["job_submit"] | {"project": "P", "prompt": "a cup on a table", "job_id": "an-take-2"}
+    _submitted_job(tmp_path)
+    call = SPEND_CALLS["job_submit"] | {"project": "P", "prompt": CUP, "job_id": "an-take-2"}
 
     assert not _call("job_submit", call).is_error and ("job_submit", "an-take-2") in reached
 
@@ -4291,15 +4408,16 @@ def test_a_ledger_line_that_is_no_row_never_leaves_a_later_tool_without_an_outco
     assert opened == []
 
 
+@pytest.mark.parametrize("alias", ["aa-alias", "zz-alias"])
 def test_a_ledger_reached_by_two_spellings_is_one_ledger_and_the_clip_lands_beside_the_real_one(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, alias
 ):
     # A ledger linked into another folder under out/: the job is in one file, not in two, and its clip belongs
-    # beside that file, whichever spelling sorts last.
+    # beside that file, whether the link sorts before it or after.
     opened = _job_backend(monkeypatch, tmp_path)
     ledger = _started_job(tmp_path / "films")
-    (tmp_path / "zz-alias").mkdir()
-    (tmp_path / "zz-alias" / "ledger.jsonl").symlink_to(ledger.path)
+    (tmp_path / alias).mkdir()
+    (tmp_path / alias / "ledger.jsonl").symlink_to(ledger.path)
     log = _job_world(monkeypatch, tmp_path, [_video("w-job", PROMPT)])
 
     answer = _payload(_call("job_collect", {"job_id": "job-1"}))
@@ -4307,3 +4425,60 @@ def test_a_ledger_reached_by_two_spellings_is_one_ledger_and_the_clip_lands_besi
     assert answer["state"] == "collected" and opened == ["browser"]
     assert Path(answer["path"]).parent == tmp_path / "films" and len(log.fetched) == 1
     assert [row["status"] for row in ledger.rows()] == ["submitted", "started", "done"]
+
+
+def test_the_blocking_composer_tools_and_the_instructions_say_when_a_submitted_job_holds_them_back():
+    # The refusal is a deliberate change to gen_video and gen_character (DECISIONS 2026-10-03): an agent reading
+    # only their own descriptions has to meet it there, not in job_submit's.
+    tools = served_tool_objects()
+    for name in ("gen_video", "gen_character"):
+        description = tools[name].description
+        assert (
+            "job_submit" in description
+            and "job_collect" in description
+            and "same project and prompt" in description
+        )
+    assert "refused while a job that job_submit" in mcp_server.server.instructions
+    # No other tool is held to it, so no other description says it is.
+    held = {
+        name for name, tool in tools.items() if "is refused while a job that job_submit" in tool.description
+    }
+    assert held == {"gen_video", "gen_character"}
+
+
+@pytest.mark.parametrize(
+    "change", [{"prompt": "a dog on a rug"}, {"project": "Q"}], ids=["another prompt", "another project"]
+)
+def test_a_blocking_run_a_submit_in_its_session_cannot_be_confused_with_is_not_refused(
+    monkeypatch, tmp_path, change
+):
+    # What the server remembers of a submit in its session holds back only runs of its own project and prompt.
+    reached = _spending_backend(monkeypatch, tmp_path)
+    inside, leave = asyncio.Event(), asyncio.Event()
+    sessions = []
+
+    async def held_with(self, fn):
+        sessions.append(fn)
+        if len(sessions) == 1:
+            inside.set()
+            await leave.wait()
+        else:
+            # The real sessions queue behind one guard; here the second lets the first go once it is in.
+            leave.set()
+        return await fn(object())
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", held_with)
+    submit = SPEND_CALLS["job_submit"] | {"project": "P", "prompt": CUP, "job_id": "an-in-session"}
+    beside = SPEND_CALLS["gen_video"] | {"project": "P", "prompt": CUP, "job_id": "an-beside"} | change
+
+    async def both(session):
+        first = asyncio.create_task(session.call_tool("job_submit", submit))
+        await inside.wait()
+        second = await asyncio.wait_for(session.call_tool("gen_video", beside), 10)
+        leave.set()
+        return await first, second
+
+    first, second = with_client(both)
+
+    assert not first.is_error and not second.is_error, _texts([first, second])
+    assert sorted(reached) == [("gen_video", "an-beside"), ("job_submit", "an-in-session")]

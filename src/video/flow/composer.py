@@ -854,6 +854,9 @@ async def _submit(
         # The job Flow refused that this click retries (plan AM): on record before the click, so a second retry of
         # that job is refused off the ledger alone.
         **({"retry_of": retry_of} if retry_of else {}),
+        # A detached run says so before the click (plan AN): cut off before its started row, it is still told from a
+        # blocking run that crashed, and blocking runs of its prompt are held back while its clip may show.
+        **({"detach": True} if detach else {}),
         **{**extra, **checked},
     )
     digest = _job_digest(job_id)
