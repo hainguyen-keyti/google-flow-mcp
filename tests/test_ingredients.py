@@ -2012,6 +2012,60 @@ def test_submit_writes_the_intent_row_before_the_click_and_the_outcome_after(mon
     assert result["spent"] == 12 and result["media_id"] == "m-w-new"
 
 
+def test_a_retry_is_named_on_the_row_written_before_the_click_and_only_there(monkeypatch, tmp_path):
+    # Plan AM, I-money-4: the server reads this link to refuse a second retry of one refused job, so it has to be
+    # on record before the click, not after.
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", f"Thu {PROMPT}")])
+
+    _submit(_SubmitSession(log), tmp_path, log, retry_of="job-0")
+
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
+    assert [(row["status"], row.get("retry_of")) for row in rows] == [("submitted", "job-0"), ("done", None)]
+
+
+def test_the_row_keeps_as_much_of_the_prompt_as_a_retry_is_held_to(monkeypatch, tmp_path):
+    # outcome.retry_refusal compares a retry's prompt with this row, cut at the same length.
+    from video import outcome
+
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    long = "a teapot on a table, " * 20
+    assert len(long) > outcome.PROMPT_KEPT
+
+    with pytest.raises(RuntimeError):
+        _submit(_SubmitSession(log), tmp_path, log, prompt=long)
+
+    row = gen.Ledger(tmp_path / "ledger.jsonl").rows()[0]
+    assert row["status"] == "submitted" and row["prompt"] == long[: outcome.PROMPT_KEPT]
+
+
+def test_a_job_that_retries_nothing_carries_no_retry_field(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", f"Thu {PROMPT}")])
+
+    _submit(_SubmitSession(log), tmp_path, log)
+
+    assert all("retry_of" not in row for row in gen.Ledger(tmp_path / "ledger.jsonl").rows())
+
+
+def test_the_ingredients_driver_hands_the_retry_link_to_the_money_path(monkeypatch, tmp_path):
+    log, handed = [], {}
+    _paid_world(monkeypatch, log, recipe=KEPT_ONE_VOICE)
+
+    async def submit(session, project_id, **kwargs):
+        handed.update(kwargs)
+        return {"job_id": kwargs["job_id"], "media_id": "m-new", "spent": 10, "body_check": {"ok": True}}
+
+    monkeypatch.setattr(ingredients.composer, "_submit", submit)
+
+    _paid_run(tmp_path, retry_of="job-0")
+    assert handed["retry_of"] == "job-0"
+    handed.clear()
+    _paid_run(tmp_path)
+    assert handed["retry_of"] is None
+
+
 def test_submit_refuses_a_job_id_that_is_already_done_before_reading_anything(monkeypatch, tmp_path):
     log = []
     _install(monkeypatch, tmp_path, log)

@@ -3278,7 +3278,10 @@ def _video_world(monkeypatch, tmp_path, rows, *, fails=None, answer=None):
     async def fake_with(self, fn):
         return await fn(object())
 
+    reached = []
+
     async def fake_generate(session, project, *, prompt, out_dir, job_id=None, **options):
+        reached.append({"project": project, "prompt": prompt, "job_id": job_id, **options})
         ledger = gen.Ledger(out_dir / "ledger.jsonl")
         for status, fields in rows:
             ledger.append(job_id, status, **fields)
@@ -3289,6 +3292,7 @@ def _video_world(monkeypatch, tmp_path, rows, *, fails=None, answer=None):
     monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
     monkeypatch.setattr(mcp_server.video_mod, "generate", fake_generate)
     monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    return reached
 
 
 def _submitted(**more):
@@ -3423,6 +3427,143 @@ def test_an_error_keeps_its_own_words_when_the_outcome_cannot_be_read(monkeypatc
 
     text = _texts([result])[0]
     assert result.is_error and "credits may already be spent" in text and "outcome code" not in text, text
+
+
+FILTERED = ("failed", {"spent": 0, "credits_before": 100, "credits_after": 100, "flow": AUDIO})
+PAID = ("done", {"spent": 10, "credits_before": 100, "credits_after": 90})
+
+
+def _refused_earlier(tmp_path, job_id="am-first", outcome_row=FILTERED, folder="", **intent):
+    """A job already on record: by default one Flow refused with the audio filter and did not charge for."""
+    ledger = gen.Ledger(tmp_path / folder / "ledger.jsonl")
+    status, fields = _submitted(**intent)
+    ledger.append(job_id, status, **fields)
+    if outcome_row:
+        ledger.append(job_id, outcome_row[0], **outcome_row[1])
+
+
+def test_a_retry_the_ledger_vouches_for_runs_and_carries_its_link_to_the_driver(monkeypatch, tmp_path):
+    # Plan AM, I-money-4. The refused job sits in another ledger folder of the same out folder: the sweep finds it.
+    reached = _video_world(monkeypatch, tmp_path, [_submitted(retry_of="am-first"), PAID])
+    _refused_earlier(tmp_path, folder="film-1")
+
+    answer = _payload(_call("gen_video", {**VIDEO_CALL, "job_id": "am-second", "retry_of": "am-first"}))
+
+    assert answer["outcome"]["code"] == "DONE" and len(reached) == 1
+    assert reached[0]["retry_of"] == "am-first" and reached[0]["job_id"] == "am-second"
+
+
+@pytest.mark.parametrize(
+    ("earlier", "said"),
+    [
+        ({"outcome_row": PAID}, "DONE"),
+        ({"outcome_row": None}, "UNKNOWN"),
+        ({"prompt": "another prompt"}, "same request"),
+        ({"project": "Q"}, "same request"),
+        ({"job_id": "someone-else"}, "no ledger row"),
+    ],
+    ids=["it finished and was paid", "it never settled", "another prompt", "another project", "no such job"],
+)
+def test_a_retry_the_ledger_cannot_vouch_for_is_refused_before_anything_opens(
+    monkeypatch, tmp_path, earlier, said
+):
+    reached = _video_world(monkeypatch, tmp_path, [_submitted(), PAID])
+    _refused_earlier(tmp_path, **earlier)
+
+    result = _call("gen_video", {**VIDEO_CALL, "job_id": "am-second", "retry_of": "am-first"})
+
+    text = _texts([result])[0]
+    assert result.is_error and said in text and reached == [], text
+    # Nothing ran under the new id, so it is free to use again, and the error says so in its first line.
+    assert "outcome code=NOT_SUBMITTED charged=0 retryable=no" in text, text
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows("am-second") == []
+
+
+def test_one_refused_job_takes_one_retry_at_a_time(monkeypatch, tmp_path):
+    # Two calls naming the same refused job, the first still in flight: the second would be a second clip.
+    _refused_earlier(tmp_path)
+    backend = mcp_server.Backend(out_dir=tmp_path)
+    started, release = [], None
+
+    async def both():
+        nonlocal release
+        release = asyncio.Event()
+
+        async def slow():
+            started.append("first")
+            await release.wait()
+            return {"job_id": "am-second"}
+
+        async def never():
+            started.append("second")
+            return {"job_id": "am-third"}
+
+        request = {"project": "P", "prompt": "a cup on a table"}
+        first = asyncio.create_task(
+            backend._spend_once("am-second", tmp_path, slow, retry_of="am-first", request=request)
+        )
+        await asyncio.sleep(0.01)
+        with pytest.raises(ValueError, match="another call is retrying"):
+            await backend._spend_once("am-third", tmp_path, never, retry_of="am-first", request=request)
+        release.set()
+        await first
+        # The first call left no submitted row here (a stub), so the slot is free again for an honest retry.
+        return await backend._spend_once("am-fourth", tmp_path, never, retry_of="am-first", request=request)
+
+    assert asyncio.run(both()) == {"job_id": "am-third"}
+    assert started == ["first", "second"]
+
+
+def test_a_job_cannot_be_named_as_its_own_retry(monkeypatch, tmp_path):
+    reached = _video_world(monkeypatch, tmp_path, [_submitted(), PAID])
+
+    result = _call("gen_video", {**VIDEO_CALL, "job_id": "am-self", "retry_of": "am-self"})
+
+    assert result.is_error and "cannot be its own retry" in _texts([result])[0] and reached == []
+
+
+def test_a_dry_run_takes_no_retry_of(monkeypatch, tmp_path):
+    reached = _video_world(monkeypatch, tmp_path, [])
+    _refused_earlier(tmp_path)
+
+    result = _call("gen_video", {"project": "P", "prompt": "a cup", "dry_run": True, "retry_of": "am-first"})
+
+    assert result.is_error and "dry run" in _texts([result])[0] and reached == []
+
+
+def test_gen_character_takes_a_retry_the_same_way(monkeypatch, tmp_path):
+    reached = []
+
+    async def fake_with(self, fn):
+        return await fn(object())
+
+    async def fake_generate(session, project, *, prompt, out_dir, job_id=None, **options):
+        reached.append({"job_id": job_id, **options})
+        return {"job_id": job_id}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.ingredients_mod, "generate", fake_generate)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    _refused_earlier(tmp_path, kind="character")
+    call = {"project": "P", "prompt": "a cup on a table", "characters": ["e-1"]}
+
+    ok = _call("gen_character", {**call, "job_id": "am-char-2", "retry_of": "am-first"})
+    assert not ok.is_error, _texts([ok])
+    assert reached[0]["retry_of"] == "am-first"
+
+    other = _call("gen_character", {**call, "prompt": "a dog", "job_id": "am-char-3", "retry_of": "am-first"})
+    assert other.is_error and "same request" in _texts([other])[0] and len(reached) == 1
+
+
+def test_only_the_two_composer_tools_take_a_retry_of():
+    # Read off the served schemas: retry_of is vouched for from Flow's own reason, which only the composer path hears.
+    takes = {
+        name
+        for name, tool in served_tool_objects().items()
+        if "retry_of" in ((tool.input_schema or {}).get("properties") or {})
+    }
+
+    assert takes == {"gen_video", "gen_character"}
 
 
 def test_a_gflow_job_with_no_job_id_of_its_own_still_says_what_it_came_to(monkeypatch, tmp_path):

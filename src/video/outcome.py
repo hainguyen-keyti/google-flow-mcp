@@ -132,6 +132,64 @@ def classify(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return _said(code, 0, retryable=code in RETRYABLE and kind in RETRY_KINDS, reasons=reasons)
 
 
+# What `composer._submit` keeps of a prompt on the `submitted` row.
+PROMPT_KEPT = 200
+
+
+def _retried(rows: list[dict[str, Any]]) -> str | None:
+    """The job a job's click was a retry of: the link sits on the `submitted` row, written right before the click."""
+    links = [r.get("retry_of") for r in rows if r.get("status") == "submitted" and r.get("retry_of")]
+    return links[-1] if links else None
+
+
+def retry_refusal(
+    target: str, jobs: dict[str, list[dict[str, Any]]], *, project: str, prompt: str
+) -> str | None:
+    """Why job `target` may not be retried with this project and prompt, or None when it may (I-money-4).
+
+    `jobs` holds the rows of every job of every ledger under the out folder, oldest first. A retry is vouched for
+    only when the job is a refusal Flow did not charge for and may be retried (`classify`), the request is the one
+    that job sent, no other submitted job already retried it, and it is not past the second retry of the original.
+    """
+    rows = jobs.get(target) or []
+    if not rows:
+        return (
+            f"retry_of names job {target!r}, which has no ledger row under the out folder: there is nothing to "
+            "retry; a job that never started runs again under its own job_id, anything else is a new job with no "
+            "retry_of"
+        )
+    said = classify(rows)
+    if not said["retryable"]:
+        charged = "unknown" if said["charged"] is None else said["charged"]
+        return (
+            f"job {target!r} may not be retried: its outcome is {said['code']} (charged {charged}); "
+            f"{said['advice']}"
+        )
+    intent, _ = last_run(rows)
+    sent = intent or {}
+    if sent.get("project") != project or sent.get("prompt") != prompt[:PROMPT_KEPT]:
+        return (
+            f"a retry sends the same request: job {target!r} went to project {sent.get('project')} with a prompt "
+            f"starting {str(sent.get('prompt'))[:60]!r}; a different request is a new job with no retry_of"
+        )
+    for other, theirs in jobs.items():
+        if other != target and _retried(theirs) == target:
+            return (
+                f"job {target!r} was already retried by job {other!r}: read that job's outcome and, if Flow "
+                f"refused it too without charging, retry it by naming {other!r}"
+            )
+    # Walked no further than the bound, so links that loop end here as well.
+    chain = [target]
+    while len(chain) <= MAX_RETRIES and (link := _retried(jobs.get(chain[-1]) or [])) is not None:
+        chain.append(link)
+    if len(chain) > MAX_RETRIES:
+        return (
+            f"job {target!r} is already retry {len(chain) - 1} of {MAX_RETRIES} of job {chain[-1]!r}: Flow refused "
+            "this request every time, so tell the owner instead of sending it again"
+        )
+    return None
+
+
 def head(said: dict[str, Any]) -> str:
     """The one line that leads an error an agent reads: it sees at most 500 characters of it."""
     charged = "unknown" if said["charged"] is None else said["charged"]

@@ -232,6 +232,127 @@ def test_the_codes_are_a_closed_set_with_one_line_of_advice_each():
     assert seen <= set(outcome.CODES)
 
 
+PROMPT = "a cup on a table, slow push in"
+
+
+def _failed_row(spent=0, statuses=(6, 2, 4), reasons=("PUBLIC_ERROR_AUDIO_FILTERED",)):
+    flow = {"statuses": list(statuses), "reasons": list(reasons)}
+    bracket = {"credits_before": 100, "credits_after": 100 - spent}
+    return {"status": "failed", "spent": spent, **bracket, "flow": flow}
+
+
+def _job(kind="video", project="P", prompt=PROMPT, retry_of=None, outcome_row=None):
+    """The rows of one composer job: its `submitted` row and, unless told otherwise, an uncharged audio-filter fail."""
+    intent = {"status": "submitted", "kind": kind, "project": project, "prompt": prompt[:200]}
+    if retry_of:
+        intent["retry_of"] = retry_of
+    settled = _failed_row() if outcome_row is None else outcome_row
+    return [intent, settled] if settled else [intent]
+
+
+def _refusal(jobs, target="a", **request):
+    return outcome.retry_refusal(target, jobs, **{"project": "P", "prompt": PROMPT, **request})
+
+
+def test_a_job_flow_refused_without_charging_may_be_retried_with_the_same_request():
+    assert _refusal({"a": _job()}) is None
+    assert _refusal({"a": _job(kind="character")}) is None
+    no_reason = _job()
+    no_reason[-1]["flow"] = {"statuses": [6, 2, 4], "reasons": []}
+    assert _refusal({"a": no_reason}) is None
+
+
+def test_a_retry_of_a_job_nobody_recorded_is_refused():
+    said = _refusal({"b": _job()})
+
+    assert "nothing to retry" in said and "'a'" in said
+
+
+DONE = {"status": "done", "spent": 10, "credits_before": 100, "credits_after": 90}
+UNSAFE = _failed_row(reasons=("PUBLIC_ERROR_UNSAFE_GENERATION",))
+CHARGED = _failed_row(spent=10)
+RUNNING = _failed_row(statuses=(6, 2), reasons=())
+
+
+@pytest.mark.parametrize(
+    ("settled", "code"),
+    [
+        (DONE, "DONE"),
+        (UNSAFE, "UNSAFE_GENERATION"),
+        (CHARGED, "CHARGED_NO_OUTPUT"),
+        (RUNNING, "NOTHING_GENERATED"),
+        ({"status": "unknown", "spent": None}, "UNKNOWN"),
+        (False, "UNKNOWN"),
+    ],
+    ids=["done", "unsafe", "charged", "flow still running", "unknown", "never settled"],
+)
+def test_a_retry_is_refused_unless_the_job_is_a_refusal_that_may_be_retried(settled, code):
+    # AM3 (3): a job that spent, or may have, is never vouched for.
+    said = _refusal({"a": _job(outcome_row=settled)})
+
+    assert said is not None and code in said, said
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [{"project": "another"}, {"prompt": "a dog on a table, slow push in"}, {"prompt": PROMPT + " and more"}],
+    ids=["another project", "another prompt", "a longer prompt"],
+)
+def test_a_retry_sends_the_request_the_refused_job_sent(request_):
+    # AM3 (6): "retry unchanged". The ledger keeps the project and the first 200 characters of the prompt.
+    said = _refusal({"a": _job()}, **request_)
+
+    assert said is not None and "same" in said, said
+
+
+def test_a_prompt_longer_than_the_ledger_keeps_is_held_to_what_the_ledger_kept():
+    long = PROMPT + " " + "and then " * 40
+    assert len(long) > 200
+
+    assert _refusal({"a": _job(prompt=long)}, prompt=long) is None
+    assert _refusal({"a": _job(prompt=long)}, prompt="x" + long[1:]) is not None
+
+
+def test_a_job_is_retried_once_and_the_next_retry_names_the_retry():
+    # AM3 (4): two retries of one refused job would be two clips of one request.
+    retried = {"a": _job(), "b": _job(retry_of="a")}
+
+    said = _refusal(retried, target="a")
+
+    assert said is not None and "'b'" in said and "already" in said, said
+    assert _refusal(retried, target="b") is None
+
+
+def test_a_third_retry_of_one_original_job_is_refused():
+    # AM3 (5): at most two retries, the bound the skill design uses for a random filter.
+    chain = {"a": _job(), "b": _job(retry_of="a"), "c": _job(retry_of="b")}
+
+    said = _refusal(chain, target="c")
+
+    assert said is not None and str(outcome.MAX_RETRIES) in said and "'a'" in said, said
+
+
+def test_a_retry_link_that_loops_is_refused_and_never_followed_forever():
+    loop = {"a": _job(retry_of="b"), "b": _job(retry_of="a")}
+    assert _refusal(loop, target="b") is not None
+    # Nothing retried c yet, and its own links run a, b, a, b: the walk stops at the bound.
+    behind = {"c": _job(retry_of="a"), "a": _job(retry_of="b"), "b": _job(retry_of="a")}
+    assert str(outcome.MAX_RETRIES) in _refusal(behind, target="c")
+
+
+def test_the_second_retry_of_an_original_job_is_still_allowed():
+    chain = {"a": _job(), "b": _job(retry_of="a")}
+
+    assert _refusal(chain, target="b") is None
+
+
+def test_only_a_job_that_was_submitted_takes_the_retry_slot():
+    # A retry refused before its click wrote no row, so it holds nothing; one that reached the click does.
+    assert _refusal({"a": _job(), "b": []}) is None
+    opened = [{"status": "opening", "kind": "edit", "retry_of": "a"}]
+    assert _refusal({"a": _job(), "b": opened}) is None
+
+
 def test_the_head_of_an_error_carries_the_outcome_in_one_short_line():
     said = outcome.classify(ROWS["audio_filtered"]["rows"])
 

@@ -196,6 +196,7 @@ class Backend:
         self.profile = profile
         self.out_dir = out_dir
         self._running: set[str] = set()
+        self._retrying: set[str] = set()
         self._unreported: list[str] = []
 
     async def _with(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
@@ -268,10 +269,25 @@ class Backend:
                 raise ValueError(f"out_dir must be a folder, not a ledger or another file, got {target}")
         return target
 
-    async def _spend_once(self, job_id: str | None, out_dir: Path, run: Callable[[], Awaitable[Any]]) -> Any:
+    async def _spend_once(
+        self,
+        job_id: str | None,
+        out_dir: Path,
+        run: Callable[[], Awaitable[Any]],
+        *,
+        retry_of: str | None = None,
+        request: dict[str, str] | None = None,
+    ) -> Any:
         """One job per job_id through MCP (DECISIONS 2026-09-15), decided before a browser opens: refused while a call
         with that id still runs in this server, and when any ledger under the out folder, or the one out_dir names,
-        holds a row for it, `opening` included."""
+        holds a row for it, `opening` included.
+
+        `retry_of` names a job Flow refused. It is vouched for here, off the same ledgers and before a browser opens
+        (plan AM, I-money-4: `outcome.retry_refusal`), and one refused job takes one retry at a time."""
+        if retry_of and (not job_id or retry_of == job_id):
+            raise self._not_started(
+                "a job cannot be its own retry: retry_of names the job Flow refused, job_id is a new id for this run"
+            )
         if job_id:
             # The ledger would store such an id as another one, so no check below could ever find it (DECISIONS 2026-09-16).
             gen_mod.check_job_id(job_id)
@@ -296,6 +312,20 @@ class Backend:
                     # What that earlier run came to, so the caller learns it without a second look (plan AM).
                     refused.outcome = self._came_to(rows)
                     raise refused
+            if retry_of:
+                if retry_of in self._retrying:
+                    raise self._not_started(
+                        f"another call is retrying job {retry_of!r} right now: wait for it to finish and read its "
+                        "outcome before anything else is started for that job"
+                    )
+                jobs: dict[str, list[dict[str, Any]]] = {}
+                for each in ledgers:
+                    for row in gen_mod.Ledger(each).rows():
+                        jobs.setdefault(str(row.get("job_id")), []).append(row)
+                why = outcome_mod.retry_refusal(retry_of, jobs, **(request or {"project": "", "prompt": ""}))
+                if why:
+                    raise self._not_started(why)
+                self._retrying.add(retry_of)
             # Marked with no await since the check, so a second call with this id cannot slip in between.
             self._running.add(job_id)
         ledger = gen_mod.Ledger(out_dir / "ledger.jsonl")
@@ -311,12 +341,19 @@ class Backend:
             raise
         finally:
             self._running.discard(job_id)
+            self._retrying.discard(retry_of)
         # A driver that answered and left no row is not a job this server can say anything about.
         named = job_id or (result.get("job_id") if isinstance(result, dict) else None)
         said = self._outcome_of(ledger, named)
         if isinstance(result, dict) and said is not None and said["code"] != "NOT_SUBMITTED":
             result["outcome"] = said
         return result
+
+    def _not_started(self, why: str) -> ValueError:
+        """A refusal before anything ran under the job id, typed as such: the id stays free to use."""
+        refused = ValueError(why)
+        refused.outcome = self._came_to([])
+        return refused
 
     def _came_to(self, rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         """The typed outcome of a job's rows (video.outcome). Never raises: it runs after a driver that may have
@@ -611,10 +648,12 @@ class Backend:
         job_id: str | None = None,
         out_dir: str | None = None,
         duration: int = ingredients_mod.SECONDS,
+        retry_of: str | None = None,
     ) -> dict[str, Any]:
         # A dry run spends nothing but still opens a browser for a minute or two, so a folder that could not hold
         # the clip or its ledger is refused here rather than after the wait.
         target = self._editor_out_dir(out_dir)
+        link = {"retry_of": retry_of} if retry_of else {}
 
         def run() -> Awaitable[Any]:
             return self._with(
@@ -630,11 +669,16 @@ class Backend:
                     out_dir=target,
                     dry_run=dry_run,
                     duration=duration,
+                    **link,
                 )
             )
 
         # A dry run clicks nothing and writes no row, so there is no job to guard.
-        return await run() if dry_run else await self._spend_once(job_id, target, run)
+        if dry_run:
+            return await run()
+        return await self._spend_once(
+            job_id, target, run, retry_of=retry_of, request={"project": project, "prompt": prompt}
+        )
 
     async def gen_video(self, project: str, prompt: str, **options: Any) -> dict[str, Any]:
         out_dir = options.pop("out_dir", None)
@@ -648,7 +692,15 @@ class Backend:
             )
 
         # A dry run clicks nothing and writes no row, so there is no job to guard.
-        return await run() if dry_run else await self._spend_once(job_id, target, run)
+        if dry_run:
+            return await run()
+        return await self._spend_once(
+            job_id,
+            target,
+            run,
+            retry_of=options.get("retry_of"),
+            request={"project": project, "prompt": prompt},
+        )
 
     async def generate(
         self,
@@ -875,6 +927,15 @@ def _one_line(value: str, name: str) -> None:
         raise ValueError(
             f"{name} must be one line: Flow's box takes a newline as Enter, which may submit early"
         )
+
+
+def _retry_named(retry_of: str | None, dry_run: bool) -> None:
+    if retry_of is None:
+        return
+    if not retry_of.strip():
+        raise ValueError("retry_of must name the job Flow refused; leave it out for a new job")
+    if dry_run:
+        raise ValueError("retry_of means nothing on a dry run, which starts no job: leave it out")
 
 
 @server.tool(name="flow_lane", description="Which lane the profile is on (LABS, MIGRATED, SIGNED_OUT). Free.")
@@ -1654,9 +1715,11 @@ async def gen_character(
     dry_run: bool = False,
     out_dir: str | None = None,
     duration: int = ingredients_mod.SECONDS,
+    retry_of: str | None = None,
 ) -> str:
     _require(project, "project")
     _require(prompt, "prompt")
+    _retry_named(retry_of, dry_run)
     characters = characters or []
     wanted = [*characters, *(media_ids or [])]
     if not wanted:
@@ -1679,7 +1742,17 @@ async def gen_character(
         _require(job_id or "", "job_id")
     return _json(
         await backend.gen_character(
-            project, prompt, characters, media_ids, model, aspect, dry_run, job_id, out_dir, duration
+            project,
+            prompt,
+            characters,
+            media_ids,
+            model,
+            aspect,
+            dry_run,
+            job_id,
+            out_dir,
+            duration,
+            **({"retry_of": retry_of} if retry_of else {}),
         )
     )
 
@@ -1748,10 +1821,12 @@ async def gen_video(
     dry_run: bool = False,
     out_dir: str | None = None,
     voices: list[str] | None = None,
+    retry_of: str | None = None,
 ) -> str:
     _require(project, "project")
     _require(prompt, "prompt")
     _one_line(prompt, "prompt")
+    _retry_named(retry_of, dry_run)
     wanted = [
         *(characters or []),
         *(media_ids or []),
@@ -1795,6 +1870,7 @@ async def gen_video(
             voices=voices or [],
             dry_run=dry_run,
             out_dir=out_dir,
+            **({"retry_of": retry_of} if retry_of else {}),
         )
     )
 

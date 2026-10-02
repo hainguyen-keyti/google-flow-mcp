@@ -27,7 +27,7 @@ from gflow_cli.api.transports.batchexecute import STATUS_DONE, STATUS_RUNNING, S
 from gflow_cli.data.redaction import redact_error_detail
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from video import gen
+from video import gen, outcome
 from video.flow import agent, clips, overlays, reader
 from video.flow import download as download_mod
 from video.session import PROJECT_READY, FlowSession
@@ -754,6 +754,7 @@ async def _submit(
     click_box: bool = True,
     count: int = 1,
     max_credits: int | None = None,
+    retry_of: str | None = None,
 ) -> dict[str, Any]:
     """The one money path: every mode goes through the same price guard, single click and ledger.
 
@@ -832,11 +833,14 @@ async def _submit(
         "submitted",
         kind=kind,
         project=project_id,
-        prompt=prompt[:200],
+        prompt=prompt[: outcome.PROMPT_KEPT],
         quoted_credits=confirm["price"],
         credits_before=credits_before,
         left_over=left_over,
         prompt_landed=landed,
+        # The job Flow refused that this click retries (plan AM): on record before the click, so a second retry of
+        # that job is refused off the ledger alone.
+        **({"retry_of": retry_of} if retry_of else {}),
         **{**extra, **checked},
     )
     digest = _job_digest(job_id)

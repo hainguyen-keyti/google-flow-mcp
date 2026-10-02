@@ -349,6 +349,21 @@ def _run(**kwargs):
     return asyncio.run(video.generate(object(), "p-1", **(base | kwargs)))
 
 
+def test_the_video_driver_hands_the_retry_link_to_whichever_mode_runs(monkeypatch):
+    # Plan AM: the link has to reach the row written before the click, through Frames and through Ingredients.
+    calls = _driver_world(monkeypatch)
+
+    _run(retry_of="job-0")
+    assert calls["submit"]["retry_of"] == "job-0"
+    _run()
+    assert calls["submit"]["retry_of"] is None
+
+    _run(model="veo-lite", media_ids=["m-teapot"], retry_of="job-0")
+    assert calls["ingredients"]["retry_of"] == "job-0"
+    _run(model="veo-lite", media_ids=["m-teapot"])
+    assert calls["ingredients"]["retry_of"] is None
+
+
 def test_text_to_video_goes_through_frames_with_every_setting_and_the_cap(monkeypatch):
     calls = _driver_world(monkeypatch)
 

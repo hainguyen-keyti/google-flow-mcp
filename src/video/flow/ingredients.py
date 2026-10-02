@@ -994,6 +994,7 @@ async def generate(
     body_check_for: Any = None,
     table_credits: int = 0,
     voices: list[str] | tuple[str, ...] = (),
+    retry_of: str | None = None,
 ) -> dict[str, Any]:
     """One video from characters, project images and voices, or with dry_run the quote and the chips, never a click.
 
@@ -1143,6 +1144,7 @@ async def generate(
             strict_output=True,
             verify=verify,
             click_box=False,
+            retry_of=retry_of,
         )
     except BaseException as failed:
         # A restore that fails must never replace why the run failed, which may say credits were spent.

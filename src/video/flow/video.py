@@ -372,6 +372,7 @@ async def generate(
     dry_run: bool = False,
     wait: float = 480.0,
     voices: list[str] | tuple[str, ...] = (),
+    retry_of: str | None = None,
 ) -> dict[str, Any]:
     """One gen_video run: every check that needs no browser first, then one of the two composer modes."""
     offers_length = bool(_model(model)["durations"])
@@ -413,6 +414,7 @@ async def generate(
             body_check_for=lambda references: VideoBodyCheck(
                 "r2v", references, length, resolution if offers_length else None
             ),
+            retry_of=retry_of,
         )
         return {"mode": mode, "table_credits": table, **result}
 
@@ -481,6 +483,7 @@ async def generate(
             verify=verify,
             count=count,
             max_credits=max_credits if max_credits is not None else table,
+            retry_of=retry_of,
         )
     except BaseException:
         if was:
