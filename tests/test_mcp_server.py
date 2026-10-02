@@ -3529,6 +3529,25 @@ def test_a_refused_retry_holds_no_slot(monkeypatch, tmp_path):
     assert refused.is_error and mcp_server.backend._retrying == set()
 
 
+def test_one_ledger_named_two_ways_is_one_ledger(monkeypatch, tmp_path):
+    # Scoped re-review of plan AM: the server's out folder is relative ("out"), an agent's out_dir may be absolute;
+    # the same file under two spellings was counted as two ledgers and an honest retry was refused.
+    monkeypatch.chdir(tmp_path)
+    _refused_earlier(tmp_path / "out", folder="film-1")
+    backend = mcp_server.Backend(out_dir=Path("out"))
+
+    async def run():
+        return {"job_id": "am-second"}
+
+    request = {"project": "P", "prompt": "a cup on a table"}
+    absolute = tmp_path / "out" / "film-1"
+    answer = asyncio.run(
+        backend._spend_once("am-second", absolute, run, retry_of="am-first", request=request)
+    )
+
+    assert answer == {"job_id": "am-second"}
+
+
 def test_a_retry_of_a_job_that_sits_in_two_ledgers_is_refused(monkeypatch, tmp_path):
     # Review of plan AM, N2: the CLI and the story pipeline can run one job id twice, in two folders. Read in file
     # order, a paid run under an uncharged refusal would look retryable, so such a job is not vouched for at all.

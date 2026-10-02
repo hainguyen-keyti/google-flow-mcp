@@ -305,7 +305,8 @@ class Backend:
             found = sorted(
                 path for path in self.out_dir.rglob("ledger.jsonl", case_sensitive=False) if path.is_file()
             )
-            ledgers = dict.fromkeys([*found, out_dir / "ledger.jsonl"])
+            # Resolved, so one file reached by a relative and by an absolute path is one ledger, read once.
+            ledgers = dict.fromkeys(path.resolve() for path in [*found, out_dir / "ledger.jsonl"])
             for ledger in ledgers:
                 rows = gen_mod.Ledger(ledger).rows(job_id)
                 statuses = sorted({str(row.get("status")) for row in rows})
