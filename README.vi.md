@@ -172,9 +172,10 @@ mặt, tay và món đồ.
   đầu số dư cho thấy đã rời tài khoản, `UNKNOWN` và `CHARGED_NO_OUTPUT` nghĩa là tiền có thể đã mất, còn lỗi không có
   dòng outcome là bị từ chối trước khi job nào bắt đầu. **Một kiểu chạy lại được server bảo lãnh**: khi `gen_video`
   hay `gen_character` báo `retryable=yes` (Flow làm hỏng job mà không trừ tiền, vì bộ lọc âm thanh hoặc không lý do),
-  gọi lại với đúng yêu cầu cũ, `job_id` MỚI và `retry_of` là id của job bị từ chối. Sổ được kiểm trước khi mở trình
-  duyệt: job đó phải hỏng mà không tốn, cùng project và prompt, mỗi job một lần chạy lại một lúc, tối đa hai lần cho
-  một job gốc. Mọi trường hợp khác, đổi `job_id` sau lỗi vẫn là sai.
+  gọi lại với cùng project và prompt, `job_id` MỚI và `retry_of` là id của job bị từ chối. Sổ được kiểm trước khi mở
+  trình duyệt: job đó phải hỏng mà không tốn, cùng project và prompt (các thiết lập khác không được so), mỗi job chỉ
+  được chạy lại một lần (lần thứ hai bị từ chối khi lần đầu đã bấm, và trong lúc lần đầu còn chạy ở cùng server), tối
+  đa hai lần cho một job gốc. Mọi trường hợp khác, đổi `job_id` sau lỗi vẫn là sai.
   `job_id` mang chữ giống bí mật phiên (tên cookie hay header `Authorization`) bị từ chối trước mọi thứ, vì sổ sẽ lưu nó
   thành một id khác và không bao giờ tìm lại được; `Ledger.append` cũng từ chối id như vậy ở mọi đường ghi sổ (CLI,
   story, driver), và mỗi chuỗi trong dòng sổ được lọc riêng nên dòng luôn là JSON đọc được. `clip_extend` và

@@ -294,11 +294,14 @@ class Backend:
             if job_id in self._running:
                 # Not _job_refused: flow_media and flow_credits cannot show a job still in flight, so "start it under a
                 # new job_id if it did not run" would pay twice.
-                raise gen_mod.AlreadySubmitted(
+                flying = gen_mod.AlreadySubmitted(
                     "that job is still running in another call: wait for it to finish, then call again with the SAME "
                     "job_id; never start it under a new job_id, or it pays twice; if it never finishes, stop and tell "
                     f"the owner (job_id {job_id})"
                 )
+                # Typed too, so no error of a job that is spending comes without an outcome line (review of plan AM).
+                flying.outcome = outcome_mod.unreadable()
+                raise flying
             found = sorted(
                 path for path in self.out_dir.rglob("ledger.jsonl", case_sensitive=False) if path.is_file()
             )
@@ -319,9 +322,20 @@ class Backend:
                         "outcome before anything else is started for that job"
                     )
                 jobs: dict[str, list[dict[str, Any]]] = {}
+                held: list[Path] = []
                 for each in ledgers:
                     for row in gen_mod.Ledger(each).rows():
                         jobs.setdefault(str(row.get("job_id")), []).append(row)
+                        if row.get("job_id") == retry_of and each not in held:
+                            held.append(each)
+                if len(held) > 1:
+                    # The CLI and the story pipeline can run one id twice, in two folders; read in file order a paid
+                    # run under an uncharged refusal would look retryable (review of plan AM, N2).
+                    raise self._not_started(
+                        f"job {retry_of!r} has rows in {len(held)} ledgers under the out folder "
+                        f"({', '.join(str(path) for path in held)}), so which run they describe cannot be told and "
+                        "it is not retried: tell the owner"
+                    )
                 why = outcome_mod.retry_refusal(retry_of, jobs, **(request or {"project": "", "prompt": ""}))
                 if why:
                     raise self._not_started(why)
@@ -334,17 +348,16 @@ class Backend:
         except gen_mod.AlreadySubmitted as exc:
             # The drivers' own message ends "use a new job id", which invites paying twice.
             again = gen_mod.AlreadySubmitted(_job_refused(job_id, "a submitted row"))
-            again.outcome = self._outcome_of(ledger, job_id)
+            again.outcome = self._after_a_run(ledger, job_id)
             raise again from exc
         except Exception as failed:
-            failed.outcome = self._outcome_of(ledger, job_id)
+            failed.outcome = self._after_a_run(ledger, job_id)
             raise
         finally:
             self._running.discard(job_id)
             self._retrying.discard(retry_of)
         # A driver that answered and left no row is not a job this server can say anything about.
-        named = job_id or (result.get("job_id") if isinstance(result, dict) else None)
-        said = self._outcome_of(ledger, named)
+        said = self._outcome_of(ledger, job_id)
         if isinstance(result, dict) and said is not None and said["code"] != "NOT_SUBMITTED":
             result["outcome"] = said
         return result
@@ -363,6 +376,13 @@ class Backend:
         except Exception:
             logging.getLogger(__name__).exception("the outcome of a job could not be read off its rows")
             return None
+
+    def _after_a_run(self, ledger: gen_mod.Ledger, job_id: str | None) -> dict[str, Any] | None:
+        """The outcome an ERROR carries once the driver has run: when the rows cannot be read the job is UNKNOWN,
+        never left without an outcome, since an error with no outcome line is read as "nothing was started"."""
+        if not job_id:
+            return None
+        return self._outcome_of(ledger, job_id) or outcome_mod.unreadable()
 
     def _outcome_of(self, ledger: gen_mod.Ledger, job_id: str | None) -> dict[str, Any] | None:
         if not job_id:
@@ -752,7 +772,8 @@ class Backend:
             self._tell(result)
             return result
 
-        return await self._spend_once(job_id, target, run)
+        # The id the job really runs under, minted above when the caller gave none, so its outcome can be read.
+        return await self._spend_once(job.job_id, target, run)
 
     async def _image_media_ids(self, project: str, outputs: list[dict[str, Any]]) -> None:
         """gflow names an image by its workflow id (measured 2026-09-30), which gen_video refuses as a frame: the
@@ -881,7 +902,8 @@ server = TellingServer(
         "job_id, which the ledger refuses instead of charging twice. Every answer of a real run carries an outcome "
         "{code, charged, retryable, advice} and every error of one opens with it: read charged before anything "
         "else. The one retry under a new job_id the server vouches for is when gen_video or gen_character says "
-        "retryable=yes: call again with the same request, a new job_id and retry_of set to the refused job_id. "
+        "retryable=yes: call again with the same project and prompt, a new job_id and retry_of set to the refused "
+        "job_id. "
         "When model is omitted gen_t2v and gen_i2v "
         "use omni-flash for 10 s, and gen_r2v uses omni-flash at 8 s, the only length this host offers it. "
         "When aspect is omitted, all three run 9:16: that is gflow's own default, not the shape of the image you "
@@ -921,9 +943,10 @@ _JOB_ID_RULE = (
 _RETRY_RULE = (
     " When an error says retryable=yes (Flow failed the job and charged nothing, with code AUDIO_FILTERED or "
     "NO_REASON), it may pass as it is: call again with the same project and prompt, a NEW job_id, and retry_of set "
-    "to the refused job_id. The server checks the ledger before a browser opens and allows one retry of a job at a "
-    f"time and at most {outcome_mod.MAX_RETRIES} retries of one original job; for any other code a new job_id "
-    "after an error is still wrong."
+    "to the refused job_id. The server checks the ledger before a browser opens: a job is retried once (a second "
+    "retry of it is refused once the first has clicked, and while the first runs in this server), and one original "
+    f"job gets at most {outcome_mod.MAX_RETRIES} retries; for any other code a new job_id after an error is still "
+    "wrong."
 )
 
 

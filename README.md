@@ -125,10 +125,11 @@ These are not suggestions; they are enforced in code and pinned by tests.
   error with no outcome line was refused before any job started. Flow's refusals seen on this account all charged
   nothing: the audio filter (5 times), prominent people (2), unsafe generation (2), and once no reason at all.
 - **One retry the server vouches for.** When `gen_video` or `gen_character` says `retryable=yes` (Flow failed the
-  job uncharged, for its audio filter or for no reason), call again with the same request, a new `job_id` and
-  `retry_of` set to the refused one. The ledger is checked before a browser opens: the job must have failed
-  uncharged, the project and prompt must be the same, one retry of a job at a time, at most two retries of one
-  original. Any other new `job_id` after an error is still wrong.
+  job uncharged, for its audio filter or for no reason), call again with the same project and prompt, a new
+  `job_id` and `retry_of` set to the refused one. The ledger is checked before a browser opens: the job must have
+  failed uncharged, the project and prompt must be the same (the settings are not compared), a job is retried once
+  (a second retry is refused once the first has clicked, and while it runs in the same server), and one original
+  gets at most two retries. Any other new `job_id` after an error is still wrong.
 - **Outputs stay inside `out/`.** Every tool that writes a file or a ledger forces its target inside `out/`.
 - **Click once, then wait.** Flow submits late, about 20 s after the click. Leaving the page early cancels the
   request in flight and looks exactly like a dead button; clicking again submits a second, paid job.

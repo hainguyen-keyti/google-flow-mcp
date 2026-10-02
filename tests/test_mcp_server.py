@@ -3415,7 +3415,9 @@ def test_a_ledger_that_cannot_be_read_never_costs_a_paid_answer(monkeypatch, tmp
     assert answer["path"] == "out/x.mp4" and "outcome" not in answer
 
 
-def test_an_error_keeps_its_own_words_when_the_outcome_cannot_be_read(monkeypatch, tmp_path):
+def test_an_error_whose_outcome_cannot_be_read_is_unknown_and_keeps_its_own_words(monkeypatch, tmp_path):
+    # Review of plan AM, S1: the descriptions say an error with no outcome line was refused before any job started,
+    # so a job that ran and whose rows cannot be read must not come back without one.
     _video_world(monkeypatch, tmp_path, [_submitted()], fails=RuntimeError("credits may already be spent"))
 
     def broken(rows):
@@ -3426,7 +3428,118 @@ def test_an_error_keeps_its_own_words_when_the_outcome_cannot_be_read(monkeypatc
     result = _call("gen_video", {**VIDEO_CALL, "job_id": "am-unreadable-2"})
 
     text = _texts([result])[0]
-    assert result.is_error and "credits may already be spent" in text and "outcome code" not in text, text
+    assert result.is_error and "credits may already be spent" in text, text
+    assert "outcome code=UNKNOWN charged=unknown retryable=no; RuntimeError" in text, text
+
+
+def _half_written(ledger_path):
+    """A ledger whose last line was cut short, as a crash mid-write leaves it."""
+    with ledger_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"ts": 1, "job_id": "am-cut", "status": "do')
+
+
+def test_a_ledger_cut_mid_line_leaves_a_failed_job_unknown_and_a_paid_answer_whole(monkeypatch, tmp_path):
+    # Review of plan AM, N1: the guard on the ledger READ, not only on the classifier.
+    done = ("done", {"spent": 10, "credits_before": 100, "credits_after": 90})
+
+    async def fake_with(self, fn):
+        return await fn(object())
+
+    def driver(fails):
+        async def fake_generate(session, project, *, prompt, out_dir, job_id=None, **options):
+            ledger = gen.Ledger(out_dir / "ledger.jsonl")
+            status, fields = _submitted()
+            ledger.append(job_id, status, **fields)
+            if not fails:
+                ledger.append(job_id, done[0], **done[1])
+            _half_written(ledger.path)
+            if fails:
+                raise RuntimeError("Start generation was clicked, so credits may already be spent")
+            return {"job_id": job_id, "path": "out/x.mp4"}
+
+        return fake_generate
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.video_mod, "generate", driver(fails=True))
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "a"))
+    text = _texts([_call("gen_video", {**VIDEO_CALL, "job_id": "am-cut-1"})])[0]
+    assert "outcome code=UNKNOWN charged=unknown retryable=no; RuntimeError: Start generation" in text, text
+
+    monkeypatch.setattr(mcp_server.video_mod, "generate", driver(fails=False))
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path / "b"))
+    answer = _payload(_call("gen_video", {**VIDEO_CALL, "job_id": "am-cut-2"}))
+    assert answer["path"] == "out/x.mp4" and "outcome" not in answer
+
+
+def test_a_job_run_in_a_folder_of_its_own_is_read_from_that_folder(monkeypatch, tmp_path):
+    # Review of plan AM, S4: read from the out folder's own ledger, a clicked job would come back NOT_SUBMITTED.
+    failed = ("failed", {"spent": 0, "credits_before": 100, "credits_after": 100, "flow": AUDIO})
+    _video_world(monkeypatch, tmp_path, [_submitted(), failed], fails=RuntimeError("Flow refused this job"))
+    film = tmp_path / "film-1"
+
+    text = _texts([_call("gen_video", {**VIDEO_CALL, "job_id": "am-film-1", "out_dir": str(film)})])[0]
+
+    assert "outcome code=AUDIO_FILTERED charged=0 retryable=yes" in text, text
+    assert len(gen.Ledger(film / "ledger.jsonl").rows("am-film-1")) == 2
+
+
+def test_a_job_still_running_in_another_call_is_refused_as_unknown(monkeypatch, tmp_path):
+    # Review of plan AM, N3: that error had no outcome line while the id was spending in another call.
+    backend = mcp_server.Backend(out_dir=tmp_path)
+
+    async def both():
+        release = asyncio.Event()
+
+        async def slow():
+            await release.wait()
+            return {"job_id": "am-flight"}
+
+        first = asyncio.create_task(backend._spend_once("am-flight", tmp_path, slow))
+        await asyncio.sleep(0.01)
+        with pytest.raises(gen.AlreadySubmitted) as refused:
+            await backend._spend_once("am-flight", tmp_path, slow)
+        release.set()
+        await first
+        return refused.value
+
+    refused = asyncio.run(both())
+
+    assert refused.outcome["code"] == "UNKNOWN" and "still running" in str(refused)
+
+
+def test_the_outcome_the_server_read_leads_over_one_a_cause_carries(monkeypatch, tmp_path):
+    inner = RuntimeError("an earlier error")
+    inner.outcome = {"code": "DONE", "charged": 99, "retryable": False, "advice": "from elsewhere"}
+    outer = RuntimeError("the ingredients dialog offers no image")
+    outer.__cause__ = inner
+    _video_world(monkeypatch, tmp_path, [], fails=outer)
+
+    text = _texts([_call("gen_video", {**VIDEO_CALL, "job_id": "am-chain-1"})])[0]
+
+    assert "outcome code=NOT_SUBMITTED charged=0" in text and "charged=99" not in text, text
+
+
+def test_a_refused_retry_holds_no_slot(monkeypatch, tmp_path):
+    # Review of plan AM, N5: a slot taken before the refusal would lock the job against every later retry.
+    _video_world(monkeypatch, tmp_path, [_submitted(), PAID])
+    _refused_earlier(tmp_path, job_id="am-first", prompt="another prompt")
+
+    refused = _call("gen_video", {**VIDEO_CALL, "job_id": "am-second", "retry_of": "am-first"})
+
+    assert refused.is_error and mcp_server.backend._retrying == set()
+
+
+def test_a_retry_of_a_job_that_sits_in_two_ledgers_is_refused(monkeypatch, tmp_path):
+    # Review of plan AM, N2: the CLI and the story pipeline can run one job id twice, in two folders. Read in file
+    # order, a paid run under an uncharged refusal would look retryable, so such a job is not vouched for at all.
+    reached = _video_world(monkeypatch, tmp_path, [_submitted(), PAID])
+    _refused_earlier(tmp_path, folder="a-paid", outcome_row=PAID)
+    _refused_earlier(tmp_path, folder="b-refused")
+
+    result = _call("gen_video", {**VIDEO_CALL, "job_id": "am-second", "retry_of": "am-first"})
+
+    text = _texts([result])[0]
+    assert result.is_error and "2 ledgers" in text and reached == [], text
 
 
 FILTERED = ("failed", {"spent": 0, "credits_before": 100, "credits_after": 100, "flow": AUDIO})
@@ -3458,8 +3571,8 @@ def test_a_retry_the_ledger_vouches_for_runs_and_carries_its_link_to_the_driver(
     [
         ({"outcome_row": PAID}, "DONE"),
         ({"outcome_row": None}, "UNKNOWN"),
-        ({"prompt": "another prompt"}, "same request"),
-        ({"project": "Q"}, "same request"),
+        ({"prompt": "another prompt"}, "same project and prompt"),
+        ({"project": "Q"}, "same project and prompt"),
         ({"job_id": "someone-else"}, "no ledger row"),
     ],
     ids=["it finished and was paid", "it never settled", "another prompt", "another project", "no such job"],
@@ -3552,7 +3665,7 @@ def test_gen_character_takes_a_retry_the_same_way(monkeypatch, tmp_path):
     assert reached[0]["retry_of"] == "am-first"
 
     other = _call("gen_character", {**call, "prompt": "a dog", "job_id": "am-char-3", "retry_of": "am-first"})
-    assert other.is_error and "same request" in _texts([other])[0] and len(reached) == 1
+    assert other.is_error and "same project and prompt" in _texts([other])[0] and len(reached) == 1
 
 
 def test_every_spending_description_says_how_to_read_an_outcome():

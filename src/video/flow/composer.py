@@ -1029,8 +1029,8 @@ async def _submit(
         settled = {"status": "failed", "spent": spent, "flow": flow}
         if outcome.classify([{"status": "submitted", "kind": kind}, settled])["retryable"]:
             advice = (
-                "it may pass as it is: call again with the same request, a new job_id and retry_of set to this "
-                "job_id"
+                "it may pass as it is: call again with the same project and prompt, a new job_id and retry_of set "
+                "to this job_id (the server allows two retries of one original job)"
             )
         else:
             advice = "do not retry the same inputs hoping they pass, tell the owner"

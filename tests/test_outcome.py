@@ -168,6 +168,15 @@ def test_a_retryable_reason_needs_flows_own_word_that_the_job_failed():
     )
 
     assert (still_running["code"], still_running["retryable"]) == ("NOTHING_GENERATED", False)
+    # The failed status has to be Flow's LAST word (review of plan AM, M1), not one it said along the way.
+    moved_on = outcome.classify(_failed(flow={"statuses": [6, 4, 2], "reasons": []}))
+    assert (moved_on["code"], moved_on["retryable"]) == ("NOTHING_GENERATED", False)
+
+
+def test_a_job_nobody_can_read_is_unknown_without_reading_any_row():
+    said = outcome.unreadable()
+
+    assert (said["code"], said["charged"], said["retryable"]) == ("UNKNOWN", None, False)
 
 
 @pytest.mark.parametrize("kind", ["extend", "edit", "agent", "t2v", "i2v", "r2v", "story"])

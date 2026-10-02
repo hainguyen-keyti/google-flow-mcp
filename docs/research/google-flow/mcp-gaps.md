@@ -139,7 +139,11 @@ repo's source at `615bcac`.
   reason, with the same project and prompt, not yet retried, and at most twice for one original; the link is written
   on the `submitted` row, before the click. Narrower than proposed: `UNUSUAL_ACTIVITY` is read off gflow's exit 10
   only (the composer path has never met it), the editor tools and `agent_send` get the outcome and no retry, and
-  the server never retries by itself.
+  the server never retries by itself. Limits its review named: a retry is held to the project and the first 200
+  characters of the prompt, not to the model, length, count or frames; two server processes over one out folder can
+  both accept a retry of one job in the minute or two before either has written its `submitted` row (the same
+  limit the job id guard has); a job whose rows sit in two ledgers is not retried at all; and an error whose job
+  ran and whose rows cannot be read back is `UNKNOWN`, never an error with no outcome line.
 
 ### G6. An overlay on the page looks like a dead button
 

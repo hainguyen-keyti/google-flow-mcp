@@ -56,8 +56,8 @@ CODES = {
     "browser profile has to cool down",
 }
 _RETRY_HOW = (
-    ": call the same tool again with the same request, a new job_id and retry_of set to this job_id, at most "
-    f"{MAX_RETRIES} times for one original job"
+    ": call the same tool again with the same project and prompt, a new job_id and retry_of set to this job_id, at "
+    f"most {MAX_RETRIES} times for one original job"
 )
 _NO_RETRY = ": this tool has no retry the server can vouch for, so tell the owner before starting it again"
 
@@ -169,8 +169,8 @@ def retry_refusal(
     sent = intent or {}
     if sent.get("project") != project or sent.get("prompt") != prompt[:PROMPT_KEPT]:
         return (
-            f"a retry sends the same request: job {target!r} went to project {sent.get('project')} with a prompt "
-            f"starting {str(sent.get('prompt'))[:60]!r}; a different request is a new job with no retry_of"
+            f"a retry sends the same project and prompt: job {target!r} went to project {sent.get('project')} with "
+            f"a prompt starting {str(sent.get('prompt'))[:60]!r}; anything else is a new job with no retry_of"
         )
     for other, theirs in jobs.items():
         if other != target and _retried(theirs) == target:
@@ -188,6 +188,11 @@ def retry_refusal(
             "this request every time, so tell the owner instead of sending it again"
         )
     return None
+
+
+def unreadable() -> dict[str, Any]:
+    """A job that ran and whose rows could not be read back: it may have clicked, so nothing about it is known."""
+    return _said("UNKNOWN", None)
 
 
 def head(said: dict[str, Any]) -> str:
