@@ -108,11 +108,13 @@ def characters_from_listing(payload: Any) -> list[dict[str, Any]]:
 
 
 def upload_record(payload: Any) -> dict[str, Any]:
-    """maseQ answers an upload with [[workflow_id, project_id, media_id, "CAE", _, details, ...]]: the same record
-    shape the listing uses, where record[2] is the media id every other tool accepts (measured 2026-09-15)."""
+    """maseQ answers an upload with [[workflow_id, project_id, media_id, version, _, details, ...]]: the same record
+    shape the listing uses, where record[2] is the media id every other tool accepts (measured 2026-09-15). The
+    version was "CAE" and is null since (measured 2026-10-07 on 6177057c: the listing and flow_download took
+    record[2] as before); any other value is not an upload's answer."""
     record = _at(payload, 0)
-    if not (isinstance(record, list) and _uuid(_at(record, 0)) and _at(record, 3) == "CAE"):
-        raise TypeError("maseQ: expected [[workflow_id, project_id, media_id, 'CAE', ...]]")
+    if not (isinstance(record, list) and _uuid(_at(record, 0)) and _at(record, 3) in ("CAE", None)):
+        raise TypeError("maseQ: expected [[workflow_id, project_id, media_id, 'CAE' or None, ...]]")
     size = _at(record, 5, 13)
     return {
         "media_id": _str(_at(record, 2)),

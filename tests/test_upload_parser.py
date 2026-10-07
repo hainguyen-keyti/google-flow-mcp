@@ -64,3 +64,31 @@ def test_upload_record_names_the_id_flow_download_accepts_as_the_media_id():
     assert out["media_id"] == "de29028c-acb0-4cd8-9f89-01a29679d551"
     assert out["workflow_id"] == "09a080dc-ee03-4c1f-87c3-8625d0081a46"
     assert out["size_bytes"] == 5627
+
+
+TODAY = [
+    "7ead257d-eb04-49ef-8142-a6ef64986a93",
+    "6177057c-36a3-4dba-87a0-50a519467932",
+    "8bdf6a9d-81f5-422c-93c1-bb9544eee363",
+    None,
+    None,
+    [None] * 13 + [307],
+]
+
+
+def test_upload_record_reads_an_answer_whose_version_is_null():
+    # Measured 2026-10-07 on project 6177057c: Flow's maseQ answer carried null where it carried "CAE", so the
+    # parser refused an image that had been uploaded; the listing showed it as 8bdf6a9d, 307 bytes, and flow_download
+    # fetched it by that id.
+    assert parsers.upload_record([TODAY]) == {
+        "media_id": "8bdf6a9d-81f5-422c-93c1-bb9544eee363",
+        "project_id": "6177057c-36a3-4dba-87a0-50a519467932",
+        "workflow_id": "7ead257d-eb04-49ef-8142-a6ef64986a93",
+        "size_bytes": 307,
+    }
+
+
+@pytest.mark.parametrize("version", ["CAI", "", 1], ids=["an edit's version", "empty", "a number"])
+def test_upload_record_refuses_a_version_no_upload_answer_carries(version):
+    with pytest.raises(TypeError, match="maseQ"):
+        parsers.upload_record([TODAY[:3] + [version] + TODAY[4:]])
