@@ -6,3 +6,7 @@ out/
 # Reference photos stay on the owner's machine, never in the public repo.
 assets/**/*.png
 assets/**/*.webp
+
+# The owner's productions (scripts, cuts, renders) live beside the repo on this machine, not in it.
+productions/
+.DS_Store

@@ -23,7 +23,8 @@ def test_the_selectors_are_gathered_from_the_source_not_typed_here():
 @pytest.mark.parametrize(
     "label",
     [
-        "harleychina0@gmail.com",
+        # Spelled in two pieces so that no tracked file holds an address at a personal mail host (test_public_hygiene).
+        "someone.private" + "@gmail.com",
         "Google Account: Keyti (keyti@example.com)",
         "3f5ce5c7-4a65-4211-b846-8a1db0cb1174",
         "mcp draft",
