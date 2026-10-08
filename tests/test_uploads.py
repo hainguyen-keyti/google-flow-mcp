@@ -295,15 +295,30 @@ def test_two_new_images_of_the_name_are_not_chosen_between(monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize("name", ["take.mp4", "loop.gif"])
-def test_an_unanswered_upload_that_is_no_image_is_not_judged_by_a_rule_measured_on_images(
-    monkeypatch, tmp_path, name
-):
-    # How anything but an image is titled in the listing was never measured, so "no new image of that name" proves
-    # nothing about it: the caller is sent to the listing, and is not told that uploading again is safe.
+def test_an_upload_that_is_no_image_is_refused_before_the_file_chooser(monkeypatch, tmp_path, name):
+    # How anything but an image is titled in the listing was never measured, so an upload of one could never be
+    # settled when Flow's reply did not come; since review 2026-10-08 (D11) it is refused before set_files, with
+    # nothing sent, instead of being judged afterwards by a rule measured on images.
     world = _UploadWorld(monkeypatch, tmp_path, before=[], after=[], frames={}, name=name)
 
-    with pytest.raises(RuntimeError, match="flow_media") as said:
+    with pytest.raises(ValueError, match="nothing was sent") as said:
         world.upload()
 
-    assert "safe" not in str(said.value) and "never measured" in str(said.value)
-    assert "video" not in str(said.value) or name.endswith(".mp4")
+    assert "safe" not in str(said.value) and ".png" in str(said.value)
+
+
+class _Untouched:
+    def __getattr__(self, name):
+        raise AssertionError(f"session.{name} touched for a file that is not an image")
+
+
+@pytest.mark.parametrize("name", ["clip.mp4", "notes.txt", "noext"])
+def test_a_file_that_is_not_an_image_is_refused_before_the_session_is_touched(tmp_path, name):
+    # Review 2026-10-08 (D11): the suffix was checked only once Flow's reply had not come, after set_files.
+    path = tmp_path / name
+    path.write_bytes(b"x")
+
+    with pytest.raises(ValueError, match="png") as said:
+        asyncio.run(uploads.upload(_Untouched(), "p", path))
+
+    assert "nothing was sent" in str(said.value)

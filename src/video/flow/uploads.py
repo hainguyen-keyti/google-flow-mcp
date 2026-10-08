@@ -42,6 +42,13 @@ async def upload(session: FlowSession, project_id: str, path: Path) -> dict[str,
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(path)
+    if path.suffix.lower() not in IMAGE_SUFFIXES:
+        # Refused before the file chooser: how any other kind of file shows in the listing was never measured, so an
+        # upload of one could not be settled when Flow's reply did not come (review 2026-10-08, D11).
+        raise ValueError(
+            f"upload takes {', '.join(IMAGE_SUFFIXES)}, got {path.suffix or 'no suffix'!r} ({path.name}); nothing "
+            "was sent"
+        )
     page = session.page
     # Reading the listing opens the project page, which is where the upload starts.
     before = _images(await reader.project(session, project_id))

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import Any
 
+from gflow_cli.data import redaction
 from gflow_cli.data.redaction import redact_error_detail
 
 from video.flow import version
@@ -105,7 +106,13 @@ def parse_result(kind: str, stdout: str) -> list[dict[str, Any]]:
 
 
 def _scrub(text: str) -> str:
-    return _SCRUB.sub("[redacted]", text)
+    """The repo's own patterns, then gflow's (the SID cookie family, Bearer and SAPISIDHASH headers, account
+    addresses, signed urls), which this scrub missed (review 2026-10-08, D10); never truncated, unlike gflow's
+    `redact_error_detail`, since a ledger row keeps whole prompts."""
+    text = _SCRUB.sub("[redacted]", text)
+    for pattern, replacement in redaction._SECRET_TEXT_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return redaction._SIGNED_QUERY_TOKEN_PATTERN.sub("<redacted:url>", text)
 
 
 def _scrubbed(value: Any) -> Any:
@@ -159,7 +166,8 @@ def gflow_problem(stderr: str) -> dict[str, Any]:
             "route": problem.get("route"),
             "incident": incident.get("id") if isinstance(incident, dict) else None,
         }
-    return {"stderr_tail": stderr[-300:]}
+    # A Playwright error appends a call log that quotes request headers, cookies included: cut whole (D10).
+    return {"stderr_tail": stderr.split("\nCall log:")[0][-300:]}
 
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -276,7 +284,13 @@ async def run_job(
             **problem,
         )
         # stderr carries gflow's own log lines when piped, so a plain reason on stdout comes first (review of plan R).
-        summary = problem.get("detail") or problem.get("title") or told or stderr.strip()[-300:]
+        # A Playwright error appends a call log that quotes request headers, cookies included: cut whole (D10).
+        summary = (
+            problem.get("detail")
+            or problem.get("title")
+            or told
+            or stderr.split("\nCall log:")[0].strip()[-300:]
+        )
         # gflow gives WafRejectionError exit 10 (gflow_cli/errors.py) and wrongly advises re-authenticating.
         if code == 10 or problem.get("error_class") == "WafRejectionError":
             raise RuntimeError(

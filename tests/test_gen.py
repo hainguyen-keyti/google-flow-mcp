@@ -729,3 +729,50 @@ def test_a_row_carries_the_flow_build_once_the_process_read_one(monkeypatch, tmp
 
     assert "flow_build" not in ledger.rows("job-before")[0]
     assert ledger.rows("job-after")[0]["flow_build"] == "Zz9.1.O"
+
+
+def test_the_scrub_takes_gflows_patterns_the_sid_family_and_headers_included():
+    # Review 2026-10-08 (D10): the repo's own pattern missed SID, HSID, SSID, Bearer and SAPISIDHASH.
+    text = (
+        "cookie: SID=abc123 HSID=def456 SSID=ghi __Secure-1PSID=zzz SAPISID=sap Authorization: Bearer ya29.tok "
+        "SAPISIDHASH 1_hash https://h/x?Signature=s1 keep this prompt"
+    )
+
+    scrubbed = gen._scrub(text)
+
+    for secret in ("abc123", "def456", "ghi", "zzz", "sap", "ya29.tok", "1_hash", "Signature=s1"):
+        assert secret not in scrubbed, scrubbed
+    assert "keep this prompt" in scrubbed
+
+
+def test_a_failed_run_keeps_no_call_log_in_its_row_or_its_error(tmp_path):
+    # A Playwright error appends a call log quoting request headers, cookies included (D10).
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+
+    class FailingRunner(FakeRunner):
+        async def __call__(self, argv):
+            return (
+                3,
+                "",
+                "Locator.click: Timeout 8000ms exceeded.\nCall log:\n  - cookie: SAPISID=s3cret; HSID=h1",
+            )
+
+    async def read_credits():
+        return 5
+
+    with pytest.raises(RuntimeError) as failed:
+        asyncio.run(
+            gen.run_job(
+                job(job_id="job-h"),
+                tmp_path,
+                ledger=ledger,
+                runner=FailingRunner(ledger, "", "job-h"),
+                read_credits=read_credits,
+            )
+        )
+
+    said = str(failed.value)
+    row = ledger.path.read_text(encoding="utf-8")
+    for leak in ("Call log", "s3cret", "h1"):
+        assert leak not in said and leak not in row, (said, row)
+    assert "Timeout 8000ms" in said
