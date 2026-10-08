@@ -18,8 +18,9 @@ The MCP tool `flow_check` is the same read, for an agent to call before a batch.
 | the shape of the replies the server parses | the project grid (`UpteDb`, `nzlxg`, `Yizz8d`) and, with a project, its listing (`Zzl0ze`, `ngNC2`, `yBhWQ`, `HTrJv`, `tRARke`), folded into skeletons (`flow/wire.py`) | `src/video/flow/flow_wire.json`, generated from the test fixtures, which are replies Flow sent | `kind changed`, `position gone`, `shape changed`, `rpc not heard` (drift); `position added`, `kind appeared` (said, not drift) |
 | the UI the drivers rely on | the home and project pages' labels and selector counts | the `home` and `project` routes of `flow_ui.json` | `label added`, `label removed`, `selector lost` |
 
-Exit 1 means drift: a reply's shape or the UI moved, and a paid tool may misread Flow. A new build alone is said and
-is exit 0, since most builds move nothing this repo reads. Every ledger row and every paid answer carries
+Exit 1 means drift: a reply's shape moved, or a selector the drivers steer by stopped matching, and a paid tool may
+misread Flow. A new build, or a label that came or went with one of Flow's banners, is said and is exit 0, since
+most builds move nothing this repo reads. Every ledger row and every paid answer carries
 `flow_build`, so a run that went wrong can be matched to the build it ran on.
 
 Two more signals come from paid runs themselves: an answer or a ledger row with `flow_reply_read: false` (the submit

@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from video.flow import agent, clips, composer, parsers, reader, version, wire
+from video.flow import agent, clips, composer, parsers, reader, scenes, version, wire
 from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
@@ -297,6 +297,11 @@ _LABELS_JS = """(scope) => {
   return out;
 }"""
 _COUNT_JS = "(sel) => { try { return document.querySelectorAll(sel).length } catch (e) { return -1 } }"
+_LOADING_JS = "() => /Loading\\.\\.\\./.test(document.body ? document.body.innerText : '')"
+LOADED_WAIT_MS = 30_000
+# What `flow check` calls drift among the UI findings: a selector the drivers steer by that stopped matching, or a
+# route that could not be read. Labels come and go with Flow's banners and are said, not drift.
+UI_DRIFT = ("selector lost", "route error", "route missing")
 _MENU_BUTTONS = "flow-scene-builder button[aria-haspopup=menu], flow-scene-builder button[aria-haspopup=true]"
 _PANE = ".cdk-overlay-pane"
 _GROUPS_JS = """() => { const p=[...document.querySelectorAll('.cdk-overlay-pane')].find(e=>/generating will use/i.test(e.innerText||''));
@@ -342,7 +347,17 @@ class Walker:
         await self.page.keyboard.press("Escape")
         await self.page.wait_for_timeout(600)
 
+    async def loaded(self) -> int:
+        """Wait out Flow's "Loading..." placeholder before a route is recorded: the scene editor recorded on
+        2026-10-08 was its loading shell, with the title box, the clips and the composer counted as lost."""
+        waited = 0
+        while waited < LOADED_WAIT_MS and await self.page.evaluate(_LOADING_JS):
+            await self.page.wait_for_timeout(1_000)
+            waited += 1_000
+        return waited
+
     async def record(self, route: str, scope: str | None = None) -> None:
+        await self.loaded()
         await self.page.wait_for_timeout(1_500)
         raw = await self.page.evaluate(_LABELS_JS, scope)
         counts = {name: await self.page.evaluate(_COUNT_JS, sel) for name, sel in self.selectors.items()}
@@ -560,7 +575,11 @@ def missing_for_a_walk(listing: Any) -> list[str]:
     try:
         has = {
             "finished video": bool(_finished_videos(parsers.records(listing))),
-            "scene": any(not s.get("trashed") for s in parsers.scenes_from_listing(listing)),
+            # A scene holding a clip: an empty one shows neither its clips nor the player the baseline counts.
+            "scene": any(
+                not s.get("trashed") and scenes.clips_from_listing(listing, s["scene_id"])
+                for s in parsers.scenes_from_listing(listing)
+            ),
             "character": bool(parsers.characters_from_listing(listing)),
         }
     except (LookupError, TypeError, ValueError):
@@ -584,8 +603,8 @@ async def check(
     session: FlowSession, project_id: str | None = None, out_root: Path = Path("out/check")
 ) -> dict[str, Any]:
     """Flow against the baselines for $0: the live build label, the shape of the free replies (the grid, and the
-    listing with a project), the home and project pages' labels and selectors. Drift is a wire or UI difference; a
-    new build alone is said and is not drift, since most builds move nothing this repo reads."""
+    listing with a project), the home and project pages' labels and selectors. Drift is a changed reply shape or a
+    selector that stopped matching; a new build or a label that came or went (Flow's banners) is said, not drift."""
     base_ui = _baseline_ui()
     folder = out_root / datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     folder.mkdir(parents=True, exist_ok=True)
@@ -626,9 +645,13 @@ async def check(
         },
         "ui": [list(finding) for finding in ui],
         "wire": [list(finding) for finding in wired],
-        "drift": bool(ui) or wire.drifted(wired),
+        "drift": ui_drifted(ui) or wire.drifted(wired),
         "folder": str(folder),
     }
+
+
+def ui_drifted(findings: list[tuple[str, str, str]]) -> bool:
+    return any(kind in UI_DRIFT for kind, _, _ in findings)
 
 
 async def survey(

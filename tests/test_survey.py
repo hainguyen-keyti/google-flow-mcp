@@ -127,7 +127,8 @@ def test_the_option_walk_becomes_the_options_file_gen_video_reads():
         "measured": video.OPTIONS["measured"],
         "video": {"aspects": ["16:9", "9:16"], "modes": {"Frames": per_mode, "Ingredients": per_mode}},
         "image": {
-            "models": ["Nano Banana Pro", "Nano Banana 2", "Nano Banana 2 Lite"],
+            # Measured 2026-10-08 by the survey that rewrote the file: Flow offers Nano Banana 2.1 in place of 2.
+            "models": ["Nano Banana Pro", "Nano Banana 2 Lite", "Nano Banana 2.1"],
             "aspects": ["16:9", "4:3", "1:1", "3:4", "9:16"],
             "counts": [1, 2, 3, 4],
             "price_x1": 0,
@@ -348,7 +349,13 @@ def test_what_a_project_lacks_for_a_full_walk_is_named():
                     for r in survey.parsers.records(listing)
                 ),
             ),
-            ("scene", any(not s.get("trashed") for s in survey.parsers.scenes_from_listing(listing))),
+            (
+                "scene",
+                any(
+                    not s.get("trashed") and survey.scenes.clips_from_listing(listing, s["scene_id"])
+                    for s in survey.parsers.scenes_from_listing(listing)
+                ),
+            ),
             ("character", bool(survey.parsers.characters_from_listing(listing))),
         )
         if not present
@@ -381,6 +388,47 @@ def _run_check(monkeypatch, report, args):
     monkeypatch.setattr(survey, "check", fake_check)
     monkeypatch.setattr(cli, "_read", lambda profile, fn: asyncio.run(fn(object())))
     return CliRunner().invoke(cli.main, ["flow", "check", *args]), asked
+
+
+def test_a_route_is_recorded_only_once_flows_loading_placeholder_is_gone(tmp_path):
+    # The scene editor recorded on 2026-10-08 was its "Loading..." shell: the title box, the clips and the composer
+    # were counted as lost and the baseline would have kept that.
+    class _Page:
+        keyboard = _CheckKeys()
+
+        def __init__(self):
+            self.loading = 2
+            self.waited = []
+
+        async def wait_for_timeout(self, ms):
+            self.waited.append(ms)
+
+        async def evaluate(self, js, *args):
+            if js == survey._LOADING_JS:
+                self.loading -= 1
+                return self.loading >= 0
+            return 1 if js == survey._COUNT_JS else []
+
+        async def screenshot(self, path):
+            Path(path).write_bytes(b"")
+
+    page = _Page()
+    walker = survey.Walker(type("S", (), {"page": page})(), "P", tmp_path)
+
+    asyncio.run(walker.record("scene editor"))
+
+    assert page.waited[:2] == [1_000, 1_000] and "scene editor" in walker.routes, page.waited
+
+
+def test_labels_that_came_or_went_are_said_but_a_lost_selector_is_drift():
+    assert (
+        survey.ui_drifted([("label added", "home", "Opt in"), ("label removed", "home", "Explore Tools")])
+        is False
+    )
+    assert (
+        survey.ui_drifted([("label added", "home", "x"), ("selector lost", "project", "flow.agent.CHIP")])
+        is True
+    )
 
 
 def test_flow_check_exits_0_on_a_clean_read_and_says_a_new_build(monkeypatch):
@@ -509,6 +557,7 @@ def test_check_without_a_project_reads_the_grid_only_and_touches_no_project(monk
     monkeypatch.setattr(survey.version, "current", None)
     base = json.loads(survey.UI_BASELINE.read_text(encoding="utf-8"))
     base["routes"]["home"] = {"labels": [], "selectors": {}}
+    base.pop("build", None)  # a baseline walked before builds were recorded
     monkeypatch.setattr(survey, "_baseline_ui", lambda: base)
 
     report = asyncio.run(survey.check(_CheckSession(), None, out_root=tmp_path))
