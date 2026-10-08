@@ -152,6 +152,21 @@ def media_filters(
     return out
 
 
+# The models each gflow tool has paid for here (t2v and r2v measured 2026-09-15, i2v on 2026-09-18 at omni-flash
+# only); gflow reads no price line and takes no max_credits, so this table is their only guard: on review
+# 2026-10-08 veo-quality x4 (400 credits) reached gflow unrefused.
+PAID_GFLOW_MODELS = {
+    "t2v": ("omni-flash", "veo-lite"),
+    "i2v": ("omni-flash",),
+    "r2v": ("omni-flash", "veo-lite"),
+}
+# The resolution the omni cells are priced at unless the caller names one: gflow pins none, so the composer's
+# leftover radio decided the bill (gen_i2v charged 4 for a 360p leftover on 2026-10-08).
+GFLOW_RESOLUTION = "720p"
+# The one image model run here: 0 credits, a daily quota (measured 2026-09-15 and on every run since).
+IMAGE_MODEL = "nano2"
+
+
 def _video_settings(
     kind: str,
     model: str | None,
@@ -159,8 +174,11 @@ def _video_settings(
     aspect: str | None = None,
     count: int = 1,
     refs: int = 0,
-) -> tuple[str, int | None]:
-    """Refuse up front what gflow's CLI refuses only after run_job has written `submitted`, burning the job_id."""
+    resolution: str | None = None,
+) -> tuple[str, int | None, str | None, int]:
+    """Refuse up front what gflow's CLI refuses only after run_job has written `submitted`, burning the job_id, and
+    every cell this repo has not paid for; answer the model, the length to send, the resolution to pin and the
+    table's price of that cell."""
     model = model or VIDEO_DEFAULT_MODEL
     params = {p.name: p.type for p in cli_video.video.commands[kind].params}
     if model not in params["model"].choices:
@@ -170,6 +188,30 @@ def _video_settings(
     # build_argv sends no --count below 2, so 0 would quietly pay for one clip.
     if not params["count"].min <= count <= params["count"].max:
         raise ValueError(f"count must be {params['count'].min}-{params['count'].max}, got {count}")
+    if model not in PAID_GFLOW_MODELS[kind]:
+        raise ValueError(
+            f"{model} was never paid for through gen_{kind}, which runs {list(PAID_GFLOW_MODELS[kind])} only "
+            "(gflow reads no price line and takes no max_credits); for another model use gen_video, which reads "
+            "Flow's live price line and holds it to max_credits. Nothing was run and nothing was spent."
+        )
+    if count != 1:
+        raise ValueError(
+            f"the gflow tools run one clip at a time: gflow follows the first submit and answers one clip whatever "
+            f"the count, while Flow bills every clip (count {count}); for several clips use gen_video. Nothing was "
+            "run and nothing was spent."
+        )
+    is_omni = VideoModel.from_cli(model) is VideoModel.OMNI_FLASH
+    cells = video_mod.VIDEO["models"][model]
+    if is_omni:
+        resolution = resolution or GFLOW_RESOLUTION
+        if resolution not in cells["resolutions"]:
+            raise ValueError(
+                f"resolution must be one of {cells['resolutions']} for {model}, got {resolution!r}"
+            )
+    elif resolution is not None:
+        raise ValueError(
+            f"{model} shows no resolution row in Flow's composer (measured 2026-09-30); leave it out"
+        )
     if kind == "r2v":
         cap = reference_cap_for(VideoModel.from_cli(model))
         if refs > cap:
@@ -178,12 +220,25 @@ def _video_settings(
             raise ValueError(f"gen_r2v runs only at {R2V_DURATION_S} s on this host; omit duration")
         # Never sent: gflow pins r2v to that length itself, while an explicit one raises exit 11 on a cohort with no
         # duration row (migrated_composer.py:968-986, 1162-1180).
-        return model, None
+        priced = video_mod.price(model, resolution, R2V_DURATION_S if is_omni else None, 1)
+        return model, None, resolution, _priced(model, resolution, R2V_DURATION_S, priced)
     if duration is None:
-        is_omni = VideoModel.from_cli(model) is VideoModel.OMNI_FLASH
-        return model, OMNI_FLASH_SECONDS if is_omni else None
-    validate_duration_for_model(VideoModel.from_cli(model), duration)
-    return model, duration
+        seconds = OMNI_FLASH_SECONDS if is_omni else None
+    else:
+        validate_duration_for_model(VideoModel.from_cli(model), duration)
+        seconds = duration
+    priced = video_mod.price(model, resolution, seconds if is_omni else None, 1)
+    return model, seconds, resolution, _priced(model, resolution, seconds, priced)
+
+
+def _priced(model: str, resolution: str | None, seconds: int | None, price: int | None) -> int:
+    if price is None:
+        raise ValueError(
+            f"no price is in the surveyed table for {model} at {resolution or 'its one resolution'} and "
+            f"{seconds or 'its one length'} s, so this cell was never paid for here; use gen_video, which reads "
+            "Flow's live price line. Nothing was run and nothing was spent."
+        )
+    return price
 
 
 def _job_refused(job_id: str | None, seen: str) -> str:
@@ -929,9 +984,18 @@ class Backend:
         refs: list[str] | None = None,
         job_id: str | None = None,
         out_dir: str | None = None,
+        resolution: str | None = None,
     ) -> dict[str, Any]:
+        expected: int | None = None
         if kind in gen_mod.VIDEO_KINDS:
-            model, duration = _video_settings(kind, model, duration, aspect, count, len(refs or []))
+            model, duration, resolution, expected = _video_settings(
+                kind, model, duration, aspect, count, len(refs or []), resolution
+            )
+        elif (model or IMAGE_MODEL) != IMAGE_MODEL:
+            raise ValueError(
+                f"{model} was never run here: the image tools run {IMAGE_MODEL} only (0 credits, a daily quota); "
+                "another image model may cost credits nobody has measured. Nothing was run and nothing was spent."
+            )
         job = gen_mod.Job(
             job_id=job_id or str(uuid.uuid4()),
             kind=kind,
@@ -948,7 +1012,7 @@ class Backend:
         target = Path(out_dir) if out_dir else self.out_dir
 
         async def run() -> dict[str, Any]:
-            was_on = await self._agent_off(project)
+            was_on = await self._agent_off(project, resolution if kind in gen_mod.VIDEO_KINDS else None)
             try:
                 result = await gen_mod.run_job(job, target, profile=self.profile)
             except BaseException as failed:
@@ -958,6 +1022,9 @@ class Backend:
                 raise
             if was_on:
                 result["agent_mode_restored"] = await self._agent_restore(project)
+            if expected is not None:
+                result["expected_credits"] = expected
+                result["resolution"] = resolution
             if kind in gen_mod.IMAGE_KINDS:
                 await self._image_media_ids(project, result.get("outputs") or [])
             # The sessions above answer to this method only, so what they pressed is said here.
@@ -995,11 +1062,20 @@ class Backend:
                     "flow_media (its workflow_id), or flow_upload the file at path"
                 )
 
-    async def _agent_off(self, project: str) -> bool:
+    async def _agent_off(self, project: str, resolution: str | None = None) -> bool:
         """gflow dies with exit 25 while Flow's Agent chip is on (measured 2026-09-28), so it goes off first; returns
-        whether it was on. Anything short of off stops the call here, before gflow or the ledger is touched."""
+        whether it was on. With a resolution, the composer's resolution radio is pinned in the same session, since
+        gflow pins none and the leftover radio decided the bill (2026-10-08). Anything short of off, or a radio that
+        does not stay checked, stops the call here, before gflow or the ledger is touched."""
+
+        async def prepare(session: Any) -> dict[str, Any]:
+            state = await agent_mod.set_mode(session, project, False)
+            if resolution and not self._kept(state).get("enabled"):
+                await ingredients_mod.pin_resolution(session.page, resolution)
+            return state
+
         try:
-            state = self._kept(await self._with(lambda s: agent_mod.set_mode(s, project, False)))
+            state = self._kept(await self._with(prepare))
         except PlaywrightTimeoutError as exc:
             # Only the chip's own wait: a project page that never loads (a wrong id) keeps its own error (review, e1).
             if "agent-mode-chip" not in str(exc):
@@ -1121,6 +1197,15 @@ _AGENT_NOTE = (
     " Flow's Agent mode is turned off in the project before gflow runs, since gflow cannot generate while it is on, "
     "and turned back on afterwards if it was on; measured 2026-09-29, this adds about 19 s, or about 35 s when it "
     "was on."
+)
+_GFLOW_CAP_NOTE = (
+    " It runs only the cells paid here (gen_t2v and gen_r2v: omni-flash and veo-lite; gen_i2v: omni-flash), one "
+    "clip at a time: gflow reads no price line and takes no max_credits, so any other model, a count above 1 or a "
+    "resolution the model lacks is refused before anything is spent (use "
+    "gen_video for those, which holds Flow's live price to max_credits). resolution is 360p or 720p for omni-flash, "
+    "720p when omitted, and is pinned in the composer before gflow clicks, since gflow pins none and the composer's "
+    "leftover radio decided the bill on 2026-10-08 (gen_i2v at omni-flash 4 s was billed the 360p price, 4, after a "
+    "360p gen_video run); the answer names expected_credits and resolution, and the ledger's spent is the bill."
 )
 _BALANCE_MOVED = (
     "When the balance moved by anything other than the measured price, the answer carries balance_moved "
@@ -1875,10 +1960,11 @@ async def _gen(kind: str, **kwargs: Any) -> str:
 @server.tool(
     name="gen_t2v",
     description=(
-        "Text to video via gflow. It spends credits and is ledgered, measured on the PRO plan: omni-flash 10 s "
-        "x1 = 15 credits (the default when model is omitted), veo-lite 8 s x1 = 10 credits, and count "
-        "multiplies it (veo-lite x2 = 20 credits). Allow 2-5 min: the gflow job took 74-85 s, plus a balance "
-        "read before and after." + _JOB_ID_RULE + _AGENT_NOTE
+        "Text to video via gflow. It spends credits and is ledgered, paid on the PRO plan: omni-flash 720p 10 s "
+        "x1 = 15 credits (the default when model, resolution and duration are omitted, measured), veo-lite 8 s "
+        "x1 = 10 credits (measured); the other omni-flash cells carry Flow's table price as flow_capabilities "
+        "answers it (360p 4 s = 4, measured 2026-10-08 through gen_video). Allow 2-5 min: the gflow job took "
+        "74-85 s, plus a balance read before and after." + _GFLOW_CAP_NOTE + _JOB_ID_RULE + _AGENT_NOTE
     ),
 )
 async def gen_t2v(
@@ -1889,6 +1975,7 @@ async def gen_t2v(
     aspect: str | None = None,
     count: int = 1,
     duration: int | None = None,
+    resolution: str | None = None,
 ) -> str:
     return await _gen(
         "t2v",
@@ -1898,6 +1985,7 @@ async def gen_t2v(
         aspect=aspect,
         count=count,
         duration=duration,
+        resolution=resolution,
         job_id=job_id,
     )
 
@@ -1918,6 +2006,7 @@ async def gen_t2v(
         "0.78.0; every attempt before it died in Flow's frame picker and spent nothing. PASS aspect, and match it "
         "to your images: leaving it out means 9:16, gflow's own default, and Flow CROPS a frame of another shape "
         "to fit, which pushed the subject of a 16:9 photo half out of the left edge. Allow 2-5 min."
+        + _GFLOW_CAP_NOTE
         + _JOB_ID_RULE
         + _AGENT_NOTE
     ),
@@ -1931,6 +2020,7 @@ async def gen_i2v(
     model: str | None = VIDEO_DEFAULT_MODEL,
     aspect: str | None = None,
     duration: int | None = None,
+    resolution: str | None = None,
 ) -> str:
     _require(initial_frame, "initial_frame")
     # One run priced one cell. gflow gates --end-frame on nothing and picks its interpolation model by cohort, so
@@ -1950,6 +2040,7 @@ async def gen_i2v(
         model=model,
         aspect=aspect,
         duration=duration,
+        resolution=resolution,
         initial_frame=initial_frame,
         end_frame=end_frame,
         job_id=job_id,
@@ -1963,9 +2054,11 @@ async def gen_i2v(
         "credits (the default when model is omitted, measured 2026-09-15) and veo-lite x1 = 10 credits "
         "(measured). It always runs 8 s through gflow, so leave duration out; for 10 s, put the images in the project "
         "with flow_upload and pass their media ids to gen_character. "
-        "omni-flash takes up to 7 reference images, veo-lite, veo-fast and veo-lite-lp up to 3, veo-quality none; "
-        "more is refused before anything is spent. "
-        "Allow 2-5 min: that omni-flash run took 292 s end to end." + _JOB_ID_RULE + _AGENT_NOTE
+        "omni-flash takes up to 7 reference images and veo-lite up to 3; more is refused before anything is spent. "
+        "Allow 2-5 min: that omni-flash run took 292 s end to end."
+        + _GFLOW_CAP_NOTE
+        + _JOB_ID_RULE
+        + _AGENT_NOTE
     ),
 )
 async def gen_r2v(
@@ -1976,6 +2069,7 @@ async def gen_r2v(
     model: str | None = VIDEO_DEFAULT_MODEL,
     aspect: str | None = None,
     duration: int | None = None,
+    resolution: str | None = None,
 ) -> str:
     if not refs:
         raise ValueError("refs is required")
@@ -1986,6 +2080,7 @@ async def gen_r2v(
         model=model,
         aspect=aspect,
         duration=duration,
+        resolution=resolution,
         refs=refs,
         job_id=job_id,
     )

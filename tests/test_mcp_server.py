@@ -700,9 +700,7 @@ def test_r2v_without_a_model_goes_out_as_omni_flash_and_leaves_its_only_length_t
     assert "--duration" not in argv
 
 
-@pytest.mark.parametrize(
-    ("model", "refs"), [("omni-flash", 8), (None, 8), ("veo-lite", 4), ("veo-quality", 1)]
-)
+@pytest.mark.parametrize(("model", "refs"), [("omni-flash", 8), (None, 8), ("veo-lite", 4)])
 def test_r2v_with_more_references_than_the_model_takes_is_refused_before_the_ledger(
     monkeypatch, tmp_path, model, refs
 ):
@@ -764,6 +762,109 @@ def test_a_model_or_length_gflow_would_refuse_is_refused_before_the_ledger_is_to
         monkeypatch, tmp_path, "gen_t2v", t2v | {"aspect": "1:1"}
     )
     assert not (tmp_path / "ledger.jsonl").exists()
+
+
+# Plan AQ, B2: the gflow tools run only the cells this repo has paid for, one clip at a time, at a pinned resolution.
+# Review 2026-10-08: gen_t2v {"model": "veo-quality", "count": 4} reached gflow (400 credits on Flow's table, no
+# max_credits), and gen_i2v omni-flash 4 s charged 4 instead of 7 because the composer still held 360p from the run
+# before it (gflow pins no resolution).
+
+IMAGE_CALLS = {
+    "gen_t2i": {"prompt": "a boat", "project": "P"},
+    "gen_i2i": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P"},
+}
+
+
+@pytest.mark.parametrize(
+    ("tool", "change", "says"),
+    [
+        ("gen_t2v", {"model": "veo-quality"}, "never paid"),
+        ("gen_t2v", {"model": "veo-fast"}, "never paid"),
+        ("gen_i2v", {"model": "veo-lite"}, "never paid"),
+        ("gen_r2v", {"model": "veo-fast"}, "never paid"),
+        ("gen_t2v", {"count": 2}, "one clip"),
+        ("gen_t2v", {"model": "veo-lite", "count": 2}, "one clip"),
+        ("gen_t2v", {"resolution": "1080p"}, "resolution must be one of"),
+        ("gen_t2i", {"model": "nano-pro"}, "nano2"),
+        ("gen_i2i", {"model": "image4"}, "nano2"),
+    ],
+    ids=[
+        "t2v on Veo Quality",
+        "t2v on Veo Fast",
+        "i2v on Veo Lite",
+        "r2v on Veo Fast",
+        "t2v two clips",
+        "t2v two clips on Veo Lite",
+        "t2v at a resolution the table lacks",
+        "t2i on Nano Banana Pro",
+        "i2i on Imagen 4",
+    ],
+)
+def test_the_gflow_tools_refuse_a_cell_nobody_paid_for_before_the_ledger(
+    monkeypatch, tmp_path, tool, change, says
+):
+    arguments = (SPEND_CALLS | IMAGE_CALLS)[tool] | change
+    text = _refused_before_the_ledger(monkeypatch, tmp_path, tool, arguments)
+    assert says in text, text
+
+
+@pytest.mark.parametrize(
+    ("tool", "change", "expected"),
+    [
+        ("gen_t2v", {}, 15),
+        ("gen_t2v", {"duration": 4}, 7),
+        ("gen_t2v", {"resolution": "360p", "duration": 4}, 4),
+        ("gen_t2v", {"model": "veo-lite"}, 10),
+        ("gen_i2v", {}, 15),
+        ("gen_r2v", {}, 12),
+        ("gen_r2v", {"model": "veo-lite"}, 10),
+    ],
+    ids=["omni 10 s", "omni 4 s", "omni 360p 4 s", "veo-lite", "i2v omni", "r2v omni", "r2v veo-lite"],
+)
+def test_a_paid_cell_goes_out_with_its_table_price_in_the_answer(
+    monkeypatch, tmp_path, tool, change, expected
+):
+    pinned = []
+
+    async def fake_pin(page, resolution):
+        pinned.append(resolution)
+
+    monkeypatch.setattr(mcp_server.ingredients_mod, "pin_resolution", fake_pin)
+    answer = _answer_of(monkeypatch, tmp_path, tool, SPEND_CALLS[tool] | change)
+
+    assert answer["expected_credits"] == expected, answer
+    # Omni's price depends on the resolution radio the composer was left on; the run pins it first. Veo has no row.
+    model = change.get("model", "omni-flash")
+    assert pinned == ([change.get("resolution", "720p")] if model == "omni-flash" else []), pinned
+
+
+def _answer_of(monkeypatch, tmp_path, tool, arguments):
+    async def fake_run_job(job, out_dir, **kwargs):
+        return {"job_id": job.job_id, "outputs": []}
+
+    class _Session:
+        page = object()
+
+    async def fake_with(self, fn):
+        return await fn(_Session())
+
+    async def fake_set_mode(session, project, enabled):
+        return {"enabled": False, "was": False}
+
+    # The real Agent step runs, over a fake chip and a fake page, since the resolution is pinned inside it.
+    for name, method in REAL_AGENT.items():
+        monkeypatch.setattr(mcp_server.Backend, name, method)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.agent_mod, "set_mode", fake_set_mode)
+
+    async def fn(session):
+        return await session.call_tool(tool, arguments)
+
+    result = with_client(fn)
+    assert not result.is_error, _texts([result])
+    return json.loads(_texts([result])[0])
 
 
 def test_the_video_tools_show_the_agent_that_the_model_defaults_to_omni_flash():
@@ -2212,7 +2313,12 @@ def _generation_over_real_sessions(
         "FlowSession",
         lambda profile: FlowSession(profile_dir=tmp_path, client_factory=_BrowserlessClient),
     )
+
+    async def no_pin(page, resolution):
+        return None
+
     monkeypatch.setattr(mcp_server.agent_mod, "set_mode", fake_set_mode)
+    monkeypatch.setattr(mcp_server.ingredients_mod, "pin_resolution", no_pin)
     monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
     monkeypatch.setattr(mcp_server.reader, "project", fake_project)
     monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
@@ -2980,8 +3086,14 @@ def _agent_world(monkeypatch, tmp_path, *, chip_states, run_fails=False, chip_mi
     log = []
     states = iter(chip_states)
 
+    class _Session:
+        page = object()
+
     async def fake_with(self, fn):
-        return await fn(object())
+        return await fn(_Session())
+
+    async def fake_pin(page, resolution):
+        log.append(("pin", resolution))
 
     async def fake_set_mode(session, project_id, enabled):
         if chip_missing:
@@ -3000,6 +3112,7 @@ def _agent_world(monkeypatch, tmp_path, *, chip_states, run_fails=False, chip_mi
         monkeypatch.setattr(mcp_server.Backend, name, fn)
     monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
     monkeypatch.setattr(mcp_server.agent_mod, "set_mode", fake_set_mode)
+    monkeypatch.setattr(mcp_server.ingredients_mod, "pin_resolution", fake_pin)
     monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
     monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
     return log
@@ -3029,7 +3142,16 @@ def test_agent_mode_that_was_off_is_left_off(monkeypatch, tmp_path):
     result = _call("gen_t2v", {"prompt": "a cup", "project": "P", "job_id": "agent-off-1"})
 
     assert not result.is_error, _texts([result])
-    assert log == [("set_mode", False, False, False), ("run_job", "t2v")], log
+    # The resolution is pinned in the same session, once the chip is known to be off (plan AQ, 2026-10-08).
+    assert log == [("set_mode", False, False, False), ("pin", "720p"), ("run_job", "t2v")], log
+
+
+def test_a_chip_that_stays_on_is_not_followed_by_a_resolution_pin(monkeypatch, tmp_path):
+    log = _agent_world(monkeypatch, tmp_path, chip_states=[(True, True)])
+
+    _call("gen_t2v", {"prompt": "a cup", "project": "P", "job_id": "agent-stuck-2"})
+
+    assert ("pin", "720p") not in log, log
 
 
 def test_agent_mode_that_stays_on_stops_the_call_before_gflow_runs(monkeypatch, tmp_path):
