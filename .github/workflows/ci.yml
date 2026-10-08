@@ -10,6 +10,8 @@ jobs:
     # The suite never talks to Flow and never spends credits, so it runs anywhere. Everything that does touch
     # the account lives in scripts/acceptance/ and is run by hand, on purpose.
     runs-on: ubuntu-latest
+    # The suite runs in under a minute on this machine; a hung wait must not hold a runner for six hours.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +26,8 @@ jobs:
           enable-cache: true
 
       - name: Install
-        run: uv sync --group dev
+        # --locked: the lockfile is the versions measured here (gflow 0.78.0 among them), never a newer resolution.
+        run: uv sync --locked --group dev
 
       - name: Lint
         run: uv run ruff check .

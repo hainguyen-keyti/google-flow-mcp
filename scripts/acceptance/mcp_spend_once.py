@@ -20,10 +20,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+# A second session on the same profile (a running MCP server) waits for the lease instead of failing at once.
+os.environ.setdefault("GFLOW_CLI_LEASE_WAIT_SECONDS", "900")
 
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams

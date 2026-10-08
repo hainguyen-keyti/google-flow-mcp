@@ -32,9 +32,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 from pathlib import Path
+
+# A second session on the same profile (a running MCP server) waits for the lease instead of failing at once.
+os.environ.setdefault("GFLOW_CLI_LEASE_WAIT_SECONDS", "900")
 
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
@@ -740,7 +744,11 @@ async def main() -> int:
     for finding in findings:
         print(f"{finding['status']:7s} {finding['name']:18s} {finding['detail']}")
     failed = [f for f in findings if f["status"] == "FAIL"]
-    print(f"\nrows={len(findings)} pass={len(findings) - len(failed)} fail={len(failed)}")
+    skipped = [f for f in findings if f["status"] == "SKIP"]
+    # A skipped row is not a passed one (review 2026-10-08, D22): the account may hold nothing for it to read.
+    print(
+        f"\nrows={len(findings)} pass={len(findings) - len(failed) - len(skipped)} skip={len(skipped)} fail={len(failed)}"
+    )
     return 1 if failed or not findings else 0
 
 

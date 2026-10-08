@@ -426,7 +426,7 @@ quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần
   permanently"; "Restore" bắn `BpMsoe`, không hỏi xác nhận. Tile trong thùng rác **không mang scene id** nên
   `scene_restore` chỉ tìm được theo tên (đo 2026-09-15).
 - Giá đo được trên gói PRO: Veo 3.1 Lite 720p 8s = 10 credit, `clip extend` (7 s) = 10, `clip edit` Omni
-  1.1 Flash = 20, Omni Flash 10 s = 15, `--count 2` = 20, ảnh Nano Banana 2 = 0, upscale 1080p = 0, r2v Omni
+  1.1 Flash = 20, Omni Flash 10 s = 15, `--count 2` = 20, ảnh Nano Banana 2.1 = 0, upscale 1080p = 0, r2v Omni
   Flash 8 s = 12 (đo 2026-09-15, 292 s đầu cuối qua MCP), `gen i2v` omni-flash 10 s = 15 (đo 2026-09-18 qua MCP, 105 s).
   Bảng giá chính thức của Flow lệch ở hai chỗ: Omni Flash Edit ghi **40** trong khi đo được 20 nhiều lần, và **4K
   chỉ có từ gói Ultra** (50 credit), tài khoản này là Pro. Mô tả tool nói cả hai con số, và `clip_edit` KHÔNG đọc

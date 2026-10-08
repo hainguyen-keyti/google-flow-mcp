@@ -205,3 +205,21 @@ def test_a_refusal_of_the_backend_is_the_exit_message_not_a_traceback(monkeypatc
 
     assert result.exit_code == 1, result.output
     assert "never paid" in result.output and "Traceback" not in result.output, result.output
+
+
+def test_mcp_run_serves_the_profile_it_is_given(monkeypatch):
+    # Review 2026-10-08 (D19): the served backend was hard-coded to the default profile, so a second account needed
+    # an in-process swap.
+    served = []
+
+    async def fake_stdio():
+        served.append(mcp_server.backend.profile)
+
+    monkeypatch.setattr(mcp_server.server, "run_stdio_async", fake_stdio)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+
+    result = CliRunner().invoke(cli.main, ["mcp", "run", "--profile", "acc2"])
+
+    assert result.exit_code == 0, result.output
+    assert served == ["acc2"], served
+    assert CliRunner().invoke(cli.main, ["mcp", "run"]).exit_code == 0 and served[-1] == "default"

@@ -31,7 +31,8 @@ If tier 0 is red, stop: the fault is below anything you would test by hand.
 |---|---|
 | `uv run pytest -q` | every test green, no `failed` |
 | `uv run python scripts/acceptance/ledger_integrity.py` | `fail=0`, offline, no browser |
-| `uv run python scripts/acceptance/mcp_smoke.py` | `fail=0`, 2 to 3 minutes; calls the read tools FOR REAL over MCP, plus one `gen_character` refused because its `out_dir` is outside `out/` (no browser, no spend) |
+| `uv run python scripts/acceptance/mcp_smoke.py [--profile <name>]` | `fail=0`, 2 to 3 minutes; calls the read tools FOR REAL over MCP, `flow_check` among them, plus one `gen_character` refused because its `out_dir` is outside `out/` (no browser, no spend). `--profile` reads another account when the default one is leased by a running server |
+| `uv run python scripts/acceptance/mcp_verify_all.py --profile <name> --ceiling <credits> [--image <png>] [--only A,B] [--from STEP] [--list]` | every tool once, in order, on a profile of its own (2026-10-08: 65 PASS, 3 FAIL, 66 credits over 49 tools): the balance is read around every step that can spend, a paid step that would pass the ceiling stops the run, every answer lands in `out/verify/results.jsonl` and the ids earlier steps answered in `out/verify/ctx.json`, so `--from` continues on the same objects. Steps that upload or frame an image need `--image` |
 | `uv run python scripts/acceptance/flow_coverage.py --project <id> --character` | the CLI matrix; creates and then deletes an "acceptance probe" project |
 | `uv run python -m video.probes.canary --project <id>` | 11 UI anchors still in place; exit 1 when Google changes the page |
 

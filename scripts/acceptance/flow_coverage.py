@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import time
+
+# A second session on the same profile (a running MCP server) waits for the lease instead of failing at once.
+os.environ.setdefault("GFLOW_CLI_LEASE_WAIT_SECONDS", "900")
 from pathlib import Path
 
 ROWS: list[tuple[str, str, str]] = []

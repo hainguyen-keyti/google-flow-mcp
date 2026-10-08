@@ -104,7 +104,7 @@ guess about; the tool says so too.
 | `gen_character`, omni-flash, 10 s, with characters or from project images alone (the only 10 s reference video; `gen_r2v` runs 8 s) | 15 |
 | `clip_extend` (Veo clips only) | 10 |
 | `clip_edit` (Omni 1.1 Flash) | 20 measured, Flow's table says 40 |
-| `gen_t2i` / `gen_i2i` (Nano Banana 2) | 0 credits, but a daily image quota |
+| `gen_t2i` / `gen_i2i` (Nano Banana 2.1, the model Flow offers in place of 2 since 2026-10-07) | 0 credits, but a daily image quota |
 | `clip_download` at 1080p, or at 720p on a 360p clip (its upscale, measured 2026-10-03; a 360p clip has no 1080p and is refused with what its menu offers) | 0 |
 | `clip_download` at 4k (a Flow upscale) | not offered on Pro: greyed out, refused before any click (Flow's table: Ultra, 50) |
 | Every read: lane, projects, media, credits, characters, scenes, voices, what a clip was made from (`clip_recipe`), and this table as data (`flow_capabilities`: every model's cells, lengths and caps, no browser) | 0 |

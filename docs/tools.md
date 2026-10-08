@@ -152,7 +152,7 @@ Delete a project permanently (clips, ingredients, prompts). Free.
 
 **Arguments**: `project_id`, `prompt` (optional), `image` (optional), `name` (optional), `personality` (optional), `wait` (optional)
 
-Create a character, then set name and personality. Give exactly one of prompt (a face described in words; the portrait comes from Nano Banana 2, credit-free) and image (a local png, jpg, jpeg or webp of a face; the upload becomes the portrait). Flow has refused photos without a message, for example of people wearing lace (measured 2026-09-13), while a close-up portrait was accepted. The reply's portrait.workflow_id is NOT a media id: call flow_characters for the portrait's media id, which flow_download accepts. Free.
+Create a character, then set name and personality. Give exactly one of prompt (a face described in words; the portrait comes from Nano Banana 2.1, credit-free) and image (a local png, jpg, jpeg or webp of a face; the upload becomes the portrait). Flow has refused photos without a message, for example of people wearing lace (measured 2026-09-13), while a close-up portrait was accepted. The reply's portrait.workflow_id is NOT a media id: call flow_characters for the portrait's media id, which flow_download accepts. Free.
 
 ### `character_delete`
 

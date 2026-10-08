@@ -7,7 +7,8 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "hainguyen-keyti" }]
 keywords = ["google-flow", "veo", "mcp", "video-generation", "agent"]
-requires-python = ">=3.11"
+# 3.12: rglob(case_sensitive=False), which every paid tool's ledger sweep uses (review 2026-10-08, D25).
+requires-python = ">=3.12"
 dependencies = [
     "gflow-cli==0.78.0",
     "mcp==2.2.0",
@@ -32,10 +33,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/video"]
+# Research probes stay on the repo; one of them clicks Start generation with no ledger row (review 2026-10-08).
+exclude = ["src/video/probes"]
 
 [tool.ruff]
 line-length = 110
-target-version = "py311"
+target-version = "py312"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

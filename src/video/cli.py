@@ -662,11 +662,12 @@ def mcp() -> None:
 
 
 @mcp.command("run")
-def mcp_run() -> None:
+@click.option("--profile", default="default", show_default=True, help="the gflow profile (account) to serve")
+def mcp_run(profile: str) -> None:
     """Serve over stdio (for Claude Code .mcp.json, Claude Desktop, Cursor)."""
     from video import mcp_server
 
-    mcp_server.run_stdio()
+    mcp_server.run_stdio(profile)
 
 
 @main.group()
