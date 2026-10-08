@@ -66,7 +66,7 @@ uv run video flow media <project_id>
 A paid generation, 10 credits on the measured plan, written to `out/ledger.jsonl`:
 
 ```bash
-uv run video gen t2v "a red paper boat drifting on a pond" --project <project_id> --model veo-lite --out out
+uv run video gen t2v "a red paper boat drifting on a pond" --project <project_id> --model veo-lite --job boat-1 --out out
 ```
 
 ## Using it from an agent (MCP)

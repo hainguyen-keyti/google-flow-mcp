@@ -1009,7 +1009,7 @@ class Backend:
             end_frame=Path(end_frame) if end_frame else None,
             refs=[Path(r) for r in refs or []],
         )
-        target = Path(out_dir) if out_dir else self.out_dir
+        target = self._editor_out_dir(out_dir)
 
         async def run() -> dict[str, Any]:
             was_on = await self._agent_off(project, resolution if kind in gen_mod.VIDEO_KINDS else None)

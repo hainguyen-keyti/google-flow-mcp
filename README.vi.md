@@ -44,10 +44,10 @@ uv run video flow clip download <project> <media_id> --quality gif|720p|1080p|4k
 Lệnh trên clip editor và agent, tốn credit, cùng ledger `out/ledger.jsonl`:
 
 ```
-uv run video flow clip extend <project> <media_id> "<prompt>" --out out    # Extend (Veo 3.1 Lite)
-uv run video flow clip edit <project> <media_id> "<prompt>" --out out      # video-to-video, Omni 1.1 Flash
-uv run video flow clip reconcile <project> --out out                      # $0, đóng sổ job editor mồ côi
-uv run video flow agent send <project> "<message>"   # agent có thể tự sinh nội dung
+uv run video flow clip extend <project> <media_id> "<prompt>" --job ext-1 --out out    # Extend (Veo 3.1 Lite)
+uv run video flow clip edit <project> <media_id> "<prompt>" --job edit-1 --out out     # video-to-video, Omni 1.1 Flash
+uv run video flow clip reconcile <project> --out out                                  # $0, đóng sổ job editor mồ côi
+uv run video flow agent send <project> "<message>" --job agent-1   # agent có thể tự sinh nội dung
 ```
 
 Prompt của `clip extend|edit` và message của `agent send` phải một dòng: ô của Flow nhận ký tự xuống dòng như phím
@@ -87,10 +87,10 @@ chi khác trong khoảng đó, và cả những lần số dư tự đổi mà k
 Sinh nội dung, tốn credit (video) hoặc quota (ảnh), luôn cần `--project`:
 
 ```
-uv run video gen t2v "<prompt>" --project <id> --model veo-lite --aspect 16:9 --out out
-uv run video gen r2v "<prompt>" --ref anh.jpg --project <id> --model veo-lite
-uv run video gen i2v anh.png "<prompt>" --project <id> --model omni-flash --duration 10 --aspect 9:16   # 15 credit
-uv run video gen i2v anh.png "<prompt>" --project <id> --aspect 9:16                      # bỏ trống model: gflow dùng veo-lite
+uv run video gen t2v "<prompt>" --project <id> --model veo-lite --aspect 16:9 --job t2v-1 --out out
+uv run video gen r2v "<prompt>" --ref anh.jpg --project <id> --model veo-lite --job r2v-1
+uv run video gen i2v anh.png "<prompt>" --project <id> --model omni-flash --duration 10 --aspect 9:16 --job i2v-1   # 15 credit
+uv run video gen i2v anh.png "<prompt>" --project <id> --aspect 9:16 --job i2v-2         # bỏ trống model: omni-flash, như tool MCP
 uv run video gen t2i "<prompt>" --project <id> --model nano2 --aspect 16:9
 uv run video gen i2i "<prompt>" --ref anh.jpg --project <id>
 ```

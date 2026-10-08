@@ -536,10 +536,13 @@ def test_the_cli_spends_on_the_profile_it_was_given(monkeypatch, tmp_path):
         return {"job_id": job.job_id, "outputs": []}
 
     monkeypatch.setattr(gen, "run_job", fake_run_job)
+    runner = CliRunner()
 
-    result = CliRunner().invoke(
-        cli.main, ["gen", "t2i", "a boat", "--project", "P", "--profile", "acc2", "--out", str(tmp_path)]
-    )
+    # Inside out/: the CLI runs through the Backend since plan AQ, which keeps every out folder under out/.
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        result = runner.invoke(
+            cli.main, ["gen", "t2i", "a boat", "--project", "P", "--profile", "acc2", "--out", "out/acc2"]
+        )
 
     assert result.exit_code == 0, result.output
     assert handed == {"profile": "acc2"}, handed
@@ -553,7 +556,7 @@ def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
     import ast
 
     src = Path(__file__).resolve().parents[1] / "src"
-    offenders, calls = [], 0
+    offenders, found = [], set()
     for path in src.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         called = set()
@@ -561,7 +564,7 @@ def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
             if isinstance(node, ast.Call):
                 name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
                 if name == "run_job":
-                    calls += 1
+                    found.add(str(path.relative_to(src)))
                     called.add(id(node.func))
                     for keyword in node.keywords:
                         if keyword.arg in (None, "read_credits", "runner"):
@@ -573,7 +576,8 @@ def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
                 name = getattr(node, "attr", None) or getattr(node, "id", None)
                 if name == "run_job" and not isinstance(getattr(node, "ctx", None), ast.Store):
                     offenders.append(f"{path.relative_to(src)}:{node.lineno} uses run_job without calling it")
-    assert calls >= 3, f"the scan found only {calls} run_job calls; it is not reading what it claims to"
+    # The ruler: the Backend's call is the one every tool and, since plan AQ, every CLI command goes through.
+    assert "video/mcp_server.py" in found, f"the scan found run_job calls only in {sorted(found)}"
     assert offenders == [], offenders
 
 

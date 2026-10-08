@@ -76,6 +76,15 @@ def _read(profile: str, fn):
     return asyncio.run(run())
 
 
+def _spend(call):
+    """A paid call through the MCP's Backend: its refusal (a used job id, an out folder outside out/, a cell nobody
+    paid for, Agent mode that stayed on) is the command's exit message, never a traceback."""
+    try:
+        return asyncio.run(call)
+    except (ValueError, LookupError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 def _one_line(ctx: click.Context, param: click.Parameter, value: str) -> str:
     # Flow's editor and agent box take a newline as Enter, typed before the ledger's `submitted` row.
     if "\n" in value or "\r" in value:
@@ -376,24 +385,21 @@ def clip_download(project_id: str, media_id: str, quality: str, out_dir: str, pr
 @click.argument("media_id")
 @click.argument("prompt", callback=_one_line)
 @click.option("--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False))
-@click.option("--job", "job_id", default=None)
+@click.option(
+    "--job", "job_id", required=True, help="Idempotency key; a used one is refused before a browser opens."
+)
 @click.option("--wait", default=240.0, show_default=True, type=float)
 @click.option("--profile", default="default", show_default=True)
 def clip_extend(
-    project_id: str, media_id: str, prompt: str, out_dir: str, job_id: str | None, wait: float, profile: str
+    project_id: str, media_id: str, prompt: str, out_dir: str, job_id: str, wait: float, profile: str
 ) -> None:
     """Extend a clip (Veo 3.1 Lite); spends credits, ledgered."""
-    from pathlib import Path
+    from video.mcp_server import Backend
 
-    from video.flow import clips
-
-    result = _read(
-        profile,
-        lambda s: clips.extend(
-            s, project_id, media_id, prompt, out_dir=Path(out_dir), job_id=job_id, wait=wait
-        ),
+    call = Backend(profile=profile).clip_extend(
+        project_id=project_id, media_id=media_id, prompt=prompt, job_id=job_id, out_dir=out_dir, wait=wait
     )
-    click.echo(json.dumps(result))
+    click.echo(json.dumps(_spend(call)))
 
 
 @clip.command("edit")
@@ -401,24 +407,21 @@ def clip_extend(
 @click.argument("media_id")
 @click.argument("prompt", callback=_one_line)
 @click.option("--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False))
-@click.option("--job", "job_id", default=None)
+@click.option(
+    "--job", "job_id", required=True, help="Idempotency key; a used one is refused before a browser opens."
+)
 @click.option("--wait", default=240.0, show_default=True, type=float)
 @click.option("--profile", default="default", show_default=True)
 def clip_edit(
-    project_id: str, media_id: str, prompt: str, out_dir: str, job_id: str | None, wait: float, profile: str
+    project_id: str, media_id: str, prompt: str, out_dir: str, job_id: str, wait: float, profile: str
 ) -> None:
     """Video-to-video edit with Omni 1.1 Flash; spends credits, ledgered."""
-    from pathlib import Path
+    from video.mcp_server import Backend
 
-    from video.flow import clips
-
-    result = _read(
-        profile,
-        lambda s: clips.edit(
-            s, project_id, media_id, prompt, out_dir=Path(out_dir), job_id=job_id, wait=wait
-        ),
+    call = Backend(profile=profile).clip_edit(
+        project_id=project_id, media_id=media_id, prompt=prompt, job_id=job_id, out_dir=out_dir, wait=wait
     )
-    click.echo(json.dumps(result))
+    click.echo(json.dumps(_spend(call)))
 
 
 @clip.command("reconcile")
@@ -458,11 +461,21 @@ def agent_mode(project_id: str, state: str, profile: str) -> None:
 @click.argument("project_id")
 @click.argument("message", callback=_one_line)
 @click.option("--wait", default=60.0, show_default=True, type=float)
+@click.option(
+    "--job",
+    "job_id",
+    required=True,
+    help="Idempotency key for a message that may spend; a used one is refused before a browser opens.",
+)
 @click.option("--profile", default="default", show_default=True)
-def agent_send(project_id: str, message: str, wait: float, profile: str) -> None:
-    from video.flow import agent as agent_mod
+def agent_send(project_id: str, message: str, wait: float, job_id: str, profile: str) -> None:
+    """Send a message to Flow's agent; it may spend credits and is ledgered under out/."""
+    from video.mcp_server import Backend
 
-    click.echo(json.dumps(_read(profile, lambda s: agent_mod.send(s, project_id, message, wait))))
+    call = Backend(profile=profile).agent_send(
+        project_id=project_id, message=message, wait=wait, job_id=job_id
+    )
+    click.echo(json.dumps(_spend(call)))
 
 
 @main.group()
@@ -636,42 +649,53 @@ def gen() -> None:
     """Generate on Flow through gflow; every job is ledgered in OUT/ledger.jsonl (spends credits)."""
 
 
-def _gen_options(fn):
-    for option in reversed(
-        [
-            click.option("--project", required=True, help="Existing Flow project id."),
-            click.option(
-                "--model",
-                default=None,
-                help="gflow model alias (veo-lite, veo-fast, veo-quality, omni-flash, nano2, nano-pro).",
-            ),
-            click.option("--aspect", default=None, help="9:16 or 16:9 (images also 1:1, 4:3)."),
-            click.option("--count", default=1, show_default=True, type=int),
-            click.option("--duration", default=None, type=int, help="4, 6, 8 (10 on omni-flash)."),
-            click.option(
-                "--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False)
-            ),
-            click.option(
-                "--job",
-                "job_id",
-                default=None,
-                help="Idempotency key; a job id with a submitted row is refused.",
-            ),
-            click.option("--profile", default="default", show_default=True),
-        ]
-    ):
-        fn = option(fn)
-    return fn
+def _gen_options(paid: bool):
+    """The gen options; a video command requires --job, since a job id minted per run paid twice on a retry."""
+
+    def wrap(fn):
+        for option in reversed(
+            [
+                click.option("--project", required=True, help="Existing Flow project id."),
+                click.option(
+                    "--model",
+                    default=None,
+                    help=(
+                        "Model alias. Video runs omni-flash when omitted and only the cells paid here (omni-flash, "
+                        "veo-lite; gen i2v omni-flash alone), images nano2; anything else is refused before gflow."
+                    ),
+                ),
+                click.option("--aspect", default=None, help="9:16 or 16:9 (images also 1:1, 4:3)."),
+                click.option("--count", default=1, show_default=True, type=int, help="Video runs 1 only."),
+                click.option("--duration", default=None, type=int, help="4, 6, 8 (10 on omni-flash)."),
+                click.option(
+                    "--resolution",
+                    default=None,
+                    help="360p or 720p on omni-flash, 720p when omitted; pinned in the composer before gflow clicks.",
+                ),
+                click.option(
+                    "--out", "out_dir", default="out", show_default=True, type=click.Path(file_okay=False)
+                ),
+                click.option(
+                    "--job",
+                    "job_id",
+                    required=paid,
+                    help="Idempotency key; a job id already in a ledger under out/ is refused before a browser opens.",
+                ),
+                click.option("--profile", default="default", show_default=True),
+            ]
+        ):
+            fn = option(fn)
+        return fn
+
+    return wrap
 
 
 def _run_gen(kind: str, prompt: str, opts: dict, **extra) -> None:
-    import uuid
-    from pathlib import Path
+    """Through the MCP's Backend, so the CLI carries the tools' own guards: a used job id refused before a browser
+    opens, the out folder inside out/, the paid cells only, Agent mode off first (review 2026-10-08, B3)."""
+    from video.mcp_server import Backend
 
-    from video import gen as gen_mod
-
-    job = gen_mod.Job(
-        job_id=opts["job_id"] or str(uuid.uuid4()),
+    call = Backend(profile=opts["profile"]).generate(
         kind=kind,
         prompt=prompt,
         project=opts["project"],
@@ -679,18 +703,17 @@ def _run_gen(kind: str, prompt: str, opts: dict, **extra) -> None:
         aspect=opts["aspect"],
         count=opts["count"],
         duration=opts["duration"],
+        resolution=opts["resolution"],
+        job_id=opts["job_id"],
+        out_dir=opts["out_dir"],
         **extra,
     )
-
-    async def run():
-        return await gen_mod.run_job(job, Path(opts["out_dir"]), profile=opts["profile"])
-
-    click.echo(json.dumps(asyncio.run(run()), indent=2))
+    click.echo(json.dumps(_spend(call), indent=2))
 
 
 @gen.command()
 @click.argument("prompt")
-@_gen_options
+@_gen_options(paid=True)
 def t2v(prompt: str, **opts) -> None:
     """Text to video."""
     _run_gen("t2v", prompt, opts)
@@ -710,34 +733,24 @@ def t2v(prompt: str, **opts) -> None:
         "amount (the MCP tool refuses those outright)."
     ),
 )
-@_gen_options
+@_gen_options(paid=True)
 def i2v(initial_frame: str, prompt: str, end_frame: str | None, **opts) -> None:
     """Image to video from a start frame, and with --end-frame between two frames."""
-    from pathlib import Path
-
-    _run_gen(
-        "i2v",
-        prompt,
-        opts,
-        initial_frame=Path(initial_frame),
-        end_frame=Path(end_frame) if end_frame else None,
-    )
+    _run_gen("i2v", prompt, opts, initial_frame=initial_frame, end_frame=end_frame)
 
 
 @gen.command()
 @click.argument("prompt")
 @click.option("--ref", "refs", multiple=True, required=True, type=click.Path(exists=True, dir_okay=False))
-@_gen_options
+@_gen_options(paid=True)
 def r2v(prompt: str, refs: tuple[str, ...], **opts) -> None:
     """Reference images (ingredients) to video."""
-    from pathlib import Path
-
-    _run_gen("r2v", prompt, opts, refs=[Path(r) for r in refs])
+    _run_gen("r2v", prompt, opts, refs=list(refs))
 
 
 @gen.command()
 @click.argument("prompt")
-@_gen_options
+@_gen_options(paid=False)
 def t2i(prompt: str, **opts) -> None:
     """Text to image."""
     _run_gen("t2i", prompt, opts)
@@ -746,12 +759,10 @@ def t2i(prompt: str, **opts) -> None:
 @gen.command()
 @click.argument("prompt")
 @click.option("--ref", "refs", multiple=True, required=True, type=click.Path(exists=True, dir_okay=False))
-@_gen_options
+@_gen_options(paid=False)
 def i2i(prompt: str, refs: tuple[str, ...], **opts) -> None:
     """Reference images to image."""
-    from pathlib import Path
-
-    _run_gen("i2i", prompt, opts, refs=[Path(r) for r in refs])
+    _run_gen("i2i", prompt, opts, refs=list(refs))
 
 
 if __name__ == "__main__":
