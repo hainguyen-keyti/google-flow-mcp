@@ -39,10 +39,32 @@ def accept_nano_banana_2_1() -> None:
     migrated_composer._image_body_problem = check
 
 
+def accept_generation_record_null_version() -> None:
+    """Measured 2026-10-07: Flow's submit replies (maseQ, YhhmEf) carry null in record[3] where "CAE" stood, and
+    gflow's batchexecute._is_record, which wants exactly "CAE", refused every reply as holding no generation record
+    (two paid runs on 2026-10-06, one of them charged). A record is one with "CAE" or null there and nothing else:
+    "CAI" and "CAM" are a clip's edit versions (measured 2026-09-28), and gflow keeps the first record it finds, so an
+    edit record ahead of the job's own would stand in for the job."""
+    from gflow_cli.api.transports import batchexecute
+
+    checked = batchexecute._is_record
+    if getattr(checked, "accepts_null_version", False):
+        return
+
+    def check(node):
+        if not isinstance(node, list) or len(node) < 6 or node[3] not in ("CAE", None):
+            return False
+        return all(isinstance(node[i], str) and batchexecute._UUID_RE.match(node[i]) for i in (0, 1, 2))
+
+    check.accepts_null_version = True
+    batchexecute._is_record = check
+
+
 def run(argv: list[str]) -> None:
     if hides_window(argv[1:]):
         offscreen.install()
     accept_nano_banana_2_1()
+    accept_generation_record_null_version()
     argv[0] = "gflow"
     main()
 

@@ -8,10 +8,12 @@ from pathlib import Path
 
 import pytest
 from test_ingredients import (
+    JOB_MEDIA,
     JOB_WORKFLOW,
     KEPT_ONE_VOICE,
     PROMPT,
     SUBMIT_REPLY,
+    _FlowReply,
     _install,
     _paid_run,
     _paid_world,
@@ -1088,3 +1090,31 @@ def test_a_job_that_was_not_started_by_job_submit_is_not_collected(monkeypatch, 
         _status(ledger)
 
     assert log == [] and len(ledger.rows()) == len(rows)
+
+
+# Plan AQ, B1: a detached submit says whether Flow's reply was read, never a plain "started" on an unread reply.
+
+
+def test_a_detached_submit_says_its_reply_was_read(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, replies={"click": [SUBMIT_REPLY]})
+
+    result = _submit(_SubmitSession(log), tmp_path, log, detach=True, strict_output=True)
+
+    assert result["workflow_id"] == JOB_WORKFLOW and result["flow_reply_read"] is True
+    assert _rows(tmp_path)[1]["flow_reply_read"] is True
+
+
+def test_a_detached_submit_whose_reply_went_unread_says_so_and_how_its_clip_is_found(monkeypatch, tmp_path):
+    # Seen live 2026-10-08 (v8-sub): the submit rpc was heard, the reader kept no record (Flow's version field had
+    # changed), the answer was a plain started with workflow_id null, and the clip was later claimed by prompt.
+    log = []
+    unreadable = _FlowReply("MZZa6b", [None, 1, [[JOB_MEDIA]], [["not", "a", "record"]]])
+    _install(monkeypatch, tmp_path, log, replies={"click": [unreadable]})
+
+    result = _submit(_SubmitSession(log), tmp_path, log, detach=True, strict_output=True)
+
+    assert result["state"] == "started" and result["workflow_id"] is None
+    assert result["flow_reply_read"] is False
+    assert "prompt" in result["flow_reply_note"] and "video flow check" in result["flow_reply_note"]
+    assert _rows(tmp_path)[1]["flow_reply_read"] is False

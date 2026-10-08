@@ -4745,3 +4745,142 @@ def test_a_failure_before_any_click_is_passed_on_as_it_is(monkeypatch, tmp_path)
     with pytest.raises(LookupError) as caught:
         _paid_run(tmp_path)
     assert caught.value is refused
+
+
+# Plan AQ, B1: Flow's generation replies carry null where "CAE" stood (seen on every started row since 2026-10-06 and
+# on gflow's own refusals of 2026-10-06; the upload reply of 2026-10-07 reads [uuid, uuid, uuid, null, null, ...]).
+# A reader that keeps only version 1 heard nothing for a week while every test fixture typed "CAE".
+
+
+def _null_version(record):
+    copy = list(record)
+    copy[3] = None
+    return copy
+
+
+def test_flow_replies_read_a_generation_record_whose_version_field_is_null():
+    submit = _FlowReply("MZZa6b", [None, 1, [[JOB_MEDIA]], [_null_version(_flow_record(6))]])
+    status = _FlowReply("jwpduf", [None, 1, [_null_version(_flow_record(2))]])
+
+    flow = _judged([submit, status])
+
+    assert (flow["workflow_id"], flow["media_id"], flow["statuses"]) == (JOB_WORKFLOW, JOB_MEDIA, [6, 2]), (
+        flow
+    )
+
+
+def test_a_null_version_record_still_ends_the_wait_when_flow_failed_the_job():
+    async def run():
+        replies = composer.FlowReplies()
+        replies.on_response(_FlowReply("YhhmEf", [None, 1, [[JOB_MEDIA]], [_null_version(_flow_record(6))]]))
+        replies.on_response(
+            _FlowReply("jwpduf", [None, 1, [_null_version(_flow_record(4, extra=[[REFUSAL]]))]])
+        )
+        await replies.report()
+        return replies.reported_failed(), await replies.report()
+
+    stopped, flow = asyncio.run(run())
+
+    assert stopped is True and flow["statuses"] == [6, 4] and flow["reasons"] == [REFUSAL], flow
+
+
+def test_the_edit_reader_does_not_take_a_null_version_record_for_an_edit():
+    # Unmeasured since the change: with null versions an edit record cannot be told from its source's generation, so
+    # the editor's reader names nothing from it and the editor tools keep settling by the listing.
+    flow = _judged([_edit_submit(_null_version(_edit_record(4)))], editor=True, source_media=JOB_MEDIA)
+
+    assert flow["workflow_id"] is None and flow["named_by_editor_submit"] is False, flow
+
+
+def test_replies_are_written_raw_when_a_capture_folder_is_named(monkeypatch, tmp_path):
+    # A fixture of Flow's reply is built from a reply Flow sent, never typed: VIDEO_CAPTURE_REPLIES names the folder.
+    monkeypatch.setenv("VIDEO_CAPTURE_REPLIES", str(tmp_path / "captured"))
+
+    _judged([SUBMIT_REPLY, _status_reply(2)])
+
+    files = sorted(tmp_path.joinpath("captured").glob("*.txt"))
+    assert [f.name.split("_", 1)[0] for f in files] == ["MZZa6b", "jwpduf"], files
+    assert JOB_WORKFLOW in files[0].read_text(encoding="utf-8")
+
+
+def test_nothing_is_written_when_no_capture_folder_is_named(monkeypatch, tmp_path):
+    monkeypatch.delenv("VIDEO_CAPTURE_REPLIES", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    _judged([SUBMIT_REPLY])
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_submit_heard_whose_record_could_not_be_read_is_said_on_the_row_and_in_the_error(
+    monkeypatch, tmp_path
+):
+    # The canary for the next shape change: the submit rpc was heard, no record in it was readable, so the job is
+    # settled by the listing and both the row and the answer say the reply went unread.
+    log = []
+    unreadable = _FlowReply("MZZa6b", [None, 1, [[JOB_MEDIA]], [["not", "a", "record"]]])
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [unreadable]})
+
+    with pytest.raises(RuntimeError, match="reply") as raised:
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]
+    assert last["flow_reply_read"] is False and last["rpcids"] == ["MZZa6b"], last
+    assert "video flow check" in str(raised.value)
+
+
+def test_a_submit_whose_record_was_read_says_so_on_the_row(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, balance_reads=(200, 200, 200), replies={"click": [SUBMIT_REPLY]})
+
+    with pytest.raises(RuntimeError):
+        _submit(_SubmitSession(log), tmp_path, log, strict_output=True)
+
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows()[-1]["flow_reply_read"] is True
+
+
+REPLIES = Path(__file__).parent / "fixtures" / "replies"
+CAPTURED = ("eb1hJf", "jwpduf_pending", "jwpduf")
+UUID_ANYWHERE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+STAND_IN_PREFIX = "00000000-0000-4000-8000-"
+
+
+class _CapturedReply:
+    """A reply Flow sent on 2026-10-08 (AQ4, 4 credits), captured raw with VIDEO_CAPTURE_REPLIES and redacted by
+    scripts/acceptance/redact_replies.py; never typed."""
+
+    def __init__(self, name):
+        rpcid = name.split("_")[0]
+        self.url = f"https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute?rpcids={rpcid}&rt=c"
+        self.body = (REPLIES / f"{name}.txt").read_text(encoding="utf-8")
+
+    async def text(self):
+        return self.body
+
+
+def _captured_record(name):
+    ((_, payload),) = composer.parse_frames(_CapturedReply(name).body)
+    (record,) = composer._records_in(payload)
+    return record
+
+
+@pytest.mark.parametrize("name", CAPTURED)
+def test_a_captured_reply_holds_a_null_version_record_and_nothing_of_the_account(name):
+    # The ruler is checked first: a fixture that held "CAE" would prove nothing about the null Flow sends since
+    # 2026-10-05, and one holding a real id would be the account in the public repo.
+    record = _captured_record(name)
+    assert record[3] is None, record[:4]
+    found = UUID_ANYWHERE.findall(_CapturedReply(name).body)
+    assert found and all(each.startswith(STAND_IN_PREFIX) for each in found), found
+
+
+def test_flow_replies_name_the_workflow_and_statuses_of_the_replies_flow_sent_on_2026_10_08():
+    # Fed in the order they were captured: Flow's status poll (2) ran two seconds ahead of the submit reply (6),
+    # and the last poll said 3; the live row read [2, 6, 2, 3] over six replies, the repeated 2s folded.
+    record = _captured_record("eb1hJf")
+
+    flow = _judged([_CapturedReply(name) for name in ("jwpduf_pending", "eb1hJf", "jwpduf")])
+
+    assert (flow["workflow_id"], flow["media_id"], flow["statuses"]) == (record[0], record[2], [2, 6, 3]), (
+        flow
+    )

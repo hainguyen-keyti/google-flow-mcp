@@ -17,7 +17,9 @@ import base64
 import contextlib
 import hashlib
 import json
+import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -139,13 +141,16 @@ def _record_version(token: Any) -> int | None:
 
 def _records_in(node: Any, edits: bool = False) -> list[list[Any]]:
     """Every generation record in a reply, shaped [workflow_id, project_id, media_id, <version>, ...] (gflow
-    batchexecute.py), where gflow's own parser returns only the first. A generation is always its media's version 1;
-    an edit is a later version of its source clip, heard only when `edits` is asked for."""
+    batchexecute.py), where gflow's own parser returns only the first. A generation is always its media's version 1,
+    which Flow wrote as "CAE" until 2026-10-05 and as null since (every started row from 2026-10-06 heard the submit
+    rpc and named no workflow until this read null); an edit is a later version of its source clip, heard only when
+    `edits` is asked for, and with null versions an edit cannot be told from its source's generation, so the edit
+    reader keeps to versions it can read."""
     if not isinstance(node, list):
         return []
     if len(node) >= 6 and all(isinstance(node[i], str) and _UUID_RE.match(node[i]) for i in (0, 1, 2)):
         version = _record_version(node[3])
-        if version == 1 or (edits and version is not None and version > 1):
+        if version == 1 or (not edits and node[3] is None) or (edits and version is not None and version > 1):
             return [node]
     return [record for child in node for record in _records_in(child, edits)]
 
@@ -200,6 +205,45 @@ def _about_the_job(rpcids: str, job_rpcs: tuple[str, ...] = GFLOW_RPCS) -> bool:
     return any(rpcid in job_rpcs for rpcid in rpcids.split(","))
 
 
+CAPTURE_ENV = "VIDEO_CAPTURE_REPLIES"
+
+
+def _capture(rpcids: str, text: str) -> None:
+    """Write a reply Flow sent, raw, into the folder VIDEO_CAPTURE_REPLIES names: the fixtures that pin the reader are
+    built from replies Flow sent, never typed (a typed "CAE" in every fixture hid a week of unread replies)."""
+    folder = os.environ.get(CAPTURE_ENV)
+    if not folder:
+        return
+    try:
+        path = Path(folder)
+        path.mkdir(parents=True, exist_ok=True)
+        (path / f"{rpcids.replace(',', '+')}_{time.time_ns()}.txt").write_text(text, encoding="utf-8")
+    except OSError:
+        return
+
+
+def _reply_read(flow: dict[str, Any], frames: Any) -> bool | None:
+    """Whether Flow's submit reply was read: None when no submit rpc was heard, else whether a workflow was named."""
+    if not any(rpcid in mc.SUBMIT_RPCS for rpcid in (frames or ())):
+        return None
+    return bool(flow.get("workflow_id"))
+
+
+REPLY_UNREAD = (
+    "Flow's submit reply was heard but named no workflow, so the shape of its replies may have changed: the job is "
+    "settled by the listing and its clip found by its prompt; run `video flow check` and refresh the reply fixtures"
+)
+
+
+def _reply_note(flow: dict[str, Any], frames: Any) -> str:
+    return f"; {REPLY_UNREAD}" if _reply_read(flow, frames) is False else ""
+
+
+def _reply_fields(flow: dict[str, Any], frames: Any) -> dict[str, Any]:
+    read = _reply_read(flow, frames)
+    return {"flow_reply_read": read, **({"flow_reply_note": REPLY_UNREAD} if read is False else {})}
+
+
 class FlowReplies:
     """What Flow's own replies said about the submitted job, heard from the click until its outcome row is written.
 
@@ -242,6 +286,8 @@ class FlowReplies:
         except Exception:  # noqa: BLE001
             return rpcids, ""
         kept = _about_the_job(rpcids, self.job_rpcs) or "PUBLIC_ERROR" in text or len(text) <= SMALL_REPLY
+        if kept and text:
+            _capture(rpcids, text)
         return rpcids, text if kept else ""
 
     def reported_failed(self) -> bool:
@@ -897,6 +943,7 @@ async def _submit(
                 **watched,
                 **(started_extra or {}),
                 flow=flow,
+                flow_reply_read=_reply_read(flow, frames),
                 page_after_click=page_after_click,
             )
             return {
@@ -906,6 +953,7 @@ async def _submit(
                 "workflow_id": flow.get("workflow_id"),
                 "quoted_credits": confirm["price"],
                 "credits_before": credits_before,
+                **_reply_fields(flow, frames),
                 **extra,
                 **checked,
                 **watched,
@@ -989,6 +1037,7 @@ async def _submit(
             rpcids=None if frames is None else sorted(frames),
             **({"body_check": watch.report()} if watch is not None else {}),
             flow=flow,
+            flow_reply_read=_reply_read(flow, frames),
             page_after_click=page_after_click,
         )
         # The advice leads: an agent sees at most 500 characters and a job_id can be long (re-review A, 2026-09-17).
@@ -1038,37 +1087,39 @@ async def _submit(
         **({"error": fetch_error} if fetch_error else {}),
         **({"candidates": [c["id"] for c in unclaimed]} if status == "unknown" else {}),
         flow=flow,
+        flow_reply_read=_reply_read(flow, frames),
         page_after_click=page_after_click,
     )
+    reply_note = _reply_note(flow, frames)
     if status == "pending" and count > 1:
         why = fetch_error or f"{len(candidates)} of {count} clips listed and finished after {wait:.0f}s"
         raise RuntimeError(
             f"do not run this job again: clips {[c['id'] for c in candidates]} exist but not all {count} came back "
-            f"({why}); fetch them with flow_download once finished; spent {spent} credits; job {job_id}"
+            f"({why}); fetch them with flow_download once finished; spent {spent} credits{reply_note}; job {job_id}"
         )
     if status == "pending":
         why = fetch_error or f"still rendering after {wait:.0f}s"
         raise RuntimeError(
             f"do not run this job again: the clip {output['id']} exists but no file came back ({why}); fetch it "
-            f"with flow_download once it has finished; spent {spent} credits; job {job_id}"
+            f"with flow_download once it has finished; spent {spent} credits{reply_note}; job {job_id}"
         )
     if status == "unknown" and unclaimed:
         raise RuntimeError(
             "check flow_media and never run this job again under a new job_id: "
             f"{len(unclaimed)} new records could be this job's clip ({[c['id'] for c in unclaimed]}), so none is "
-            f"taken; spent {spent} credits; {flow_said(flow)}{page_note}; job {job_id}"
+            f"taken; spent {spent} credits; {flow_said(flow)}{page_note}{reply_note}; job {job_id}"
         )
     if status == "unknown" and spent:
         raise RuntimeError(
             "check flow_media and flow_credits and never run this job again under a new job_id: no new video showed "
-            f"up within {wait:.0f}s, yet the balance moved by {spent} credits; {flow_said(flow)}{page_note}; "
-            f"job {job_id}"
+            f"up within {wait:.0f}s, yet the balance moved by {spent} credits; {flow_said(flow)}{page_note}"
+            f"{reply_note}; job {job_id}"
         )
     if status == "unknown":
         raise RuntimeError(
             "check flow_media and flow_credits again in a few minutes and never run this job again under a new "
             f"job_id: Flow had not finished the job when the {wait:.0f}s wait ended and nothing new was listed; "
-            f"{flow_said(flow)}{page_note}; job {job_id}"
+            f"{flow_said(flow)}{page_note}{reply_note}; job {job_id}"
         )
     if status == "failed" and spent == 0 and statuses and statuses[-1] == STATUS_FAILED:
         # The advice, the reason and Flow's own words lead: an agent sees at most 500 characters (dancer-1, 2026-09-17).
@@ -1085,13 +1136,13 @@ async def _submit(
         raise RuntimeError(
             f"Flow refused this job and charged nothing: {advice}; "
             f"{flow_said(flow)}; Flow said: {notice or '(no message captured)'}{page_note}; rpcids {sorted(frames)}; "
-            f"settings {settings['applied']}; job {job_id}"
+            f"settings {settings['applied']}{reply_note}; job {job_id}"
         )
     if status == "failed":
         raise RuntimeError(
             f"nothing was generated within {wait:.0f}s, spent {spent} credits; {flow_said(flow)}{page_note}; rpcids "
-            f"{sorted(frames)}; settings {settings['applied']}; Flow said: {notice or '(no message captured)'}; "
-            f"job {job_id}"
+            f"{sorted(frames)}; settings {settings['applied']}; Flow said: {notice or '(no message captured)'}"
+            f"{reply_note}; job {job_id}"
         )
     return {
         "job_id": job_id,
@@ -1103,6 +1154,7 @@ async def _submit(
         "credits_before": credits_before,
         "credits_after": credits_after,
         "spent": spent,
+        **_reply_fields(flow, frames),
         **extra,
         **checked,
         **watched,
