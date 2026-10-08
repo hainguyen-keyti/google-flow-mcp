@@ -387,6 +387,13 @@ class Walker:
         await self.session.goto(f"{self.session.project_url(self.project_id)}/{path}", ready=ready)
         await self.record(route)
 
+    async def scene_editor(self, listing: Any, scene_id: str) -> None:
+        """The scene builder as the scene tools open it, its toolbar built and its clips rendered, or that route's
+        error: a plain navigation recorded it as its "Loading..." shell twice on 2026-10-08."""
+        await scenes._open_scene(self.session, self.project_id, scene_id)
+        await scenes._page_agrees(self.page, len(scenes.clips_from_listing(listing, scene_id)), scene_id)
+        await self.record("scene editor")
+
     async def clip_editor(self, media_id: str) -> None:
         """The editor and every toolbar menu, opened and closed with Escape; no item inside a menu is clicked."""
         page = self.page
@@ -538,14 +545,15 @@ class Walker:
             await self.guarded("clip editor", self.clip_editor(videos[0]["id"]))
         else:
             self.skipped["clip editor"] = "the project holds no finished video"
-        scenes = [x for x in parsers.scenes_from_listing(listing) if not x.get("trashed")]
-        if scenes:
-            await self.guarded(
-                "scene editor",
-                self.open_and_record("scene editor", f"scene/{scenes[0]['scene_id']}", "flow-scene-builder"),
-            )
+        with_clips = [
+            x
+            for x in parsers.scenes_from_listing(listing)
+            if not x.get("trashed") and scenes.clips_from_listing(listing, x["scene_id"])
+        ]
+        if with_clips:
+            await self.guarded("scene editor", self.scene_editor(listing, with_clips[0]["scene_id"]))
         else:
-            self.skipped["scene editor"] = "the project holds no scene"
+            self.skipped["scene editor"] = "the project holds no scene with a clip"
         people = parsers.characters_from_listing(listing)
         if people:
             await self.guarded(

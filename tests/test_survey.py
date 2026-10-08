@@ -3,6 +3,7 @@ with the baselines in the repo, so a Flow update is found by a machine instead o
 
 import ast
 import asyncio
+import inspect
 import json
 from pathlib import Path
 
@@ -304,6 +305,36 @@ def test_a_skipped_route_is_reported_with_its_reason():
     }
     findings, _ = survey.report(result, write=False)
     assert ("route skipped", "clip editor", "the project holds no finished video") in findings
+
+
+def test_the_scene_editor_is_recorded_as_the_scene_tools_open_it(monkeypatch, tmp_path):
+    # Recorded as its "Loading..." shell twice on 2026-10-08: the title box, the clips and the composer read as lost.
+    log = []
+
+    async def opened(session, project_id, scene_id):
+        log.append(("open", project_id, scene_id))
+
+    async def agreed(page, expected, scene_id):
+        log.append(("clips", expected, scene_id))
+
+    async def recorded(self, route, scope=None):
+        log.append(("record", route))
+
+    monkeypatch.setattr(survey.scenes, "_open_scene", opened)
+    monkeypatch.setattr(survey.scenes, "_page_agrees", agreed)
+    monkeypatch.setattr(
+        survey.scenes, "clips_from_listing", lambda listing, scene_id: [{"id": "c1"}, {"id": "c2"}]
+    )
+    monkeypatch.setattr(survey.Walker, "record", recorded)
+    walker = survey.Walker(type("S", (), {"page": None})(), "P", tmp_path)
+
+    asyncio.run(walker.scene_editor({}, "S1"))
+
+    assert log == [("open", "P", "S1"), ("clips", 2, "S1"), ("record", "scene editor")], log
+    source = inspect.getsource(survey.Walker.run)
+    assert "scene_editor(" in source and "scene/{" not in source, (
+        "the walk must open a scene through the driver"
+    )
 
 
 def test_the_walk_settles_one_composer_mode_before_recording_the_project_and_the_sidebar():
