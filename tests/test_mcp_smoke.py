@@ -136,6 +136,19 @@ class _Account(mcp_server.Backend):
             return self.replies["capabilities"]
         return await super().capabilities()
 
+    async def flow_check(self, project_id=None):
+        # The drift check reads the grid and a build label off the page: canned here, like every other read.
+        return self.replies.get(
+            "flow_check",
+            {
+                "build": {"live": "Zz9.1.O", "baseline": "Zz9.1.O", "changed": False},
+                "ui": [],
+                "wire": [],
+                "drift": False,
+                "folder": "out/check/offline",
+            },
+        )
+
     async def job_status(self, job_id):
         self.replies.setdefault("job_asked_for", []).append(job_id)
         if "job_status" in self.replies:
@@ -207,7 +220,7 @@ def _failing(rows):
 def test_a_healthy_account_passes_every_row(monkeypatch):
     rows = _rows(monkeypatch, _replies())
 
-    assert len(rows) == 19
+    assert len(rows) == 20
     assert _failing(rows) == {}
 
 
@@ -309,7 +322,7 @@ def test_an_empty_project_passes_every_row(monkeypatch):
 
     rows = _rows(monkeypatch, replies)
 
-    assert len(rows) == 19
+    assert len(rows) == 20
     assert _failing(rows) == {
         "scene_clips": "the project holds no scene to read",
         "flow_voices": "the project holds no character to read voices from",

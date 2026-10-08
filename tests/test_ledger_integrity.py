@@ -19,7 +19,7 @@ def test_the_gate_passes_on_the_code_as_it_stands(tmp_path):
     findings = load().run_all(tmp_path)
     failed = [f for f in findings if f["status"] == "FAIL"]
     assert failed == [], failed
-    assert len(findings) == 9
+    assert len(findings) == 10
 
 
 def test_every_row_that_writes_has_a_stable_name_and_its_own_room(tmp_path):

@@ -367,7 +367,12 @@ def ck_reconcile(a, ctx):
 
 
 def ck_agent_send(a, ctx):
-    return [] if isinstance(a, dict) else ["no object answered"]
+    # A reply is a request heard: an answer with rpcids [] was a send still being answered, never DONE (AQ11).
+    if not isinstance(a, dict):
+        return ["no object answered"]
+    return (
+        [] if a.get("rpcids") else ["no request heard (rpcids []), yet the tool answered instead of erring"]
+    )
 
 
 def ck_job_settled(a, ctx):
@@ -906,7 +911,8 @@ step(
         "project_id": c["P"],
         "message": "Chào bạn. Chỉ trả lời bằng chữ, đừng tạo ảnh hay video: bạn có thể làm gì trong project này?",
         "job_id": f"v8-agent-{RUN}",
-        "wait": True,
+        # Seconds, not a flag: True read as 1 s on 2026-10-08 and no request was heard before the window closed.
+        "wait": 60,
     },
     ck_agent_send,
     price=0,

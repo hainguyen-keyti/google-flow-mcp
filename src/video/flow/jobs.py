@@ -374,10 +374,13 @@ async def collect(
             f"check flow_media and {_NEVER}: {len(ids)} new record{'' if len(ids) == 1 else 's'} could be this "
             f"job's clip{whose} ({ids}), so none is taken; job {job_id}"
         )
+    # The bracket is the job's own only when no other job could have moved the balance and the collect comes soon
+    # after the submit: Flow's daily top-up landed inside a longer bracket and a collect wrote a spend of -40 (D3).
+    own = not shared and bracket is not None and age <= OWN_BRACKET_S
     if state == "not_listed":
         if age < NOT_LISTED_S:
             return waiting
-        if not shared and bracket == 0:
+        if own and bracket == 0:
             ledger.append(job_id, "failed", spent=0, flow=started.get("flow"), **common)
             raise RuntimeError(
                 f"nothing was generated: no record of the job showed within {age}s of its submit and the balance did "
@@ -385,13 +388,12 @@ async def collect(
                 "fail the job, so it may still finish and bill: check flow_media in a few minutes, and do not start "
                 f"it again under a new job_id before then; job {job_id}"
             )
-        ledger.append(
-            job_id, "unknown", spent=None if shared else bracket, flow=started.get("flow"), **common
-        )
+        ledger.append(job_id, "unknown", spent=bracket if own else None, flow=started.get("flow"), **common)
         why = (
-            "other jobs could have moved the balance meanwhile, so whether it was charged cannot be told"
-            if shared
-            else f"the balance moved by {bracket} credits"
+            f"the balance moved by {bracket} credits"
+            if own
+            else "other jobs, or the time since the submit, could have moved the balance meanwhile, so whether it "
+            "was charged cannot be told"
         )
         raise RuntimeError(
             f"check flow_media and flow_credits and {_NEVER}: no record of the job showed within {age}s of its "
@@ -410,9 +412,6 @@ async def collect(
             f"the clip {record['id']} is finished but no file came back ({type(exc).__name__}: {str(exc)[:160]}): "
             f"call job_collect again, or fetch it with flow_download; nothing was written; job {job_id}"
         ) from exc
-    # The bracket is the job's own only when no other job could have moved the balance and the collect comes soon
-    # after the submit: Flow's daily top-up landed inside a longer bracket and a collect wrote a spend of -40 (D3).
-    own = not shared and bracket is not None and age <= OWN_BRACKET_S
     spent = bracket if own else quoted
     moved = {"balance_moved": {"quoted": quoted, "moved": bracket}} if own and bracket != quoted else {}
     check = {"body_check": started["body_check"]} if started.get("body_check") else {}

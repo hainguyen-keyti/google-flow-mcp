@@ -156,19 +156,23 @@ def _opening(ledger: gen.Ledger, job_id: str, media_id: str, **fields) -> None:
 
 
 def check_intent_extend(tmp: Path) -> tuple[str, str]:
-    """Extend dies choosing the menu item, which is itself enough to create a paid job.
+    """Extend dies on the Extend click, which is itself enough to create a paid job: the row is there before it.
 
     The row must also name the project and every workflow the listing held, or reconcile can never judge the job.
     """
     snapshot, credits = _reads(records=[_record("src-1", 1), _record("other", 2)])
 
-    async def dying_menu_item(session, button, item):
-        raise LookupError("menu gone")
+    class _DyingItem:
+        async def click(self, timeout=None):
+            raise RuntimeError("the editor re-rendered under the click")
+
+    async def found_item(session, button, item):
+        return _DyingItem()
 
     async def fake_open(session, project_id, media_id):
         return None
 
-    original = _patch(_snapshot=snapshot, _open=fake_open, _menu_item=dying_menu_item)
+    original = _patch(_snapshot=snapshot, _open=fake_open, _menu_item=found_item)
     clips.reader.credits = credits
     try:
         try:
@@ -177,7 +181,7 @@ def check_intent_extend(tmp: Path) -> tuple[str, str]:
                     _Session(), "p", "src-1", PROMPT, kind="extend", out_dir=tmp, job_id="a", wait=1.0
                 )
             )
-        except LookupError:
+        except RuntimeError:
             pass
     finally:
         _restore(original)
@@ -191,6 +195,34 @@ def check_intent_extend(tmp: Path) -> tuple[str, str]:
         and rows[0].get("prompt") == PROMPT
     )
     return ("PASS" if ok else "FAIL"), f"rows={[r['status'] for r in rows]} first={rows[0] if rows else None}"
+
+
+def check_extend_refused_at_the_menu_leaves_no_row(tmp: Path) -> tuple[str, str]:
+    """A greyed or missing Extend item clicks nothing: no row, so the job id stays free (plan AQ, D6; a row written
+    for such a refusal settled it as UNKNOWN and burned the id)."""
+    snapshot, credits = _reads(records=[_record("src-1", 1)])
+
+    async def dying_menu_item(session, button, item):
+        raise LookupError("menu gone")
+
+    async def fake_open(session, project_id, media_id):
+        return None
+
+    original = _patch(_snapshot=snapshot, _open=fake_open, _menu_item=dying_menu_item)
+    clips.reader.credits = credits
+    try:
+        try:
+            asyncio.run(
+                clips._generate_from_editor(
+                    _Session(), "p", "src-1", PROMPT, kind="extend", out_dir=tmp, job_id="b", wait=1.0
+                )
+            )
+        except LookupError:
+            pass
+    finally:
+        _restore(original)
+    rows = gen.Ledger(tmp / "ledger.jsonl").rows("b")
+    return ("PASS" if rows == [] else "FAIL"), f"rows={[r['status'] for r in rows]}"
 
 
 def check_intent_edit(tmp: Path) -> tuple[str, str]:
@@ -500,6 +532,7 @@ def check_no_leak(tmp: Path) -> tuple[str, str]:
 
 CHECKS = (
     ("intent extend", check_intent_extend),
+    ("extend refused no row", check_extend_refused_at_the_menu_leaves_no_row),
     ("intent edit", check_intent_edit),
     ("retry", check_retry_not_blocked),
     ("reconcile done", check_reconcile_done),

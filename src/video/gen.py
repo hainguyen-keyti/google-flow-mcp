@@ -268,8 +268,18 @@ async def run_job(
     ledger.append(job.job_id, "submitted", kind=job.kind, argv=argv, credits_before=before)
     code, stdout, stderr = await runner(argv)
     if code != 0:
-        after = await read_credits()
         problem = gflow_problem(stderr)
+        try:
+            after = await read_credits()
+        except Exception as unread:
+            # The row keeps gflow's reason even when the balance cannot be read; the charge then reads unknown.
+            ledger.append(
+                job.job_id, "failed", exit_code=code, credits_before=before, credits_after=None, **problem
+            )
+            raise RuntimeError(
+                f"gflow {job.kind} exit {code}, and the balance could not be read afterwards "
+                f"({type(unread).__name__}): {problem.get('detail') or problem.get('title') or ''}"
+            ) from unread
         # Some refusals are printed on stdout with nothing on stderr (measured 2026-09-28: "Cannot pick a default
         # profile"), and an empty reason is how a paid failure gets retried blind.
         told = redact_error_detail(stdout.strip()[-300:]) if stdout.strip() else ""

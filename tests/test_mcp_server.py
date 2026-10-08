@@ -399,39 +399,35 @@ def test_gen_i2v_prices_the_end_frame_run_separately_from_the_start_frame_one():
 
 @pytest.mark.parametrize(
     "settings",
-    [{"model": "veo-lite"}, {"model": "veo-fast"}, {"model": "omni-flash", "duration": 8}, {"duration": 4}],
+    [
+        {"model": "veo-lite"},
+        {"model": "veo-fast"},
+        {"model": "omni-flash", "duration": 8},
+        {"duration": 4},
+        {"resolution": "360p"},
+    ],
 )
-def test_gen_i2v_takes_an_end_frame_only_where_that_run_was_priced(monkeypatch, settings):
+def test_gen_i2v_takes_an_end_frame_only_where_that_run_was_priced(monkeypatch, tmp_path, settings):
     """Review 2026-09-18 (Plan I). One run priced ONE cell: omni-flash at 10 s. gflow puts no model gate on
     --end-frame and picks a different interpolation model per cohort (veo_3_1_interpolation_lite against
     omni_flash_i2v_8s_first_last), so any other model or length submits something nobody has paid for once,
     while the sibling tools quote veo-lite at 10 and invite the agent to assume the same here."""
-    called = []
-
-    async def fake_generate(**kwargs):
-        called.append(kwargs)
-        return {"job_id": "x", "outputs": []}
-
-    monkeypatch.setattr(mcp_server.backend, "generate", fake_generate)
-
-    async def fn(session):
-        return await session.call_tool(
-            "gen_i2v",
-            {
-                "initial_frame": "/tmp/a.png",
-                "end_frame": "/tmp/b.png",
-                "prompt": "a boat",
-                "project": "P",
-                "job_id": "job-cell",
-                **settings,
-            },
-        )
-
-    result = with_client(fn)
-    text = "".join(getattr(c, "text", "") for c in result.content)
-    assert result.is_error, text
+    # Through the real Backend.generate, where the guard now lives (shared with the CLI since the review of plan
+    # AQ); a stubbed generate would bypass the very check under test.
+    text = _refused_before_the_ledger(
+        monkeypatch,
+        tmp_path,
+        "gen_i2v",
+        {
+            "initial_frame": "/tmp/a.png",
+            "end_frame": "/tmp/b.png",
+            "prompt": "a boat",
+            "project": "P",
+            "job_id": "job-cell",
+            **settings,
+        },
+    )
     assert "end_frame" in text and "omni-flash" in text, text
-    assert called == [], "an unpriced cell must be refused before anything is spent"
 
 
 def test_gen_i2v_hands_the_end_frame_all_the_way_into_the_argv(monkeypatch, tmp_path):
@@ -736,6 +732,7 @@ def _refused_before_the_ledger(monkeypatch, tmp_path, tool, arguments):
     result = with_client(fn)
     assert result.is_error
     assert ran == []
+    assert not (tmp_path / "ledger.jsonl").exists(), "refused before the ledger means no row at all"
     return "".join(getattr(c, "text", "") for c in result.content)
 
 
@@ -893,6 +890,9 @@ def _answer_of(monkeypatch, tmp_path, tool, arguments):
     async def fake_set_mode(session, project, enabled):
         return {"enabled": False, "was": False}
 
+    async def fake_apply(page, model, aspect, references):
+        return None
+
     # The real Agent step runs, over a fake chip and a fake page, since the resolution is pinned inside it.
     for name, method in REAL_AGENT.items():
         monkeypatch.setattr(mcp_server.Backend, name, method)
@@ -900,6 +900,7 @@ def _answer_of(monkeypatch, tmp_path, tool, arguments):
     monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
     monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
     monkeypatch.setattr(mcp_server.agent_mod, "set_mode", fake_set_mode)
+    monkeypatch.setattr(mcp_server.ingredients_mod, "apply_settings", fake_apply)
 
     async def fn(session):
         return await session.call_tool(tool, arguments)
@@ -2359,8 +2360,12 @@ def _generation_over_real_sessions(
     async def no_pin(page, resolution):
         return None
 
+    async def no_apply(page, model, aspect, references):
+        return None
+
     monkeypatch.setattr(mcp_server.agent_mod, "set_mode", fake_set_mode)
     monkeypatch.setattr(mcp_server.ingredients_mod, "pin_resolution", no_pin)
+    monkeypatch.setattr(mcp_server.ingredients_mod, "apply_settings", no_apply)
     monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
     monkeypatch.setattr(mcp_server.reader, "project", fake_project)
     monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
@@ -3137,6 +3142,9 @@ def _agent_world(monkeypatch, tmp_path, *, chip_states, run_fails=False, chip_mi
     async def fake_pin(page, resolution):
         log.append(("pin", resolution))
 
+    async def fake_apply(page, model, aspect, references):
+        log.append(("model", model, aspect))
+
     async def fake_set_mode(session, project_id, enabled):
         if chip_missing:
             raise PlaywrightTimeoutError(chip_missing)
@@ -3155,6 +3163,7 @@ def _agent_world(monkeypatch, tmp_path, *, chip_states, run_fails=False, chip_mi
     monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
     monkeypatch.setattr(mcp_server.agent_mod, "set_mode", fake_set_mode)
     monkeypatch.setattr(mcp_server.ingredients_mod, "pin_resolution", fake_pin)
+    monkeypatch.setattr(mcp_server.ingredients_mod, "apply_settings", fake_apply)
     monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
     monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
     return log
@@ -3184,8 +3193,14 @@ def test_agent_mode_that_was_off_is_left_off(monkeypatch, tmp_path):
     result = _call("gen_t2v", {"prompt": "a cup", "project": "P", "job_id": "agent-off-1"})
 
     assert not result.is_error, _texts([result])
-    # The resolution is pinned in the same session, once the chip is known to be off (plan AQ, 2026-10-08).
-    assert log == [("set_mode", False, False, False), ("pin", "720p"), ("run_job", "t2v")], log
+    # The resolution is pinned in the same session, once the chip is known to be off, after the composer is put on
+    # the model (a Veo leftover shows no resolution row; review of plan AQ finding 6).
+    assert log == [
+        ("set_mode", False, False, False),
+        ("model", "omni-flash", "9:16"),
+        ("pin", "720p"),
+        ("run_job", "t2v"),
+    ], log
 
 
 def test_a_chip_that_stays_on_is_not_followed_by_a_resolution_pin(monkeypatch, tmp_path):
@@ -4178,8 +4193,9 @@ def test_job_status_of_a_job_another_call_holds_says_so_with_no_browser(monkeypa
 
 def test_an_error_of_job_collect_opens_with_what_its_own_row_now_says(monkeypatch, tmp_path):
     # The job never showed and the balance never moved: collect settles it and the error is typed off that row.
+    # Submitted late enough to be judged (NOT_LISTED_S) and soon enough for the bracket to be its own (D3).
     _job_backend(monkeypatch, tmp_path)
-    ledger = _started_job(tmp_path / "films")
+    ledger = _started_job(tmp_path / "films", at=time.time() - mcp_server.jobs_mod.NOT_LISTED_S - 1)
     _job_world(monkeypatch, tmp_path, [_video("w-before", "old")], balance=200)
 
     result = _call("job_collect", {"job_id": "job-1"})

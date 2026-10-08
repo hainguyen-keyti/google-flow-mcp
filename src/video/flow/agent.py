@@ -113,19 +113,31 @@ async def send(
     restored = await set_mode(session, project_id, state["was"])
     credits_after = (await reader.credits(session))["balance"]
     spent = credits_before - credits_after
-    if not frames and after == before:
+    if not frames:
         # Measured 2026-10-08: a click that sent nothing and changed nothing settled `done`, and an agent took a
-        # message Flow never received as delivered.
+        # message Flow never received as delivered; a panel that changed with no request heard (AQ11, a 1 s wait)
+        # is a send still being answered, which may yet generate and bill, so it is never `done` either.
+        sent = after != before
         ledger.append(
             job_id,
-            "failed",
+            "unknown" if sent else "failed",
             credits_before=credits_before,
             credits_after=credits_after,
-            spent=spent,
+            spent=spent if sent else 0,
             rpcids=[],
             flow=flow,
-            error="no request left the page and the agent panel did not change",
+            error=(
+                "no request was heard though the agent panel changed"
+                if sent
+                else "no request left the page and the agent panel did not change"
+            ),
         )
+        if sent:
+            raise RuntimeError(
+                f"Flow's agent took the message but no request was heard within {wait:.0f} s: it may still answer, "
+                "generate and bill; read flow_media and flow_credits in a minute and never send it again under a "
+                f"new job_id (job {job_id})"
+            )
         raise RuntimeError(
             f"Flow's agent answered nothing: no request left the page within {wait:.0f} s and the panel did not "
             f"change, so the message may not have been sent; read flow_media before sending it again (job {job_id})"

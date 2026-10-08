@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from video import gen
+from video import gen, outcome
 from video.flow import agent
 
 
@@ -142,6 +142,36 @@ def test_a_send_that_left_no_request_and_changed_nothing_on_the_panel_is_an_erro
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("job-5")
     assert [row["status"] for row in rows] == ["submitted", "failed"], rows
     assert rows[-1]["rpcids"] == [] and rows[-1]["spent"] == 0, rows[-1]
+
+
+def test_a_send_the_panel_took_with_no_request_heard_is_unknown_not_done(monkeypatch, tmp_path: Path):
+    # AQ11 (2026-10-08, a 1 s wait): the box emptied and a Stop button showed, no rpc was heard, and the answer
+    # said DONE charged 0 while the agent was still answering and could still generate and bill.
+    _agent_world(monkeypatch, balances=[100, 100])
+
+    class _ChangingPage(_AgentPage):
+        def __init__(self):
+            super().__init__()
+            self.reads = 0
+
+        async def evaluate(self, script):
+            self.reads += 1
+            return "typed message" if self.reads == 1 else "Stop"
+
+    async def heard_nothing(session, action, *, settle):
+        await action()
+        return {}
+
+    monkeypatch.setattr(agent, "capture", heard_nothing)
+    session = _AgentSession()
+    session.page = _ChangingPage()
+
+    with pytest.raises(RuntimeError, match="never send it again under a new job_id"):
+        asyncio.run(agent.send(session, "p", "hello", 1.0, out_dir=tmp_path, job_id="job-6"))
+
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("job-6")
+    assert [row["status"] for row in rows] == ["submitted", "unknown"], rows
+    assert rows[-1]["rpcids"] == [] and outcome.classify(rows)["code"] == "UNKNOWN"
 
 
 def test_the_agent_path_hears_flow_through_the_same_reader_as_the_gen_path():

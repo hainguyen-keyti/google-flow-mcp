@@ -176,6 +176,7 @@ def _video_settings(
     count: int = 1,
     refs: int = 0,
     resolution: str | None = None,
+    end_frame: bool = False,
 ) -> tuple[str, int | None, str | None, int]:
     """Refuse up front what gflow's CLI refuses only after run_job has written `submitted`, burning the job_id, and
     every cell this repo has not paid for; answer the model, the length to send, the resolution to pin and the
@@ -189,6 +190,23 @@ def _video_settings(
     # build_argv sends no --count below 2, so 0 would quietly pay for one clip.
     if not params["count"].min <= count <= params["count"].max:
         raise ValueError(f"count must be {params['count'].min}-{params['count'].max}, got {count}")
+    # One run priced one end-frame cell. gflow gates --end-frame on nothing and picks its interpolation model by
+    # cohort, so any other model, length or resolution is a submit nobody here has paid for once (review 2026-09-18;
+    # shared by the tool and the CLI since the review of plan AQ, findings 3 and 4). Said first: it names the one
+    # cell that is paid for, where the model guard below only names the models.
+    priced_end = (
+        model == END_FRAME_MODEL
+        and duration in (None, END_FRAME_SECONDS)
+        and resolution in (None, GFLOW_RESOLUTION)
+    )
+    if end_frame and not priced_end:
+        raise ValueError(
+            f"end_frame is measured only for {END_FRAME_MODEL} at {END_FRAME_SECONDS} s and {GFLOW_RESOLUTION} "
+            f"(15 credits, 2026-09-18); asked for {model} at {duration or 'the default'} s, "
+            f"{resolution or GFLOW_RESOLUTION}. Flow picks a different interpolation model per cohort, so that "
+            "run's price is unknown: leave model, duration and resolution out, or ask the owner to price the one "
+            "you want. Nothing was run and nothing was spent."
+        )
     if model not in PAID_GFLOW_MODELS[kind]:
         raise ValueError(
             f"{model} was never paid for through gen_{kind}, which runs {list(PAID_GFLOW_MODELS[kind])} only "
@@ -247,9 +265,18 @@ def _not_gone_well(answer: dict[str, Any] | None, job_id: str) -> dict[str, Any]
     as an error, and a later job_status or job_collect answering it as data read as a job that went well (review
     2026-10-08, D2). The error's outcome is the row's."""
     if answer is not None and answer.get("status") in ("failed", "unknown"):
+        # The advice follows the money, as the outcome head does: a job that may have paid is never bought again
+        # (CLAUDE.md rule 9, review of plan AQ finding 2); only a failed job that charged nothing is started anew.
+        if answer["status"] == "failed" and answer.get("spent") == 0:
+            advice = "if the clip is still wanted, start another job under a new job_id"
+        else:
+            advice = (
+                "credits may have left the account for it: look for its clip with flow_media before anything else, "
+                "and never run it again under a new job_id"
+            )
         raise RuntimeError(
             f"job {job_id} was settled as {answer['status']} and nothing more will come of it: its row is the answer "
-            "(read the outcome); if the clip is still wanted, start another job under a new job_id"
+            f"(read the outcome); {advice}"
         )
     return answer
 
@@ -1007,7 +1034,7 @@ class Backend:
         expected: int | None = None
         if kind in gen_mod.VIDEO_KINDS:
             model, duration, resolution, expected = _video_settings(
-                kind, model, duration, aspect, count, len(refs or []), resolution
+                kind, model, duration, aspect, count, len(refs or []), resolution, end_frame=bool(end_frame)
             )
         elif (model or IMAGE_MODEL) != IMAGE_MODEL:
             raise ValueError(
@@ -1030,7 +1057,9 @@ class Backend:
         target = self._editor_out_dir(out_dir)
 
         async def run() -> dict[str, Any]:
-            was_on = await self._agent_off(project, resolution if kind in gen_mod.VIDEO_KINDS else None)
+            was_on = await self._agent_off(
+                project, resolution if kind in gen_mod.VIDEO_KINDS else None, model=model, aspect=aspect
+            )
             try:
                 result = await gen_mod.run_job(job, target, profile=self.profile)
             except BaseException as failed:
@@ -1043,6 +1072,16 @@ class Backend:
             if expected is not None:
                 result["expected_credits"] = expected
                 result["resolution"] = resolution
+                before, after = result.get("credits_before"), result.get("credits_after")
+                if isinstance(before, int) and isinstance(after, int) and before - after != expected:
+                    # The pin exists because a bill once differed from the expectation; a bill that differs again
+                    # is said, not passed over (review of plan AQ finding 7).
+                    result["balance_moved"] = {
+                        "expected": expected,
+                        "moved": before - after,
+                        "note": "the balance moved by something other than the table price of this cell: a pin that "
+                        "did not hold in gflow's session, a repriced cell, or another call sharing the account",
+                    }
             if kind in gen_mod.IMAGE_KINDS:
                 await self._image_media_ids(project, result.get("outputs") or [])
             # The sessions above answer to this method only, so what they pressed is said here.
@@ -1080,15 +1119,25 @@ class Backend:
                     "flow_media (its workflow_id), or flow_upload the file at path"
                 )
 
-    async def _agent_off(self, project: str, resolution: str | None = None) -> bool:
+    async def _agent_off(
+        self,
+        project: str,
+        resolution: str | None = None,
+        model: str | None = None,
+        aspect: str | None = None,
+    ) -> bool:
         """gflow dies with exit 25 while Flow's Agent chip is on (measured 2026-09-28), so it goes off first; returns
-        whether it was on. With a resolution, the composer's resolution radio is pinned in the same session, since
-        gflow pins none and the leftover radio decided the bill (2026-10-08). Anything short of off, or a radio that
-        does not stay checked, stops the call here, before gflow or the ledger is touched."""
+        whether it was on. With a resolution, the composer is put on the model and aspect first (a composer left on
+        a Veo model shows no resolution row, review of plan AQ finding 6) and the resolution radio is pinned in the
+        same session, since gflow pins none and the leftover radio decided the bill (2026-10-08). Anything short of
+        off, or a radio that does not stay checked, stops the call here, before gflow or the ledger is touched."""
 
         async def prepare(session: Any) -> dict[str, Any]:
             state = await agent_mod.set_mode(session, project, False)
             if resolution and not self._kept(state).get("enabled"):
+                await ingredients_mod.apply_settings(
+                    session.page, model or VIDEO_DEFAULT_MODEL, aspect or "9:16", []
+                )
                 await ingredients_mod.pin_resolution(session.page, resolution)
             return state
 
@@ -2063,16 +2112,7 @@ async def gen_i2v(
     resolution: str | None = None,
 ) -> str:
     _require(initial_frame, "initial_frame")
-    # One run priced one cell. gflow gates --end-frame on nothing and picks its interpolation model by cohort, so
-    # any other model or length is a submit nobody here has paid for once (review 2026-09-18).
-    priced = (model or VIDEO_DEFAULT_MODEL) == END_FRAME_MODEL and duration in (None, END_FRAME_SECONDS)
-    if end_frame and not priced:
-        raise ValueError(
-            f"end_frame is measured only for {END_FRAME_MODEL} at {END_FRAME_SECONDS} s "
-            f"(15 credits, 2026-09-18); asked for {model or VIDEO_DEFAULT_MODEL} at {duration or 'the default'} s. "
-            "Flow picks a different interpolation model per cohort, so that run's price is unknown: leave model "
-            "and duration out, or ask the owner to price the one you want."
-        )
+    # The end-frame cell is checked in _video_settings, shared with the CLI (review of plan AQ, finding 3).
     return await _gen(
         "i2v",
         prompt=prompt,

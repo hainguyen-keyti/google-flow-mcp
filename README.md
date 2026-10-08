@@ -206,7 +206,7 @@ exit code 1 means something changed. See [docs/flow-updates.md](docs/flow-update
 uv run ruff check . && uv run ruff format --check . && uv run pytest
 ```
 
-893 tests, none of which call Flow or spend anything: tests use fixtures and fakes, which is a hard rule here.
+1875 tests (collected 2026-10-08), none of which call Flow or spend anything: tests use fixtures and fakes, which is a hard rule here.
 About 25 of them do render and measure real video, so **ffmpeg must be installed**, and two of them draw
 captions, so a unicode font must exist: macOS ships one, on Linux install `fonts-dejavu-core` or point
 `VIDEO_FONT` at a `.ttf` or `.ttc` of your own. The live acceptance scripts under `scripts/acceptance/` do talk to Flow, are
