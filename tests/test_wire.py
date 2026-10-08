@@ -92,6 +92,15 @@ def test_an_optional_position_keeps_its_inner_shape_and_is_compared_inside():
     assert [(kind, where) for kind, where, _ in moved] == [("kind changed", "[1][1]")], moved
 
 
+def test_a_field_null_in_some_live_records_is_the_same_field():
+    # Two live frames of one rpc, the field filled in one and null in the other, against a baseline that always
+    # saw it filled: nothing to say (a mutant dropping the null softness called this "kind changed").
+    base = {"rpcs": {"Zzl0ze": {"view": "project", "shape": wire.skeleton([None, [U1, "https://x/a.jpg"]])}}}
+    frames = {"Zzl0ze": [[None, [U1, "https://x/a.jpg"]], [None, [U1, None]]]}
+
+    assert wire.compare_frames(base, frames, views=("project",)) == []
+
+
 def test_an_empty_record_list_where_the_baseline_had_records_is_not_drift():
     # A fresh project lists no media: `flow check` on it must not exit 1 for that.
     base = wire.skeleton([None, 1, [_record(U1, "a", 1), _record(U2, "b", 2)]])
