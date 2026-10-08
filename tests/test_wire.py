@@ -61,9 +61,97 @@ def test_a_field_that_changed_kind_or_went_away_is_drift_and_a_new_one_is_not():
     assert not wire.drifted(wire.compare(base, filled))
 
 
-def test_a_null_now_where_the_baseline_had_a_value_is_not_drift():
+def test_a_scalar_turned_null_everywhere_is_drift_and_a_structure_turned_null_is_said():
+    # Technical review of plan AQ: the version field turning null everywhere (2026-10-05) is the incident this
+    # module exists for, and a rule that read null as compatible with anything would have passed it in silence.
     base = wire.skeleton([U1, "title", 3])
-    assert wire.compare(base, wire.skeleton([U1, None, 3])) == []
+    found = wire.compare(base, wire.skeleton([U1, None, 3]))
+    assert [kind for kind, _, _ in found] == ["kind emptied"] and wire.drifted(found), found
+
+    records = wire.skeleton([None, 1, [_record(U1, "a", 1), _record(U2, "b", 2)]])
+    emptied = wire.compare(records, wire.skeleton([None, 1, None]))
+    assert [kind for kind, _, _ in emptied] == ["structure emptied"] and not wire.drifted(emptied), emptied
+
+
+def test_what_counts_as_drift_is_the_set_the_check_exits_on():
+    for kind in ("kind changed", "position gone", "shape changed", "rpc not heard", "kind emptied"):
+        assert wire.drifted([(kind, "x", "")]), kind
+    for kind in ("position added", "kind appeared", "structure emptied"):
+        assert not wire.drifted([(kind, "x", "")]), kind
+
+
+def test_an_optional_position_keeps_its_inner_shape_and_is_compared_inside():
+    # Technical review of plan AQ (B1): merging a fixture that had null where another had a structure threw the
+    # structure away, so the status cell, the character entry and the recipe arm were never compared.
+    base = wire.merge(wire.skeleton([U1, [1, "a"]]), wire.skeleton([U1, None]))
+
+    assert base[1] == {"opt": ["int", "str"]}, base
+    assert wire.compare(base, wire.skeleton([U1, None])) == []
+    assert wire.compare(base, wire.skeleton([U1, [1, "a"]])) == []
+    moved = wire.compare(base, wire.skeleton([U1, [1, 1]]))
+    assert [(kind, where) for kind, where, _ in moved] == [("kind changed", "[1][1]")], moved
+
+
+def test_an_empty_record_list_where_the_baseline_had_records_is_not_drift():
+    # A fresh project lists no media: `flow check` on it must not exit 1 for that.
+    base = wire.skeleton([None, 1, [_record(U1, "a", 1), _record(U2, "b", 2)]])
+    assert wire.compare(base, wire.skeleton([None, 1, []])) == []
+
+
+def test_later_live_frames_of_one_rpc_are_merged_and_compared():
+    base = {"rpcs": {"Zzl0ze": {"view": "project", "shape": wire.skeleton([None, [U1, "t", 3]])}}}
+    frames = {"Zzl0ze": [[None, [U1, "t", 3]], [None, [U1, "t", "late"]]]}
+
+    found = wire.compare_frames(base, frames, views=("project",))
+
+    assert [(kind, where) for kind, where, _ in found] == [("kind changed", "Zzl0ze[1][2]")], found
+
+
+def _listing():
+    return json.loads((FIXTURES / "rpc" / "Zzl0ze_character.json").read_text(encoding="utf-8"))["payload"]
+
+
+def _status_moved(payload):
+    for record in payload[2]:
+        if record[5][8]:
+            record[5][8] = [None, *record[5][8]]
+    return payload
+
+
+def _character_name_moved(payload):
+    for entry in payload[5]:
+        entry[3].insert(1, None)
+    return payload
+
+
+def _recipe_arm_replaced(payload):
+    for record in payload[2]:
+        record[5][6][1] = [["x", 1], 7, "y"]
+    return payload
+
+
+@pytest.mark.parametrize("mutate", [_status_moved, _character_name_moved], ids=["status", "character"])
+def test_a_move_inside_a_position_a_fixture_once_showed_null_is_drift_on_the_real_baseline(mutate):
+    # Two of the three repros of the technical review of plan AQ: each made the parsers read None and the check say
+    # nothing, since the merged baseline held only {"any": [...]} at those positions. The third, the recipe arm
+    # (details[6][1]), stays compared by kind only: across the records of one fixture it is a list of model tuples
+    # in some and a model tuple beside a row list in others, two shapes no single skeleton pins.
+    base = wire.baseline()["rpcs"]["Zzl0ze"]["shape"]
+    assert not wire.drifted(wire.compare(base, wire.skeleton(_listing()))), (
+        "the fixture itself must not drift"
+    )
+
+    found = wire.compare(base, wire.skeleton(mutate(_listing())))
+
+    assert wire.drifted(found), found
+
+
+def test_the_recipe_arm_is_the_known_limit_of_the_wire_check():
+    # Said here so the limit is a measured fact and not a surprise: a replacement of the arm by another tuple of
+    # the same kinds passes. The paid path reads the arm back through recipe_check on its own clip.
+    base = wire.baseline()["rpcs"]["Zzl0ze"]["shape"]
+    assert base[2]["*"][5][6][1] == {"opt": {"any": ["list", "records"]}}, base[2]["*"][5][6][1]
+    assert wire.compare(base, wire.skeleton(_recipe_arm_replaced(_listing()))) == []
 
 
 def test_the_frames_of_a_view_are_held_to_every_rpc_the_baseline_recorded_for_it():
@@ -125,6 +213,26 @@ def test_every_free_read_fixture_is_compatible_with_the_baseline(rpcid):
         assert not wire.drifted(wire.compare(base["shape"], wire.skeleton(payload))), rpcid
 
 
+def test_the_redaction_keeps_a_capture_consistent_and_blanks_a_negative_request_id():
+    # Technical review of plan AQ (S3): every captured length line reads len(next line) + 2, and a request id can
+    # be negative (jwpduf.txt carried one through the first redaction).
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "acceptance"))
+    import redact_replies
+
+    body = ')]}\'\n\n9\n[["wrb.fr","jwpduf","[]",null,null,null,"generic"],["af.httprm",736,"-6364764508568145520",90]]\n9\n[["e",4,null,null,1]]\n'
+    redacted = redact_replies.redact(body, {})
+
+    lines = redacted.split("\n")
+    assert lines[2] == str(len(lines[3]) + 2), lines[:4]
+    assert '"af.httprm",736,"0"' in redacted and "-6364764508568145520" not in redacted
+    assert redacted.rstrip("\n").endswith(f'[["e",4,null,null,{len(redacted)}]]'), redacted[-60:]
+    for name in ("eb1hJf", "jwpduf", "jwpduf_pending"):
+        text = (FIXTURES / "replies" / f"{name}.txt").read_text(encoding="utf-8")
+        assert "-6364764508568145520" not in text and '"af.httprm",' in text, name
+
+
 def test_the_build_label_is_the_bundle_key_after_the_language():
     measured = (
         "https://www.gstatic.com/_/mss/boq-labs-ai-sandbox/_/js/"
@@ -132,6 +240,9 @@ def test_the_build_label_is_the_bundle_key_after_the_language():
     )
     assert version.label_in(["https://www.gstatic.com/x.js", measured]) == "Lt87BHY7SpE.2018.O"
     assert version.label_in(["https://accounts.google.com/a.js", ""]) is None
+    # Technical review of plan AQ (S2): an account in another language loads the same bundle under pt-BR or zh-CN.
+    for lang in ("pt-BR", "zh-CN", "en_US", "vi"):
+        assert version.label_in([measured.replace(".en.", f".{lang}.")]) == "Lt87BHY7SpE.2018.O", lang
 
 
 def test_a_page_with_a_bundle_sets_the_current_build_and_one_without_leaves_it(monkeypatch):

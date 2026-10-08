@@ -121,6 +121,21 @@ def check_writable(
         f"route {name!r} missing from the walk"
         for name in sorted(set(base_ui.get("routes", {})) - set(routes) - set(skipped))
     ]
+    # A selector the baseline counted on a route that counts nothing now (a page recorded blank, or a selector Flow
+    # dropped) would be written as 0 and never checked again: fix the code or drop the constant first (S8).
+    for name, was in sorted(base_ui.get("routes", {}).items()):
+        now = routes.get(name) or {}
+        counts = now.get("selectors", {})
+        lost = sorted(
+            sel
+            for sel, count in was.get("selectors", {}).items()
+            if count and sel in counts and not counts[sel]
+        )
+        if lost:
+            problems.append(
+                f"route {name!r}: {', '.join(lost)} matched before and match nothing now; fix the code or drop "
+                "the constant before writing"
+            )
     if options is None:
         problems.append("the options walk could not be read")
     else:
@@ -503,7 +518,7 @@ class Walker:
         return {"measured": datetime.now().astimezone().strftime("%Y-%m-%d"), "video": video, "image": image}
 
     async def run(self) -> dict[str, Any]:
-        session, page = self.session, self.page
+        session = self.session
         home = await reader.grid(session)
         self.private |= {str(p.get("title") or "") for p in parsers.projects(one(home, "UpteDb"))}
         await self.record("home")
@@ -519,6 +534,16 @@ class Walker:
         self.private |= {str(c.get("name") or "") for c in parsers.characters_from_listing(listing)}
         self.private |= {str(s.get("title") or "") for s in parsers.scenes_from_listing(listing)}
         self.agent_was_on = bool((await agent.set_mode(session, self.project_id, False)).get("was"))
+        try:
+            options = await self._walk(listing, records)
+        finally:
+            # Put back whatever stopped the walk: the owner's project is not left with Agent mode off (S7).
+            if self.agent_was_on:
+                await agent.set_mode(session, self.project_id, True)
+        return {"ui": {"routes": self.routes, "skipped": self.skipped}, "walk": options}
+
+    async def _walk(self, listing: Any, records: list[dict[str, Any]]) -> dict[str, Any]:
+        session, page = self.session, self.page
         await session.goto(session.project_url(self.project_id), ready=PROJECT_READY)
         await self.settle_mode()
         await self.record("project")
@@ -564,9 +589,7 @@ class Walker:
             )
         else:
             self.skipped["character page"] = "the project holds no character"
-        if self.agent_was_on:
-            await agent.set_mode(session, self.project_id, True)
-        return {"ui": {"routes": self.routes, "skipped": self.skipped}, "walk": options}
+        return options
 
 
 def _finished_videos(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -635,11 +658,13 @@ async def check(
             frames.setdefault(rpcid, []).extend(payloads)
         # As the survey records it: Agent mode off and one composer mode, so the page compares with the baseline.
         agent_was_on = bool((await agent.set_mode(session, project_id, False)).get("was"))
-        await session.goto(session.project_url(project_id), ready=PROJECT_READY)
-        await walker.settle_mode()
-        await walker.record("project")
-        if agent_was_on:
-            await agent.set_mode(session, project_id, True)
+        try:
+            await session.goto(session.project_url(project_id), ready=PROJECT_READY)
+            await walker.settle_mode()
+            await walker.record("project")
+        finally:
+            if agent_was_on:
+                await agent.set_mode(session, project_id, True)
         views += ("project",)
     routes = {name: base_ui["routes"][name] for name in walker.routes if name in base_ui.get("routes", {})}
     ui = compare_ui({"routes": routes}, {"routes": walker.routes})

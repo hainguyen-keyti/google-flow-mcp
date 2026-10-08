@@ -129,9 +129,9 @@ class FlowSession:
         await self.page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         if ready:
             await self.page.locator(ready).first.wait_for(state="visible", timeout=timeout_ms)
-        if version.current is None:
-            # The first Flow page of the process names the build every ledger row and paid answer then carries.
-            await version.read(self.page)
+        # Every Flow page names the build the ledger rows and paid answers then carry: read on each navigation, so a
+        # server living across a Flow deploy does not stamp the old build (technical review of plan AQ, S1).
+        await version.read(self.page)
 
     @staticmethod
     def project_url(project_id: str) -> str:

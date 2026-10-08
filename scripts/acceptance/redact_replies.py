@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from video.flow import composer
 
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-REQUEST_ID_RE = re.compile(r'("af\.httprm",\d+,")\d+(")')
+REQUEST_ID_RE = re.compile(r'("af\.httprm",\d+,")-?\d+(")')
 STAND_IN = "00000000-0000-4000-8000-{:012d}"
 
 
@@ -38,13 +38,14 @@ def stand_ins(text: str, seen: dict[str, str]) -> str:
 
 
 def relength(text: str) -> str:
-    """The chunk-length lines of a batchexecute body count the chunk after them plus its newline, and the closing
-    frame carries the body's whole length; both are rewritten for the redacted text so the fixture is consistent."""
+    """The chunk-length lines of a batchexecute body read the chunk after them plus 2 (measured on all 75 captures
+    of 2026-10-08), and the closing frame carries the body's whole length; both are rewritten for the redacted text
+    so the fixture is consistent."""
     for _ in range(3):
         lines = text.split("\n")
         for i, line in enumerate(lines[:-1]):
             if line.isdigit():
-                lines[i] = str(len(lines[i + 1]) + 1)
+                lines[i] = str(len(lines[i + 1]) + 2)
         text = "\n".join(lines)
         total = len(text)
         text = re.sub(r'(\[\["e",\d+,null,null,)\d+(\]\])', rf"\g<1>{total}\2", text)

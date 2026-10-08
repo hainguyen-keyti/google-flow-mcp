@@ -331,7 +331,7 @@ def test_the_scene_editor_is_recorded_as_the_scene_tools_open_it(monkeypatch, tm
     asyncio.run(walker.scene_editor({}, "S1"))
 
     assert log == [("open", "P", "S1"), ("clips", 2, "S1"), ("record", "scene editor")], log
-    source = inspect.getsource(survey.Walker.run)
+    source = inspect.getsource(survey.Walker._walk)
     assert "scene_editor(" in source and "scene/{" not in source, (
         "the walk must open a scene through the driver"
     )
@@ -341,7 +341,7 @@ def test_the_walk_settles_one_composer_mode_before_recording_the_project_and_the
     # Review 2026-10-08 (B5): the composer's leftover mode made 31 of the 72 differences of the survey.
     import inspect
 
-    source = inspect.getsource(survey.Walker.run)
+    source = inspect.getsource(survey.Walker._walk)
     assert source.index("settle_mode()") < source.index('record("project")'), (
         "the mode is settled after the project"
     )
@@ -573,6 +573,116 @@ def test_check_reads_the_build_the_free_replies_and_the_pages_and_reports_no_dri
 
 async def _settled():
     return True
+
+
+def test_check_with_a_project_compares_the_listing_and_a_moved_status_cell_is_drift(monkeypatch, tmp_path):
+    # Pins the path from a real wire finding to `drift` (technical review of plan AQ: six mutants in wire.py and
+    # survey.check survived with the whole report faked).
+    moved = _fixture("Zzl0ze")
+    for record in moved[2]:
+        if record[5][8]:
+            record[5][8] = [None, *record[5][8]]
+    grid = {"UpteDb": [_fixture("UpteDb")], "nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
+    project = {
+        "Zzl0ze": [moved],
+        **{name: [_fixture(name)] for name in ("ngNC2", "yBhWQ", "HTrJv", "tRARke")},
+    }
+
+    async def fake_grid(session, settle=6.0):
+        return grid
+
+    async def fake_capture(session, action, *, settle):
+        await action()
+        return project
+
+    async def fake_set_mode(session, project_id, enabled):
+        return {"enabled": enabled, "was": False}
+
+    async def opened(page, label="settings"):
+        return ""
+
+    monkeypatch.setattr(survey.reader, "grid", fake_grid)
+    monkeypatch.setattr(survey, "capture", fake_capture)
+    monkeypatch.setattr(survey.agent, "set_mode", fake_set_mode)
+    monkeypatch.setattr(survey.composer, "_open_settings", opened)
+    monkeypatch.setattr(survey.Walker, "radio", lambda self, text: _settled())
+    monkeypatch.setattr(survey.version, "current", None)
+    base = json.loads(survey.UI_BASELINE.read_text(encoding="utf-8"))
+    for route in base["routes"].values():
+        route["labels"] = []
+        route["selectors"] = {name: 1 for name in route["selectors"]}
+    monkeypatch.setattr(survey, "_baseline_ui", lambda: base | {"build": "Zz9.1.O"})
+
+    report = asyncio.run(survey.check(_CheckSession(), "P1", out_root=tmp_path))
+
+    assert report["drift"] is True, report
+    assert any(
+        where.startswith("Zzl0ze") and kind in survey.wire.DRIFT for kind, where, _ in report["wire"]
+    ), report["wire"]
+
+
+def test_a_write_through_report_is_refused_on_a_skipped_route_and_the_picker_skips_a_project_lacking_a_scene(
+    monkeypatch, tmp_path
+):
+    # Technical review of plan AQ (S6): the write guard was tested only by calling it directly, and the project
+    # picker not at all.
+    monkeypatch.setattr(survey, "UI_BASELINE", tmp_path / "flow_ui.json")
+    monkeypatch.setattr(survey, "OPTIONS_BASELINE", tmp_path / "flow_options.json")
+    (tmp_path / "flow_ui.json").write_text(json.dumps({"routes": {"home": {"labels": [], "selectors": {}}}}))
+    (tmp_path / "flow_options.json").write_text(
+        json.dumps(survey.options_from_walk(_walk_with())), encoding="utf-8"
+    )
+    result = {
+        "ui": {"routes": {"home": {"labels": [], "selectors": {}}}, "skipped": {"scene editor": "no scene"}},
+        "walk": _walk_with(),
+    }
+    with pytest.raises(survey.SurveyIncomplete, match="scene editor"):
+        survey.report(result, write=True)
+    assert "scene editor" not in json.loads((tmp_path / "flow_ui.json").read_text())["routes"]
+
+    walked = []
+    listings = {"p-no-scene": _fixture("Zzl0ze"), "p-full": _fixture("Zzl0ze_character")}
+
+    async def fake_grid(session, settle=6.0):
+        return {"UpteDb": [[[[pid, ["t", None, [1, 0], None, None]] for pid in listings]]]}
+
+    async def fake_capture(session, action, *, settle):
+        await action()
+        return {"Zzl0ze": [listings[session.urls[-1].rsplit("/", 1)[-1]]]}
+
+    async def fake_survey(session, project_id, out_root=None):
+        walked.append(project_id)
+        return {"ui": {"routes": {}, "skipped": {}}, "walk": _walk_with(), "folder": "x"}
+
+    monkeypatch.setattr(survey.reader, "grid", fake_grid)
+    monkeypatch.setattr(survey, "capture", fake_capture)
+    monkeypatch.setattr(survey, "survey", fake_survey)
+    monkeypatch.setattr(
+        survey, "missing_for_a_walk", lambda listing: [] if listing is listings["p-full"] else ["scene"]
+    )
+
+    class _Factory:
+        async def __aenter__(self):
+            return _CheckSession()
+
+        async def __aexit__(self, *exc):
+            return None
+
+    survey.run_sync(_Factory, None, False)
+
+    assert walked == ["p-full"], walked
+
+
+def test_a_selector_the_baseline_counted_that_now_counts_zero_refuses_a_write():
+    # Technical review of plan AQ (S8): a route recorded as a blank page would have become the baseline and
+    # disarmed `selector lost` for that selector for good.
+    routes = _complete_routes()
+    routes["scene editor"]["selectors"] = {"flow.scenes.CLIPS": 0, "flow.scenes.TITLE_BOX": 1}
+    base = {"routes": {name: {"labels": [], "selectors": {}} for name in routes}}
+    base["routes"]["scene editor"]["selectors"] = {"flow.scenes.CLIPS": 2, "flow.scenes.TITLE_BOX": 1}
+
+    with pytest.raises(survey.SurveyIncomplete, match="flow.scenes.CLIPS"):
+        survey.check_writable({"routes": routes}, survey.options_from_walk(_walk_with()), base)
 
 
 def test_check_without_a_project_reads_the_grid_only_and_touches_no_project(monkeypatch, tmp_path):

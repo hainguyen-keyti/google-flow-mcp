@@ -450,4 +450,6 @@ def test_the_first_navigation_reads_the_flow_build_once_for_the_process(monkeypa
     asyncio.run(session.goto("https://flow.google.com/project/x"))
 
     assert version.current == "Zz9.1.O"
-    assert session.page.evaluated == 1, "read once per process, not on every navigation"
+    # Every navigation, one evaluate each: a server living across a Flow deploy would otherwise stamp the old build
+    # on every row and answer until a flow_check happened to run (technical review of plan AQ, S1).
+    assert session.page.evaluated == 2, "read on every navigation, so a new build is seen when it lands"

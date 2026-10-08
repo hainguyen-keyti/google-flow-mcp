@@ -3,16 +3,19 @@ is found by a free read instead of by a paid run that named no workflow (from 20
 generation record was null, and nothing noticed until 2026-10-08).
 
 A payload is folded into a skeleton: a scalar becomes its kind (null, bool, int, float, uuid, url, str), a list of
-two or more lists collapses into one merged record under "*", and any other list stays positional. A merged record
-keeps, per position, the kinds seen there, so a listing of 3 clips and one of 40 fold to the same skeleton while a
-field that moved or changed kind does not. The baseline, flow_wire.json beside this file, is written by
-scripts/acceptance/wire_baseline.py from the test fixtures, which are replies Flow sent (redacted); `video flow check`
-folds the live free reads and compares. null and absent are compatible with every kind, since Flow leaves a field
-empty as often as it fills it; a kind seen now that the baseline never saw at that position, a position the baseline
-had that is gone, or a record list where a tuple stood, is drift; a new position is reported and is not drift.
+lists collapses into one merged record under "*", and any other list stays positional. A merged record keeps, per
+position, the kinds seen there, and a structure one fixture showed as null keeps its inside under "opt", so a
+listing of 3 clips and one of 40 fold to the same skeleton while a field that moved or changed kind does not. The
+baseline, flow_wire.json beside this file, is written by scripts/acceptance/wire_baseline.py from the test fixtures,
+which are replies Flow sent (redacted); `video flow check` folds the live free reads and compares. A field null in
+some records is the same field; a scalar null in every live record where the baseline always had a value (the
+version field of 2026-10-05), a kind the baseline never saw at that position, a position the baseline had that is
+gone, a renamed rpc, or a record list where a tuple stood, is drift; a new position, a value appearing where the
+baseline had null, or a whole structure gone null (a project with no scenes) is said and is not drift.
 
-Raw replies are also written to the folder VIDEO_CAPTURE_REPLIES names, by the composer and by the free reads, so a
-fixture is always a reply Flow sent and never one typed (a typed "CAE" in every fixture hid the null for three days).
+Raw replies are written to the folder VIDEO_CAPTURE_REPLIES names by the composer's reader (the paid path), so a
+fixture is always a reply Flow sent and never one typed (a typed "CAE" in every fixture hid the null for three days);
+the free reads do not capture yet (reader.py sits outside plan AQ's radius), so their fixtures are refreshed by hand.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ CAPTURE_ENV = "VIDEO_CAPTURE_REPLIES"
 BASELINE = Path(__file__).with_name("flow_wire.json")
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 SOFT = frozenset({"null", "absent"})
-DRIFT = frozenset({"kind changed", "position gone", "shape changed", "rpc not heard"})
+DRIFT = frozenset({"kind changed", "position gone", "shape changed", "rpc not heard", "kind emptied"})
 
 
 def capture(rpcids: str, text: str) -> None:
@@ -62,14 +65,40 @@ def skeleton(node: Any) -> Any:
     if isinstance(node, dict):
         return {key: skeleton(value) for key, value in node.items()}
     items = [skeleton(item) for item in node]
-    # A list of lists is a record list, one record included: measured 2026-10-08, a listing's field held one
-    # record in the fixture and three live, and a rule that collapsed two or more called that a changed shape.
-    if items and all(isinstance(item, list) for item in items):
+    # Two or more tuples side by side are a record list. One alone stays a tuple (a recipe arm holds the model
+    # tuple alone in some records and beside a row list in others), and `_rows` bridges it to a record list when
+    # the other side is one (a listing's field held one record in the fixture and three live, 2026-10-08).
+    if len(items) >= 2 and all(isinstance(item, list) for item in items):
         merged = items[0]
         for item in items[1:]:
             merged = merge(merged, item)
         return {"*": merged}
     return items
+
+
+def _rows(shape: Any) -> Any:
+    """A tuple whose parts are all tuples, read as the one record shape they share; None for anything else."""
+    if isinstance(shape, list) and shape and all(isinstance(part, list) for part in shape):
+        merged = shape[0]
+        for part in shape[1:]:
+            merged = merge(merged, part)
+        return merged
+    return None
+
+
+def _is_records(shape: Any) -> bool:
+    return isinstance(shape, dict) and "*" in shape
+
+
+STRUCTURAL = frozenset({"list", "records", "object"})
+
+
+def _is_opt(shape: Any) -> bool:
+    return isinstance(shape, dict) and "opt" in shape
+
+
+def _structural(shape: Any) -> bool:
+    return isinstance(shape, list) or (isinstance(shape, dict) and ("*" in shape or "opt" in shape))
 
 
 def _kinds(shape: Any) -> set[str]:
@@ -78,13 +107,17 @@ def _kinds(shape: Any) -> set[str]:
     if isinstance(shape, dict):
         if "any" in shape:
             return set(shape["any"])
+        if "opt" in shape:
+            return _kinds(shape["opt"]) | {"null"}
         return {"records"} if "*" in shape else {"object"}
     return {"list"}
 
 
 def merge(a: Any, b: Any) -> Any:
     """One skeleton standing for both: equal parts stay, positions merge pairwise (a shorter tuple reads absent
-    where the longer goes on), and parts of different shapes become the set of kinds seen."""
+    where the longer goes on), a structure one side showed as null or absent keeps its inside under "opt" (the
+    status cell, the character entry and the recipe arm were thrown away as {"any": [...]} before the technical
+    review of plan AQ, B1), and parts of different shapes become the set of kinds seen."""
     if a == b:
         return a
     if isinstance(a, list) and isinstance(b, list):
@@ -94,6 +127,16 @@ def merge(a: Any, b: Any) -> Any:
         ]
     if isinstance(a, dict) and isinstance(b, dict) and "*" in a and "*" in b:
         return {"*": merge(a["*"], b["*"])}
+    for records, other in ((a, b), (b, a)):
+        if _is_records(records) and _rows(other) is not None:
+            return {"*": merge(records["*"], _rows(other))}
+    for soft, other in ((a, b), (b, a)):
+        if isinstance(soft, str) and soft in SOFT and _structural(other):
+            return other if _is_opt(other) else {"opt": other}
+    if (_is_opt(a) and _structural(b)) or (_is_opt(b) and _structural(a)):
+        inner_a = a["opt"] if _is_opt(a) else a
+        inner_b = b["opt"] if _is_opt(b) else b
+        return {"opt": merge(inner_a, inner_b)}
     return {"any": sorted(_kinds(a) | _kinds(b))}
 
 
@@ -102,11 +145,27 @@ def compare(base: Any, now: Any, path: str = "") -> list[tuple[str, str, str]]:
     if now == base:
         return []
     now_kinds = _kinds(now)
-    if now_kinds <= SOFT:
-        return []
     base_kinds = _kinds(base)
+    if now_kinds <= SOFT:
+        # Null everywhere where the baseline always had a value: the version field turned null on 2026-10-05 and
+        # was read by nobody for three days. A structure gone null (a project with no scenes) is said, not drift.
+        if base_kinds <= SOFT or base_kinds & SOFT or _is_opt(base):
+            return []
+        kind = "structure emptied" if base_kinds <= STRUCTURAL else "kind emptied"
+        return [(kind, path, f"{sorted(base_kinds)} -> {sorted(now_kinds)}")]
     if base_kinds <= SOFT:
         return [("kind appeared", path, f"{sorted(base_kinds)} -> {sorted(now_kinds)}")]
+    if _is_opt(base):
+        return compare(base["opt"], now["opt"] if _is_opt(now) else now, path)
+    if _is_opt(now):
+        return compare(base, now["opt"], path)
+    if isinstance(now, list) and not now and "records" in base_kinds:
+        # A fresh project lists nothing: an empty record list says nothing about the shape of a record.
+        return []
+    if _is_records(base) and _rows(now) is not None:
+        return compare(base["*"], _rows(now), f"{path}[*]")
+    if _is_records(now) and _rows(base) is not None:
+        return compare(_rows(base), now["*"], f"{path}[*]")
     if isinstance(base, list) and isinstance(now, list):
         found: list[tuple[str, str, str]] = []
         for index, part in enumerate(base):
@@ -128,8 +187,7 @@ def compare(base: Any, now: Any, path: str = "") -> list[tuple[str, str, str]]:
     extra = now_kinds - base_kinds - SOFT
     if not extra:
         return []
-    structural = {"list", "records", "object"}
-    kind = "shape changed" if (extra | base_kinds) & structural else "kind changed"
+    kind = "shape changed" if (extra | base_kinds) & STRUCTURAL else "kind changed"
     return [(kind, path, f"{sorted(base_kinds)} -> {sorted(now_kinds)}")]
 
 

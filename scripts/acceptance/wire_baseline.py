@@ -6,8 +6,9 @@ free reads with it, and tests/test_wire.py fails when this file and the fixtures
     uv run python scripts/acceptance/wire_baseline.py            # write the file
     uv run python scripts/acceptance/wire_baseline.py --check    # fail if the file on disk is stale
 
-To refresh after Flow changed: capture new replies (VIDEO_CAPTURE_REPLIES=<folder> on a free read or a paid run),
-turn them into fixtures with redact_replies.py, fix the parsers and their tests, then run this again.
+To refresh after Flow changed: capture new replies (VIDEO_CAPTURE_REPLIES=<folder> on a paid run; the free reads
+do not capture yet, their fixtures under tests/fixtures/rpc/ are refreshed by hand), turn them into fixtures with
+redact_replies.py, fix the parsers and their tests, then run this again.
 """
 
 from __future__ import annotations

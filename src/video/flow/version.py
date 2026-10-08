@@ -12,7 +12,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-BUILD_RE = re.compile(r"boq-labs-ai-sandbox\.AiSandboxAngularFrontend\.[a-z-]+\.([A-Za-z0-9_-]+\.\d+\.[A-Z])")
+# The language part takes pt-BR, zh-CN and en_US too (technical review of plan AQ, S2).
+BUILD_RE = re.compile(
+    r"boq-labs-ai-sandbox\.AiSandboxAngularFrontend\.[A-Za-z_-]+\.([A-Za-z0-9_-]+\.\d+\.[A-Z])"
+)
 SCRIPTS_JS = "() => [...document.querySelectorAll('script[src]')].map(s => s.getAttribute('src') || '')"
 
 current: str | None = None

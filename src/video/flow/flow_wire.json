@@ -3,8 +3,8 @@
  "rpcs": {
   "HTrJv": {
    "view": "project",
-   "shape": {
-    "*": [
+   "shape": [
+    [
      "null",
      "null",
      {
@@ -45,20 +45,25 @@
          {
           "*": [
            "int",
-           {
-            "any": [
-             "list",
-             "records"
-            ]
-           }
+           [
+            {
+             "opt": [
+              "null",
+              "int"
+             ]
+            },
+            {
+             "opt": []
+            }
+           ]
           ]
          },
          "null",
          "null",
-         {
-          "*": [
-           {
-            "*": [
+         [
+          {
+           "*": [
+            [
              "int",
              {
               "any": [
@@ -85,21 +90,9 @@
               ]
              }
             ]
-           },
-           {
-            "any": [
-             "absent",
-             "records"
-            ]
-           },
-           {
-            "any": [
-             "absent",
-             "records"
-            ]
-           }
-          ]
-         },
+           ]
+          }
+         ],
          "null",
          {
           "any": [
@@ -109,8 +102,8 @@
          },
          "bool",
          "null",
-         {
-          "*": [
+         [
+          [
            "int",
            {
             "any": [
@@ -119,7 +112,7 @@
             ]
            }
           ]
-         },
+         ],
          "null",
          "int",
          "null",
@@ -175,9 +168,8 @@
            ]
           },
           {
-           "any": [
-            "absent",
-            "list"
+           "opt": [
+            "int"
            ]
           }
          ],
@@ -187,11 +179,11 @@
            "null"
           ]
          },
-         {
-          "*": [
+         [
+          [
            "int"
           ]
-         }
+         ]
         ]
        },
        {
@@ -206,8 +198,8 @@
      {
       "*": [
        "str",
-       {
-        "*": [
+       [
+        [
          "str",
          "null",
          "null",
@@ -215,56 +207,49 @@
          {
           "*": [
            "int",
-           {
-            "any": [
-             "list",
-             "records"
-            ]
-           }
+           [
+            {
+             "opt": [
+              "null",
+              "int"
+             ]
+            },
+            {
+             "opt": []
+            }
+           ]
           ]
          },
          "null",
          "null",
          "null",
-         {
-          "*": [
-           {
-            "*": [
-             "int"
+         [
+          {
+           "*": [
+            [
+             "int",
+             {
+              "any": [
+               "absent",
+               "int"
+              ]
+             },
+             {
+              "any": [
+               "absent",
+               "int"
+              ]
+             },
+             {
+              "any": [
+               "absent",
+               "int"
+              ]
+             }
             ]
-           },
-           {
-            "any": [
-             "absent",
-             "records"
-            ]
-           },
-           {
-            "any": [
-             "absent",
-             "records"
-            ]
-           },
-           {
-            "any": [
-             "absent",
-             "records"
-            ]
-           },
-           {
-            "any": [
-             "absent",
-             "records"
-            ]
-           },
-           {
-            "any": [
-             "absent",
-             "records"
-            ]
-           }
-          ]
-         },
+           ]
+          }
+         ],
          {
           "any": [
            "int",
@@ -274,8 +259,8 @@
          "null",
          "null",
          "null",
-         {
-          "*": [
+         [
+          [
            "int",
            "int",
            "int",
@@ -284,7 +269,7 @@
            "int",
            "int"
           ]
-         },
+         ],
          "int",
          "null",
          "null",
@@ -313,7 +298,7 @@
           }
          ]
         ]
-       },
+       ],
        {
         "any": [
          "bool",
@@ -324,11 +309,11 @@
       ]
      },
      "null",
-     {
-      "*": [
+     [
+      [
        "str",
-       {
-        "*": [
+       [
+        [
          "str",
          "null",
          "null",
@@ -336,12 +321,12 @@
          {
           "*": [
            "int",
-           {
-            "*": [
+           [
+            [
              "null",
              "int"
             ]
-           }
+           ]
           ]
          },
          "null",
@@ -359,23 +344,23 @@
          "null",
          "null",
          "null",
-         {
-          "*": [
-           {
-            "*": [
+         [
+          [
+           [
+            [
              "int"
             ]
-           }
+           ]
           ]
-         }
+         ]
         ]
-       },
+       ],
        "null",
        "str"
       ]
-     }
+     ]
     ]
-   }
+   ]
   },
   "UpteDb": {
    "view": "grid",
@@ -469,9 +454,9 @@
         ]
        },
        {
-        "any": [
-         "absent",
-         "list"
+        "opt": [
+         "int",
+         "int"
         ]
        }
       ],
@@ -513,29 +498,73 @@
        "url",
        [
         {
-         "any": [
-          "null",
-          "records"
-         ]
+         "opt": {
+          "*": [
+           "null",
+           "int"
+          ]
+         }
         },
         {
-         "any": [
-          "list",
-          "null",
-          "records"
-         ]
+         "opt": {
+          "any": [
+           "list",
+           "records"
+          ]
+         }
         },
         {
-         "any": [
-          "null",
-          "records"
-         ]
+         "opt": {
+          "*": [
+           {
+            "any": [
+             "absent",
+             "null",
+             "str"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "null"
+            ]
+           },
+           {
+            "opt": [
+             {
+              "*": [
+               {
+                "any": [
+                 "null",
+                 "str"
+                ]
+               },
+               {
+                "opt": [
+                 [
+                  "uuid",
+                  "str"
+                 ]
+                ]
+               }
+              ]
+             }
+            ]
+           }
+          ]
+         }
         },
         {
-         "any": [
-          "absent",
-          "list",
-          "null"
+         "opt": [
+          {
+           "opt": [
+            [
+             "null",
+             "int",
+             "uuid"
+            ]
+           ]
+          }
          ]
         },
         {
@@ -547,9 +576,8 @@
        ],
        "null",
        {
-        "any": [
-         "list",
-         "null"
+        "opt": [
+         "int"
         ]
        },
        "int",
@@ -564,16 +592,153 @@
        "int"
       ],
       {
-       "any": [
-        "list",
-        "null"
+       "opt": [
+        {
+         "opt": [
+          "null",
+          "int",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "str",
+          "int",
+          "str",
+          "null",
+          "uuid",
+          "null",
+          "url",
+          "int"
+         ]
+        },
+        {
+         "opt": [
+          "null",
+          "null",
+          "null",
+          "url",
+          "int"
+         ]
+        },
+        [
+         "int",
+         "int"
+        ]
        ]
       },
       {
-       "any": [
-        "absent",
-        "records"
-       ]
+       "opt": {
+        "*": [
+         {
+          "any": [
+           "int",
+           "null",
+           "str",
+           "uuid"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "int",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "list",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null",
+           "str"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "url"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "str"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "str"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "bool"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "int"
+          ]
+         }
+        ]
+       }
       }
      ]
     },
@@ -614,15 +779,50 @@
        },
        "null",
        {
-        "any": [
-         "list",
-         "null"
+        "opt": [
+         [
+          "int",
+          "int"
+         ],
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         [],
+         "null",
+         "null",
+         "int",
+         "null",
+         "null",
+         "null",
+         "int"
         ]
        },
        {
-        "any": [
-         "list",
-         "null"
+        "opt": [
+         [
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "int",
+          "str",
+          "null",
+          "uuid",
+          "null",
+          "null",
+          "int"
+         ],
+         "null",
+         [
+          "int",
+          "int"
+         ]
         ]
        },
        {
@@ -644,9 +844,13 @@
         ]
        },
        {
-        "any": [
-         "absent",
-         "records"
+        "opt": [
+         [
+          "str",
+          "str",
+          "bool",
+          "url"
+         ]
         ]
        }
       ]
@@ -654,9 +858,36 @@
     },
     "null",
     {
-     "any": [
-      "null",
-      "records"
+     "opt": [
+      [
+       "uuid",
+       "uuid",
+       "null",
+       [
+        "int",
+        "str",
+        [
+         [
+          [
+           "uuid"
+          ]
+         ]
+        ]
+       ],
+       "uuid",
+       [
+        "int",
+        "int"
+       ],
+       [
+        "int",
+        "int"
+       ],
+       [
+        "int",
+        "int"
+       ]
+      ]
      ]
     },
     "null",
@@ -682,8 +913,8 @@
    "shape": [
     "null",
     "int",
-    {
-     "*": [
+    [
+     [
       "uuid",
       "null",
       "null",
@@ -704,9 +935,9 @@
       ],
       "uuid"
      ]
-    },
-    {
-     "*": [
+    ],
+    [
+     [
       "uuid",
       "uuid",
       "uuid",
@@ -724,44 +955,58 @@
        "null",
        [
         "null",
-        [
-         [
-          "str",
-          "int",
-          [
-           "int"
-          ],
-          "null",
-          "int",
-          "int"
-         ],
-         {
-          "*": [
-           "null",
-           "int",
-           "uuid",
-           [
-            "null",
-            "null",
-            "int",
-            "int"
-           ]
-          ]
-         }
-        ],
         {
          "*": [
+          {
+           "any": [
+            "list",
+            "str"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int"
+           ]
+          },
+          {
+           "opt": [
+            "int"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int"
+           ]
+          }
+         ]
+        },
+        [
+         [
           "null",
           "null",
           [
-           {
-            "*": [
+           [
+            [
              "str"
             ]
-           }
+           ]
           ]
          ]
-        },
+        ],
         "null",
         "int"
        ],
@@ -788,10 +1033,8 @@
          ]
         },
         {
-         "any": [
-          "absent",
-          "list",
-          "null"
+         "opt": [
+          "int"
          ]
         },
         {
@@ -881,7 +1124,7 @@
        ]
       }
      ]
-    }
+    ]
    ]
   },
   "jwpduf": {
@@ -894,8 +1137,8 @@
       "null"
      ]
     },
-    {
-     "*": [
+    [
+     [
       "uuid",
       "uuid",
       "uuid",
@@ -913,44 +1156,58 @@
        "null",
        [
         "null",
-        [
-         [
-          "str",
-          "int",
-          [
-           "int"
-          ],
-          "null",
-          "int",
-          "int"
-         ],
-         {
-          "*": [
-           "null",
-           "int",
-           "uuid",
-           [
-            "null",
-            "null",
-            "int",
-            "int"
-           ]
-          ]
-         }
-        ],
         {
          "*": [
+          {
+           "any": [
+            "list",
+            "str"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int"
+           ]
+          },
+          {
+           "opt": [
+            "int"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int"
+           ]
+          }
+         ]
+        },
+        [
+         [
           "null",
           "null",
           [
-           {
-            "*": [
+           [
+            [
              "str"
             ]
-           }
+           ]
           ]
          ]
-        },
+        ],
         "null",
         "int"
        ],
@@ -1001,10 +1258,8 @@
          ]
         },
         {
-         "any": [
-          "absent",
-          "list",
-          "null"
+         "opt": [
+          "int"
          ]
         },
         {
@@ -1094,7 +1349,7 @@
        ]
       }
      ]
-    }
+    ]
    ]
   },
   "ngNC2": {
@@ -1187,9 +1442,8 @@
        ]
       },
       {
-       "any": [
-        "list",
-        "null"
+       "opt": [
+        "str"
        ]
       },
       "bool",
