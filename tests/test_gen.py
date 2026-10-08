@@ -325,6 +325,39 @@ def test_run_job_records_failure_and_reraises(tmp_path):
     assert ledger.rows("job-f")[-1]["status"] == "failed"
 
 
+def test_a_failed_run_whose_balance_moved_is_read_as_charged_not_as_a_tool_error(tmp_path):
+    # Review 2026-10-08 (D1): a mutant that stopped reading the balance after a failure survived the suite, and a
+    # 10-credit failure would have read TOOL_ERROR charged 0.
+    from video import outcome
+
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+
+    class FailingRunner(FakeRunner):
+        async def __call__(self, argv):
+            return 23, "", "Flow UI selector drift"
+
+    balances = [100, 90]
+
+    async def read_credits():
+        return balances.pop(0)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            gen.run_job(
+                job(job_id="job-g"),
+                tmp_path,
+                ledger=ledger,
+                runner=FailingRunner(ledger, "", "job-g"),
+                read_credits=read_credits,
+            )
+        )
+
+    failed = ledger.rows("job-g")[-1]
+    assert (failed["status"], failed["credits_before"], failed["credits_after"]) == ("failed", 100, 90)
+    said = outcome.classify(ledger.rows("job-g"))
+    assert (said["code"], said["charged"]) == ("CHARGED_NO_OUTPUT", 10), said
+
+
 def test_run_job_stops_hard_when_google_flags_unusual_activity(tmp_path):
     # gflow maps WafRejectionError to exit 10 and its default remediation says "Re-authenticate", which is
     # the one thing this migrated account must never do (CLAUDE.md rule 1). Owner decision 2026-09-14:

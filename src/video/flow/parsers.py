@@ -8,6 +8,12 @@ from typing import Any
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 
+def flat(text: str | None) -> str:
+    """Whitespace collapsed, trimmed and casefolded: how a prompt is compared everywhere, since Flow's boxes
+    collapse what was typed (a prompt with a leading space was typed twice into the editor, review 2026-10-08)."""
+    return re.sub(r"\s+", " ", text or "").strip().casefold()
+
+
 def _at(node: Any, *path: int) -> Any:
     for index in path:
         if not isinstance(node, list) or index >= len(node):

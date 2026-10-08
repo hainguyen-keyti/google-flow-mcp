@@ -242,6 +242,18 @@ def _priced(model: str, resolution: str | None, seconds: int | None, price: int 
     return price
 
 
+def _not_gone_well(answer: dict[str, Any] | None, job_id: str) -> dict[str, Any] | None:
+    """A job settled as failed or unknown is an error when asked again, never data: the call that settled it said so
+    as an error, and a later job_status or job_collect answering it as data read as a job that went well (review
+    2026-10-08, D2). The error's outcome is the row's."""
+    if answer is not None and answer.get("status") in ("failed", "unknown"):
+        raise RuntimeError(
+            f"job {job_id} was settled as {answer['status']} and nothing more will come of it: its row is the answer "
+            "(read the outcome); if the clip is still wanted, start another job under a new job_id"
+        )
+    return answer
+
+
 def _job_refused(job_id: str | None, seen: str) -> str:
     # The guidance leads because the agent sees at most 500 characters and a ledger path can be long.
     return (
@@ -940,7 +952,7 @@ class Backend:
             }
         ledger = self._job_ledger(job_id)
         try:
-            answer = jobs_mod.standing(ledger, job_id)
+            answer = _not_gone_well(jobs_mod.standing(ledger, job_id), job_id)
             if answer is None:
                 answer = await self._with(
                     lambda s: jobs_mod.status(s, ledger, job_id, others=self._every_row)
@@ -963,7 +975,7 @@ class Backend:
         # Marked with no await since the check, so a second collect of this job cannot slip in and settle it twice.
         self._running.add(job_id)
         try:
-            answer = jobs_mod.standing(ledger, job_id)
+            answer = _not_gone_well(jobs_mod.standing(ledger, job_id), job_id)
             if answer is None:
                 answer = await self._with(
                     lambda s: jobs_mod.collect(s, ledger, job_id, others=self._every_row)
@@ -1361,9 +1373,10 @@ async def flow_capabilities() -> str:
         "one the baselines were walked on, the shape of the free replies (the project grid and the credit balance, "
         "and with project its listing) against the recorded shapes, and the home and project pages' labels and "
         "selectors against the UI baseline. It answers build {live, baseline, changed}, ui and wire findings, drift "
-        "(true when a reply's shape or the UI moved, which is when a paid tool may misread Flow) and the folder of "
-        "its screenshots; a new build alone is said and is not drift, since most builds move nothing this repo "
-        "reads. Call it when Flow looks different, after a tool misread a page, or before a batch; on drift, stop "
+        "(true when a reply's shape moved or a selector the drivers steer by stopped matching, which is when a paid "
+        "tool may misread Flow) and the folder of its screenshots; a new build, or a label that came or went with "
+        "one of Flow's banners, is said and is not drift. Call it when Flow looks different, after a tool misread a "
+        "page, or before a batch; on drift, stop "
         "spending and have the owner run `video flow survey` (docs/flow-updates.md). About 40 s, 90 s with a "
         "project, which also turns the project's Agent mode off and back on. Free."
     ),

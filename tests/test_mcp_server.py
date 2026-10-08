@@ -4037,7 +4037,8 @@ def test_job_status_says_where_a_started_job_stands_and_writes_nothing(monkeypat
 
 def test_job_collect_fetches_the_clip_writes_the_one_settled_row_and_says_done(monkeypatch, tmp_path):
     opened = _job_backend(monkeypatch, tmp_path)
-    ledger = _started_job(tmp_path / "films")
+    # Submitted just now: a collect within OWN_BRACKET_S of the submit reads the balance bracket as its own (D3).
+    ledger = _started_job(tmp_path / "films", at=time.time())
     _job_world(monkeypatch, tmp_path, [_video("w-before", "old"), _video("w-job", PROMPT)])
 
     answer = _payload(_call("job_collect", {"job_id": "job-1"}))
@@ -4063,6 +4064,23 @@ def test_a_settled_job_is_answered_by_both_later_tools_with_no_browser(monkeypat
     for answer in (again, seen):
         assert (answer["state"], answer["status"], answer["path"]) == ("settled", "done", first["path"])
         assert (answer["outcome"]["code"], answer["outcome"]["charged"]) == ("DONE", 10)
+    assert opened == [] and len(ledger.rows()) == 3
+
+
+@pytest.mark.parametrize("settled_as", ["failed", "unknown"])
+def test_a_job_settled_as_failed_or_unknown_is_an_error_when_asked_again(monkeypatch, tmp_path, settled_as):
+    # Review 2026-10-08 (D2): both later tools answered a settled unknown job as data, which read as a job that went
+    # well; the error carries the row's own outcome.
+    opened = _job_backend(monkeypatch, tmp_path)
+    ledger = _started_job(tmp_path / "films")
+    ledger.append("job-1", settled_as, spent=0 if settled_as == "failed" else None, credits_before=200)
+
+    for tool in ("job_status", "job_collect"):
+        result = _call(tool, {"job_id": "job-1"})
+        text = _texts([result])[0]
+        assert result.is_error and f"settled as {settled_as}" in text, text
+        # The row's own outcome leads the error: a failed row that charged nothing reads NOTHING_GENERATED.
+        assert f"outcome code={'UNKNOWN' if settled_as == 'unknown' else 'NOTHING_GENERATED'}" in text, text
     assert opened == [] and len(ledger.rows()) == 3
 
 

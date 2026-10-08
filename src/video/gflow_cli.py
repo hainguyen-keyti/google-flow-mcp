@@ -3,6 +3,7 @@
 python -m video.gflow_cli video t2v "..." --project <id> --json
 """
 
+import re
 import sys
 
 from gflow_cli.cli import main
@@ -31,7 +32,9 @@ def accept_nano_banana_2_1() -> None:
         return
 
     def check(body, reference_ids, model=None):
-        if model is Model.NARWHAL and body and "BELUGA" in body:
+        # The quoted model field opens the request's inner array (`[\"BELUGA\",\"<reference>\"...`); a prompt that
+        # mentions a beluga is quoted elsewhere and must not pass for it (review 2026-10-08, D8).
+        if model is Model.NARWHAL and body and re.search(r'\[\\*"BELUGA\\*"', body):
             return checked(body, reference_ids, None)
         return checked(body, reference_ids, model)
 

@@ -72,6 +72,12 @@ def test_role_of_tells_the_generated_clip_from_the_scene_copy():
     assert clips.role_of({"prompt": None}, prompt) == "copy"
 
 
+def test_role_of_compares_prompts_flat():
+    # Review 2026-10-08 (D5): a prompt with a leading space never matched its own record and the paid clip was
+    # labelled a copy and settled failed with the spend.
+    assert clips.role_of({"prompt": "a  boat\non a pond"}, "  A boat on a pond ") == "generated"
+
+
 def test_fetch_with_retry_waits_out_404_renditions(monkeypatch, tmp_path: Path):
     calls = []
 
@@ -208,6 +214,9 @@ class _MenuItems:
     async def is_enabled(self):
         return self.page.item_enabled
 
+    async def count(self):
+        return self.page.menu_matches
+
     async def click(self, timeout=None):
         if not self.page.item_enabled:
             raise PlaywrightTimeoutError(f"Locator.click: Timeout {timeout}ms exceeded.")
@@ -230,6 +239,7 @@ class _LateToolbarPage:
         self.clicked = []
         self.overlay = False
         self.item_enabled = item_enabled
+        self.menu_matches = 1
 
     async def wait_for_timeout(self, ms):
         self.elapsed_ms += ms
@@ -274,6 +284,16 @@ def test_menu_item_gives_up_when_the_control_never_arrives():
     with pytest.raises(LookupError, match="never appeared"):
         asyncio.run(clips._menu_item(_LateSession(page), "Add clip", "Extend"))
     assert page.clicked == []
+
+
+def test_menu_item_refuses_to_guess_between_two_items_carrying_the_word():
+    # Review 2026-10-08 (D6): `.first` of a contains-match would pick one of two items at random.
+    page = _LateToolbarPage(appears_after_ms=0)
+    page.menu_matches = 2
+
+    with pytest.raises(LookupError, match="2 items matching 'Extend'"):
+        asyncio.run(clips._menu_item(_LateSession(page), "Add clip", "Extend"))
+    assert "item" not in page.clicked
 
 
 async def _none(*args, **kwargs):
@@ -421,10 +441,10 @@ def _editor_reads(monkeypatch, balance: int = 295, records: list | None = None):
     monkeypatch.setattr(clips.reader, "credits", fake_credits)
 
 
-def test_an_extend_that_dies_on_the_menu_still_leaves_the_spend_written_down(monkeypatch, tmp_path):
-    # Measured 2026-09-13: choosing "Extend" from the menu is itself enough to create a paid job. The
-    # driver died right after that click and wrote no ledger row at all, so 20 credits left the account
-    # with nothing pointing at them and the job had to be found by hand in Flow's listing.
+def test_an_extend_refused_at_the_menu_leaves_no_row_and_the_job_id_free(monkeypatch, tmp_path):
+    # Measured 2026-09-13: choosing "Extend" from the menu is itself enough to create a paid job, so the row must
+    # come before that click. Review 2026-10-08 (D6): written before the menu was read, it also covered a greyed or
+    # missing item that clicked nothing, which settled the refusal as UNKNOWN and burned the job id.
     _editor_reads(monkeypatch)
 
     async def fake_open(session, project_id, media_id):
@@ -443,11 +463,39 @@ def test_an_extend_that_dies_on_the_menu_still_leaves_the_spend_written_down(mon
             )
         )
 
-    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows("j") == []
+
+
+def test_an_extend_that_dies_on_the_extend_click_still_leaves_the_spend_written_down(monkeypatch, tmp_path):
+    _editor_reads(monkeypatch)
+
+    class _DyingItem:
+        async def click(self, timeout=None):
+            raise RuntimeError("the editor re-rendered under the click")
+
+    async def fake_open(session, project_id, media_id):
+        return None
+
+    async def found_item(session, button, item):
+        return _DyingItem()
+
+    monkeypatch.setattr(clips, "_open", fake_open)
+    monkeypatch.setattr(clips, "_menu_item", found_item)
+
+    with pytest.raises(RuntimeError, match="re-rendered"):
+        asyncio.run(
+            clips._generate_from_editor(
+                _Session(), "p", "src-1", "keep going", kind="extend", out_dir=tmp_path, job_id="j2", wait=1.0
+            )
+        )
+
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j2")
     assert [r["status"] for r in rows] == ["opening"], rows
-    assert rows[0]["kind"] == "extend"
-    assert rows[0]["source_media_id"] == "src-1"
-    assert rows[0]["credits_before"] == 295
+    assert (rows[0]["kind"], rows[0]["source_media_id"], rows[0]["credits_before"]) == (
+        "extend",
+        "src-1",
+        295,
+    )
 
 
 def test_an_edit_that_dies_opening_the_editor_still_leaves_the_spend_written_down(monkeypatch, tmp_path):
@@ -483,7 +531,22 @@ def test_the_opening_row_names_the_project_and_every_workflow_the_listing_held(m
     async def dying_open(session, project_id, media_id):
         raise RuntimeError("editor never rendered")
 
-    monkeypatch.setattr(clips, "_open", dying_open)
+    class _DyingItem:
+        async def click(self, timeout=None):
+            raise RuntimeError("editor never rendered")
+
+    async def opened(session, project_id, media_id):
+        return None
+
+    async def found_item(session, button, item):
+        return _DyingItem()
+
+    # An edit's row precedes the editor; an extend's follows the menu read and precedes the Extend click (D6).
+    if kind == "edit":
+        monkeypatch.setattr(clips, "_open", dying_open)
+    else:
+        monkeypatch.setattr(clips, "_open", opened)
+        monkeypatch.setattr(clips, "_menu_item", found_item)
 
     with pytest.raises(RuntimeError, match="editor never rendered"):
         asyncio.run(
@@ -1503,6 +1566,9 @@ class _MenuPage:
             def filter(self, has_text=None):
                 return self
 
+            async def count(self):
+                return 1
+
             @property
             def first(self):
                 return Item()
@@ -1574,6 +1640,34 @@ def test_prompt_ready_types_the_prompt_when_the_editor_box_came_back_empty():
     try:
         assert asyncio.run(clips._prompt_ready(page, box, start, "keep going", timeout=5.0)) is True
         assert typed == ["click", "keep going"]
+    finally:
+        Box.text = ""
+
+
+def test_prompt_ready_types_a_prompt_with_stray_whitespace_once():
+    # Review 2026-10-08 (D5): the box collapses whitespace, so a prompt with a leading space was never found in it
+    # and was typed twice; the paid clip then carried a doubled prompt and settled failed with the spend.
+    typed = []
+
+    class Box(_Clickable):
+        text = ""
+
+        async def click(self, timeout=None):
+            typed.append("click")
+
+        async def inner_text(self):
+            return Box.text
+
+    class Keyboard:
+        async def type(self, text):
+            typed.append(text)
+            Box.text = " ".join(text.split())
+
+    page = type("P", (), {"keyboard": Keyboard()})()
+    box, start = Box(), _Clickable()
+    try:
+        assert asyncio.run(clips._prompt_ready(page, box, start, "  keep   going ", timeout=5.0)) is True
+        assert typed == ["click", "  keep   going "], typed
     finally:
         Box.text = ""
 
@@ -1693,9 +1787,16 @@ def test_clip_download_cli_rejects_an_unknown_quality():
 
 
 def test_clip_extend_and_edit_cli_print_json(monkeypatch):
-    monkeypatch.setattr(cli, "_read", lambda profile, fn: {"job_id": "j", "outputs": []})
+    # Since plan AQ the editor commands run through the MCP's Backend and require --job.
+    from video import mcp_server
+
+    async def answered(self, **kwargs):
+        return {"job_id": kwargs["job_id"], "outputs": []}
+
+    monkeypatch.setattr(mcp_server.Backend, "clip_extend", answered)
+    monkeypatch.setattr(mcp_server.Backend, "clip_edit", answered)
     for verb in ("extend", "edit"):
-        result = CliRunner().invoke(cli.main, ["flow", "clip", verb, "p", "m", "keep going"])
+        result = CliRunner().invoke(cli.main, ["flow", "clip", verb, "p", "m", "keep going", "--job", "j"])
         assert result.exit_code == 0, result.output
         assert '"job_id": "j"' in result.output
 

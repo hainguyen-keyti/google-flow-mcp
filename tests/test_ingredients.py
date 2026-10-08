@@ -4884,3 +4884,13 @@ def test_flow_replies_name_the_workflow_and_statuses_of_the_replies_flow_sent_on
     assert (flow["workflow_id"], flow["media_id"], flow["statuses"]) == (record[0], record[2], [2, 6, 3]), (
         flow
     )
+
+
+def test_the_money_cap_holds_at_its_boundary():
+    # Review 2026-10-08 (D4): a mutant `actual > cap + 1` survived the suite, so a price one over max_credits
+    # would have been clicked.
+    composer.ensure_within(10, 10)
+    with pytest.raises(RuntimeError, match="over max_credits 10"):
+        composer.ensure_within(11, 10)
+    with pytest.raises(RuntimeError, match="could not read"):
+        composer.ensure_within(None, 10)

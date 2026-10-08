@@ -47,6 +47,13 @@ def test_another_model_is_checked_as_gflow_checks_it(patched):
     assert "GEM_PIX_2" in patched(body, (REF,), ImageModel.GEM_PIX_2)
 
 
+def test_a_prompt_that_mentions_a_beluga_does_not_pass_for_the_model_field(patched):
+    # Review 2026-10-08 (D8): the wrapper matched the word anywhere in the body, the prompt included.
+    body = f'f.req=[["ogiZ0b","[\\\\"GEM_PIX_2\\\\",\\\\"{REF}\\\\",\\\\"a BELUGA whale\\\\"]"]]'
+
+    assert "NARWHAL" in patched(body, (REF,), ImageModel.NARWHAL)
+
+
 def _record(version):
     return [UUID1, UUID2, UUID3, version, None, [None, None, None, None, None, None, None, None, [6]]]
 

@@ -53,7 +53,7 @@ def is_done(row: dict[str, Any]) -> bool:
 def role_of(row: dict[str, Any], prompt: str) -> str:
     """Extend also copies the source clip into the new scene: only the record carrying our prompt is
     the generated clip (measured 2026-09-12: copy has the source prompt and no size)."""
-    return "generated" if (row.get("prompt") or "").strip() == prompt.strip() else "copy"
+    return "generated" if parsers.flat(row.get("prompt")) == parsers.flat(prompt) else "copy"
 
 
 async def _fetch_with_retry(request: Any, row: dict[str, Any], stem: Path, attempts: int = 6) -> Path:
@@ -76,10 +76,11 @@ async def _prompt_ready(page: Any, box: Any, start: Any, prompt: str, timeout: f
     Entering Extend creates the scene and re-renders the editor, so a click 500ms after typing could land
     on a cleared box and submit nothing at all (measured 2026-09-13: rpcids [], 0 credits).
     """
-    needle = prompt[:40]
+    # Compared flat: the box collapses whitespace, and a prompt with a leading space was typed twice (D5, 2026-10-08).
+    needle = parsers.flat(prompt)[:40]
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
-        text = (await box.inner_text()).strip()
+        text = parsers.flat(await box.inner_text())
         if needle in text and not await start.is_disabled():
             return True
         if needle not in text:
@@ -140,13 +141,17 @@ async def _menu_item(session: FlowSession, button: str, item: str) -> Any:
             page, page.get_by_role("button", name=re.compile(button, re.IGNORECASE)), f"the {button} button"
         )
         await opener.click(timeout=8_000)
-        found = (
-            page.locator("[role=menuitem], .cdk-overlay-pane button")
-            .filter(has_text=re.compile(item, re.IGNORECASE))
-            .first
+        matching = page.locator("[role=menuitem], .cdk-overlay-pane button").filter(
+            has_text=re.compile(item, re.IGNORECASE)
         )
+        found = matching.first
         try:
             await found.wait_for(state="visible", timeout=6_000)
+            # One item or none: a second item carrying the word would make `.first` a guess (review 2026-10-08, D6).
+            if (shown := await matching.count()) > 1:
+                raise LookupError(
+                    f"menu {button!r} shows {shown} items matching {item!r}; not guessing which, nothing was clicked"
+                )
             # A greyed out item is not a slow one: clicking it only spends 8 s waiting for Playwright to give up, and
             # the caller reads a bare timeout. Measured 2026-09-16: Flow renders `Extend (Veo 3.1 - Lite)` disabled on
             # a clip made by omni-flash, and that is what stopped the first two real clip_extend calls.
@@ -360,6 +365,7 @@ async def _generate_from_editor(
     rows, scenes_before = await _snapshot(session, project_id)
     before = {r["workflow_id"] for r in rows}
     credits_before = (await reader.credits(session))["balance"]
+
     # Written before anything that can spend. Opening the editor and choosing "Extend" are enough on
     # their own to create a paid job (measured 2026-09-13: 20 credits left the account while the driver
     # died before its `submitted` row, so nothing in the ledger pointed at them). The two calls above are
@@ -367,20 +373,27 @@ async def _generate_from_editor(
     # `has_submitted` blocks on, so an orphaned row never stops a legitimate retry. The project and the
     # workflows already listed let reconcile tell what this job added without comparing two clocks, and the
     # prompt tells this job's own record from an upscale or another job's output.
-    ledger.append(
-        job_id,
-        "opening",
-        kind=kind,
-        source_media_id=media_id,
-        credits_before=credits_before,
-        project=project_id,
-        workflows_before=sorted(before),
-        prompt=prompt,
-    )
+    def opening_row() -> None:
+        ledger.append(
+            job_id,
+            "opening",
+            kind=kind,
+            source_media_id=media_id,
+            credits_before=credits_before,
+            project=project_id,
+            workflows_before=sorted(before),
+            prompt=prompt,
+        )
+
+    if kind == "edit":
+        opening_row()
     await _open(session, project_id, media_id)
     page = session.page
     if kind == "extend":
+        # The row comes after the menu is read and before Extend is clicked: a greyed or missing item clicks nothing,
+        # and a row written for it settled such refusals as UNKNOWN and burned the job id (review 2026-10-08, D6).
         item = await _menu_item(session, "Add clip", "Extend")
+        opening_row()
         await item.click(timeout=8_000)
         await page.wait_for_timeout(1_500)
     box = page.locator(f"{EDITOR} [contenteditable='true']").first
@@ -537,13 +550,13 @@ def _editor_verdict(
     if not any(r.get("id") == media_id and r.get("workflow_id") in before for r in records):
         return "unknown", None
     fresh = new_records(before, records)
-    prompt = row["prompt"].strip()
+    prompt = parsers.flat(row["prompt"])
     candidates = [
         r
         for r in fresh
         if r.get("id") == media_id
         and r["workflow_id"] not in taken
-        and (r.get("prompt") or "").strip() == prompt
+        and parsers.flat(r.get("prompt")) == prompt
     ]
     if row.get("kind") == "edit" and len(candidates) == 1 and is_done(candidates[0]) and not contested:
         return "done", candidates[0]
@@ -559,7 +572,7 @@ def _judgeable(row: dict[str, Any], project_id: str) -> bool:
         bool(row.get("source_media_id"))
         and row.get("project") == project_id
         and bool(row.get("workflows_before"))
-        and bool((row.get("prompt") or "").strip())
+        and bool(parsers.flat(row.get("prompt")))
     )
 
 
@@ -628,7 +641,7 @@ async def reconcile_editor(
         contested = any(
             other.get("job_id") != row["job_id"]
             and other.get("source_media_id") == row["source_media_id"]
-            and (other.get("prompt") or "").strip() == row["prompt"].strip()
+            and parsers.flat(other.get("prompt")) == parsers.flat(row["prompt"])
             and (
                 other.get("job_id") in open_jobs
                 or (

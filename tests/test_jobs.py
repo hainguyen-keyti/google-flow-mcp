@@ -625,6 +625,21 @@ def test_collect_fetches_the_finished_clip_and_writes_the_one_settled_row(monkey
     assert (said["code"], said["charged"]) == ("DONE", 10) and "charged_from" not in said
 
 
+def test_a_collect_long_after_the_submit_reads_the_quoted_price_not_the_bracket(monkeypatch, tmp_path):
+    # Review 2026-10-08 (D3): a job collected after Flow's daily top-up wrote a spend of -40 off the bracket.
+    ledger = _started_job(tmp_path)
+    _world(monkeypatch, tmp_path, [_video("w-before", "old"), _video("w-job", PROMPT)], balance=230)
+    own = [{"job_id": "job-1", "status": "started", "ts": T0 + 1}]
+
+    answer = _collect(ledger, now=T0 + jobs.OWN_BRACKET_S + 60, others=own)
+
+    assert (answer["spent"], answer["spent_from"], answer["credits_after"]) == (10, "quoted", 230), answer
+    assert "balance_moved" not in answer and ledger.rows()[-1]["spent_from"] == "quoted"
+
+    soon = _started_job(tmp_path / "soon")
+    assert _collect(soon, now=T0 + jobs.OWN_BRACKET_S, others=own)["spent_from"] == "bracket"
+
+
 def test_a_file_left_by_a_collect_that_died_is_kept_and_does_not_block_the_next(monkeypatch, tmp_path):
     # Killed after the download and before the row: the file is on disk and no row names it. Downloads never
     # overwrite, so without another name every later collect would fail on that file for good.

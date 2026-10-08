@@ -28,7 +28,7 @@ from gflow_cli.data.redaction import redact_error_detail
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen, outcome
-from video.flow import agent, clips, overlays, reader, wire
+from video.flow import agent, clips, overlays, parsers, reader, wire
 from video.flow import download as download_mod
 from video.session import PROJECT_READY, FlowSession
 
@@ -80,8 +80,7 @@ def pick_output(fresh: list[dict[str, Any]], prompt: str) -> dict[str, Any] | No
     return max(videos, key=lambda r: r.get("created") or 0)
 
 
-def _flat(text: str | None) -> str:
-    return re.sub(r"\s+", " ", text or "").strip().casefold()
+_flat = parsers.flat
 
 
 def matching_outputs(

@@ -316,6 +316,11 @@ async def _recipe(
         return {"ok": None, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
 
 
+# How long after its submit a collect may still read the balance bracket as the job's own spend: a render takes
+# minutes, while the daily top-up and the owner's other work land on longer brackets.
+OWN_BRACKET_S = 30 * 60
+
+
 async def collect(
     session: FlowSession,
     ledger: gen.Ledger,
@@ -405,7 +410,9 @@ async def collect(
             f"the clip {record['id']} is finished but no file came back ({type(exc).__name__}: {str(exc)[:160]}): "
             f"call job_collect again, or fetch it with flow_download; nothing was written; job {job_id}"
         ) from exc
-    own = not shared and bracket is not None
+    # The bracket is the job's own only when no other job could have moved the balance and the collect comes soon
+    # after the submit: Flow's daily top-up landed inside a longer bracket and a collect wrote a spend of -40 (D3).
+    own = not shared and bracket is not None and age <= OWN_BRACKET_S
     spent = bracket if own else quoted
     moved = {"balance_moved": {"quoted": quoted, "moved": bracket}} if own and bracket != quoted else {}
     check = {"body_check": started["body_check"]} if started.get("body_check") else {}
