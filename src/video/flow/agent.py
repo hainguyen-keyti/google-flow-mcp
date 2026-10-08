@@ -113,6 +113,23 @@ async def send(
     restored = await set_mode(session, project_id, state["was"])
     credits_after = (await reader.credits(session))["balance"]
     spent = credits_before - credits_after
+    if not frames and after == before:
+        # Measured 2026-10-08: a click that sent nothing and changed nothing settled `done`, and an agent took a
+        # message Flow never received as delivered.
+        ledger.append(
+            job_id,
+            "failed",
+            credits_before=credits_before,
+            credits_after=credits_after,
+            spent=spent,
+            rpcids=[],
+            flow=flow,
+            error="no request left the page and the agent panel did not change",
+        )
+        raise RuntimeError(
+            f"Flow's agent answered nothing: no request left the page within {wait:.0f} s and the panel did not "
+            f"change, so the message may not have been sent; read flow_media before sending it again (job {job_id})"
+        )
     surprise = clips_mod.price_notice("agent", spent)
     said = {"balance_moved": surprise} if surprise else {}
     ledger.append(

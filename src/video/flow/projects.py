@@ -38,6 +38,14 @@ async def create(session: FlowSession, title: str | None = None) -> dict[str, An
     button = page.get_by_role("button", name=re.compile("New project", re.IGNORECASE)).first
     frames = await capture(session, lambda: button.click(timeout=10_000), settle=8.0)
     project_id = project_id_from_url(page.url)
+    # The click lands on the grid and the title box lives on the project page, still loading when the click returns:
+    # measured 2026-10-08, the inline rename timed out on it while project_rename, which waits, worked.
+    try:
+        await page.locator(PROJECT_READY).first.wait_for(state="visible", timeout=60_000)
+    except PlaywrightTimeoutError as exc:
+        raise RuntimeError(
+            f"project {project_id} was created, but its page did not load within 60 s, so it was not named"
+        ) from exc
     result = {"id": project_id, "rpcids": sorted(frames), "title": None}
     if title:
         try:

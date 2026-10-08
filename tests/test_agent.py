@@ -123,6 +123,27 @@ def test_the_agent_row_carries_what_flow_said_and_the_listener_is_removed(monkey
     assert session.page.listeners == [], session.page.listeners
 
 
+def test_a_send_that_left_no_request_and_changed_nothing_on_the_panel_is_an_error(
+    monkeypatch, tmp_path: Path
+):
+    # Measured 2026-10-08 (live verification, D9): a send whose click sent nothing (rpcids []) and whose panel showed
+    # no reply settled `done` with outcome DONE, so an agent took a message Flow never received as delivered.
+    _agent_world(monkeypatch, balances=[100, 100])
+
+    async def heard_nothing(session, action, *, settle):
+        await action()
+        return {}
+
+    monkeypatch.setattr(agent, "capture", heard_nothing)
+
+    with pytest.raises(RuntimeError, match="nothing"):
+        asyncio.run(agent.send(_AgentSession(), "p", "hello", 1.0, out_dir=tmp_path, job_id="job-5"))
+
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("job-5")
+    assert [row["status"] for row in rows] == ["submitted", "failed"], rows
+    assert rows[-1]["rpcids"] == [] and rows[-1]["spent"] == 0, rows[-1]
+
+
 def test_the_agent_path_hears_flow_through_the_same_reader_as_the_gen_path():
     from video.flow import composer
 

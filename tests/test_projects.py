@@ -23,6 +23,9 @@ class _TitleBox:
     def first(self):
         return self
 
+    async def wait_for(self, state=None, timeout=None):
+        return None
+
     async def click(self, timeout=None):
         pass
 
@@ -115,6 +118,45 @@ def test_create_with_a_title_that_does_not_land_still_names_the_project_it_made(
 
     with pytest.raises(RuntimeError, match="project NEW was created"):
         asyncio.run(projects.create(session, "new title"))
+
+
+class _WaitingBox(_TitleBox):
+    """A locator that records which selector was waited for, and when the title box was clicked relative to it."""
+
+    def __init__(self, page, selector):
+        self.page, self.selector = page, selector
+
+    async def wait_for(self, state=None, timeout=None):
+        self.page.waited.append(self.selector)
+
+    async def click(self, timeout=None):
+        self.page.clicked_box_after = list(self.page.waited)
+
+
+class _ReadyPage(_GridPage):
+    def __init__(self):
+        super().__init__()
+        self.waited = []
+        self.clicked_box_after = None
+
+    def locator(self, selector):
+        return _WaitingBox(self, selector)
+
+
+def test_create_waits_for_the_project_page_before_naming_it(monkeypatch):
+    # Measured 2026-10-08 (live verification, D13): project_create with a title made the project and then timed out
+    # on the title box, since the rename started on the grid page while the project page was still loading;
+    # project_rename on its own, which waits for the page, worked.
+    _flow_answers(monkeypatch, {"jHPbke": [[]]}, RENAMED, _grid_listing("NEW", "new title"))
+    session = _Session()
+    session.page = _ReadyPage()
+
+    result = asyncio.run(projects.create(session, "new title"))
+
+    assert result == {"id": "NEW", "rpcids": ["jHPbke"], "title": "new title"}, result
+    assert projects.PROJECT_READY in (session.page.clicked_box_after or []), (
+        "the title box was clicked before the project page was ready"
+    )
 
 
 class _StuckTitleBox(_TitleBox):
