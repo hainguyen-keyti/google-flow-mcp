@@ -254,6 +254,269 @@ def test_a_route_that_failed_is_never_written():
         survey.check_writable(ui, survey.options_from_walk(_walk_with()))
 
 
+def _complete_routes():
+    base = json.loads(survey.UI_BASELINE.read_text(encoding="utf-8"))["routes"]
+    return {name: {"labels": ["x"], "selectors": {}} for name in base}
+
+
+def test_a_walk_that_skipped_or_never_reached_a_baseline_route_is_never_written():
+    # Review 2026-10-08 (B5): a project without a scene walked without the scene editor and `--write` would have
+    # dropped that route from the baseline, and the character page with it.
+    routes = _complete_routes()
+    del routes["scene editor"]
+    ui = {"routes": routes, "skipped": {"scene editor": "the project holds no scene"}}
+    with pytest.raises(survey.SurveyIncomplete, match="scene editor"):
+        survey.check_writable(ui, survey.options_from_walk(_walk_with()))
+
+    with pytest.raises(survey.SurveyIncomplete, match="character page"):
+        survey.check_writable(
+            {"routes": {k: v for k, v in _complete_routes().items() if k != "character page"}},
+            survey.options_from_walk(_walk_with()),
+        )
+
+
+def test_a_complete_walk_is_written_with_the_build_and_the_day_it_ran(monkeypatch, tmp_path):
+    monkeypatch.setattr(survey, "UI_BASELINE", tmp_path / "flow_ui.json")
+    monkeypatch.setattr(survey, "OPTIONS_BASELINE", tmp_path / "flow_options.json")
+    (tmp_path / "flow_ui.json").write_text(json.dumps({"routes": {"home": {"labels": [], "selectors": {}}}}))
+    (tmp_path / "flow_options.json").write_text(
+        json.dumps(survey.options_from_walk(_walk_with())), encoding="utf-8"
+    )
+    result = {
+        "ui": {"routes": {"home": {"labels": ["Home"], "selectors": {}}}, "skipped": {}},
+        "walk": _walk_with(),
+        "build": "Ab12.3.O",
+    }
+
+    findings, _ = survey.report(result, write=True)
+
+    written = json.loads((tmp_path / "flow_ui.json").read_text(encoding="utf-8"))
+    assert written["build"] == "Ab12.3.O" and written["measured"][:2] == "20", written
+    assert written["routes"]["home"]["labels"] == ["Home"]
+    assert ("route skipped", "x", "") not in findings
+
+
+def test_a_skipped_route_is_reported_with_its_reason():
+    result = {
+        "ui": {"routes": {}, "skipped": {"clip editor": "the project holds no finished video"}},
+        "walk": _walk_with(),
+    }
+    findings, _ = survey.report(result, write=False)
+    assert ("route skipped", "clip editor", "the project holds no finished video") in findings
+
+
+def test_the_walk_settles_one_composer_mode_before_recording_the_project_and_the_sidebar():
+    # Review 2026-10-08 (B5): the composer's leftover mode made 31 of the 72 differences of the survey.
+    import inspect
+
+    source = inspect.getsource(survey.Walker.run)
+    assert source.index("settle_mode()") < source.index('record("project")'), (
+        "the mode is settled after the project"
+    )
+
+
+def test_settling_the_mode_opens_the_settings_and_picks_the_baseline_first_mode(monkeypatch, tmp_path):
+    opened = []
+
+    async def opened_settings(page, label="settings"):
+        opened.append(label)
+        return ""
+
+    monkeypatch.setattr(survey.composer, "_open_settings", opened_settings)
+    walker = _SettingsWalker(tmp_path)
+
+    asyncio.run(walker.settle_mode())
+
+    first = json.loads(survey.OPTIONS_BASELINE.read_text(encoding="utf-8"))["video"]["modes"][0]
+    assert opened == ["survey"] and walker.log == [("radio", first)], (opened, walker.log)
+
+
+def test_what_a_project_lacks_for_a_full_walk_is_named():
+    listing = json.loads((Path(__file__).parent / "fixtures" / "rpc" / "Zzl0ze_character.json").read_text())[
+        "payload"
+    ]
+    # The parsers are the authority on the listing; this checks the three questions are asked of it.
+    expected = [
+        name
+        for name, present in (
+            (
+                "finished video",
+                any(
+                    r.get("kind") == "video"
+                    and r.get("listed")
+                    and r.get("status") == survey.clips.DONE_STATUS
+                    for r in survey.parsers.records(listing)
+                ),
+            ),
+            ("scene", any(not s.get("trashed") for s in survey.parsers.scenes_from_listing(listing))),
+            ("character", bool(survey.parsers.characters_from_listing(listing))),
+        )
+        if not present
+    ]
+    assert survey.missing_for_a_walk(listing) == expected
+    assert survey.missing_for_a_walk([]) == ["finished video", "scene", "character"]
+
+
+def _check_report(**change):
+    return {
+        "build": {"live": "Ab12.3.O", "baseline": "Ab12.3.O", "changed": False},
+        "ui": [],
+        "wire": [],
+        "drift": False,
+        "folder": "out/check/x",
+    } | change
+
+
+def _run_check(monkeypatch, report, args):
+    from click.testing import CliRunner
+
+    from video import cli
+
+    asked = []
+
+    async def fake_check(session, project_id=None):
+        asked.append(project_id)
+        return report
+
+    monkeypatch.setattr(survey, "check", fake_check)
+    monkeypatch.setattr(cli, "_read", lambda profile, fn: asyncio.run(fn(object())))
+    return CliRunner().invoke(cli.main, ["flow", "check", *args]), asked
+
+
+def test_flow_check_exits_0_on_a_clean_read_and_says_a_new_build(monkeypatch):
+    result, asked = _run_check(
+        monkeypatch, _check_report(build={"live": "Cd34.5.O", "baseline": "Ab12.3.O", "changed": True}), []
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "build Cd34.5.O" in result.output and "changed since the baseline" in result.output
+    assert asked == [None]
+
+
+def test_flow_check_exits_1_on_drift_and_names_each_finding(monkeypatch):
+    report = _check_report(
+        wire=[["kind changed", "Zzl0ze[2][*][3]", "str -> int"]],
+        ui=[["selector lost", "project", "flow.composer.SETTINGS"]],
+        drift=True,
+    )
+
+    result, asked = _run_check(monkeypatch, report, ["--project", "P1"])
+
+    assert result.exit_code == 1, result.output
+    assert "kind changed" in result.output and "selector lost" in result.output and "DRIFT" in result.output
+    assert asked == ["P1"]
+
+
+class _CheckSession:
+    """A session for `check`: the grid and the listing answer with the fixtures, the page records nothing."""
+
+    def __init__(self):
+        self.page = _CheckPage()
+        self.urls = []
+
+    async def goto(self, url, *, ready=None, timeout_ms=60_000):
+        self.urls.append(url)
+
+    @staticmethod
+    def project_url(project_id):
+        return f"https://flow.google.com/project/{project_id}"
+
+
+class _CheckKeys:
+    async def press(self, key):
+        return None
+
+
+class _CheckPage:
+    keyboard = _CheckKeys()
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, js, *args):
+        if js == survey.version.SCRIPTS_JS:
+            return ["https://g/k=boq-labs-ai-sandbox.AiSandboxAngularFrontend.en.Zz9.1.O/"]
+        if js == survey._COUNT_JS:
+            return 1
+        return []
+
+    async def screenshot(self, path):
+        Path(path).write_bytes(b"")
+
+
+def _fixture(name):
+    return json.loads((Path(__file__).parent / "fixtures" / "rpc" / f"{name}.json").read_text("utf-8"))[
+        "payload"
+    ]
+
+
+def test_check_reads_the_build_the_free_replies_and_the_pages_and_reports_no_drift_on_the_fixtures(
+    monkeypatch, tmp_path
+):
+    grid = {"UpteDb": [_fixture("UpteDb")], "nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
+    project = {name: [_fixture(name)] for name in ("Zzl0ze", "ngNC2", "yBhWQ", "HTrJv", "tRARke")}
+    modes = []
+
+    async def fake_grid(session, settle=6.0):
+        return grid
+
+    async def fake_capture(session, action, *, settle):
+        await action()
+        return project
+
+    async def fake_set_mode(session, project_id, enabled):
+        modes.append(enabled)
+        return {"enabled": enabled, "was": True}
+
+    async def opened(page, label="settings"):
+        return ""
+
+    monkeypatch.setattr(survey.reader, "grid", fake_grid)
+    monkeypatch.setattr(survey, "capture", fake_capture)
+    monkeypatch.setattr(survey.agent, "set_mode", fake_set_mode)
+    monkeypatch.setattr(survey.composer, "_open_settings", opened)
+    monkeypatch.setattr(survey.Walker, "radio", lambda self, text: _settled())
+    monkeypatch.setattr(survey.version, "current", None)
+    base = json.loads(survey.UI_BASELINE.read_text(encoding="utf-8"))
+    # The labels the page answers are empty, so the baseline's labels are made empty too: this is a wire and build
+    # test, the label comparison has its own tests above.
+    for route in base["routes"].values():
+        route["labels"] = []
+        route["selectors"] = {name: 1 for name in route["selectors"]}
+    monkeypatch.setattr(survey, "_baseline_ui", lambda: base | {"build": "Zz9.1.O"})
+
+    report = asyncio.run(survey.check(_CheckSession(), "P1", out_root=tmp_path))
+
+    assert report["build"] == {"live": "Zz9.1.O", "baseline": "Zz9.1.O", "changed": False}, report["build"]
+    assert report["wire"] == [] and report["drift"] is False, report
+    assert modes == [False, True], modes
+
+
+async def _settled():
+    return True
+
+
+def test_check_without_a_project_reads_the_grid_only_and_touches_no_project(monkeypatch, tmp_path):
+    async def fake_grid(session, settle=6.0):
+        return {"UpteDb": [_fixture("UpteDb")], "nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
+
+    async def must_not(*args, **kwargs):
+        raise AssertionError("a project was opened without being asked for")
+
+    monkeypatch.setattr(survey.reader, "grid", fake_grid)
+    monkeypatch.setattr(survey, "capture", must_not)
+    monkeypatch.setattr(survey.agent, "set_mode", must_not)
+    monkeypatch.setattr(survey.version, "current", None)
+    base = json.loads(survey.UI_BASELINE.read_text(encoding="utf-8"))
+    base["routes"]["home"] = {"labels": [], "selectors": {}}
+    monkeypatch.setattr(survey, "_baseline_ui", lambda: base)
+
+    report = asyncio.run(survey.check(_CheckSession(), None, out_root=tmp_path))
+
+    assert report["build"]["baseline"] is None and report["build"]["changed"] is False
+    assert report["ui"] == [] and report["wire"] == [] and report["drift"] is False, report
+
+
 def test_a_route_that_failed_is_reported_as_its_error_not_as_every_label_removed():
     base = {"routes": {"clip editor": {"labels": ["Add clip"], "selectors": {"flow.clips.EDITOR": 1}}}}
     now = {"routes": {"clip editor": {"labels": [], "selectors": {}, "error": "TimeoutError: toolbar"}}}

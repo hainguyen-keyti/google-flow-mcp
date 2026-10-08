@@ -33,8 +33,9 @@ from video.flow import ingredients as ingredients_mod
 from video.flow import jobs as jobs_mod
 from video.flow import lane as lane_mod
 from video.flow import projects as projects_mod
-from video.flow import reader
+from video.flow import reader, version
 from video.flow import scenes as scenes_mod
+from video.flow import survey as survey_mod
 from video.flow import uploads as uploads_mod
 from video.flow import video as video_mod
 from video.session import FlowSession
@@ -429,6 +430,8 @@ class Backend:
         said = self._outcome_of(ledger, job_id)
         if isinstance(result, dict) and said is not None and said["code"] != "NOT_SUBMITTED":
             result["outcome"] = said
+        if isinstance(result, dict) and version.current:
+            result.setdefault("flow_build", version.current)
         return result
 
     def _twin_refusal(self, twin: str) -> ValueError:
@@ -521,6 +524,9 @@ class Backend:
     async def capabilities(self) -> dict[str, Any]:
         # No session: the answer is the repo's own measured table, the one the tools refuse and charge by.
         return capabilities_mod.capabilities()
+
+    async def flow_check(self, project_id: str | None = None) -> dict[str, Any]:
+        return await self._with(lambda s: survey_mod.check(s, project_id))
 
     async def media(
         self,
@@ -1349,6 +1355,24 @@ async def flow_capabilities() -> str:
 
 
 @server.tool(
+    name="flow_check",
+    description=(
+        "Flow against this repo's baselines, for $0 and before anything is spent: the live build label against the "
+        "one the baselines were walked on, the shape of the free replies (the project grid and the credit balance, "
+        "and with project its listing) against the recorded shapes, and the home and project pages' labels and "
+        "selectors against the UI baseline. It answers build {live, baseline, changed}, ui and wire findings, drift "
+        "(true when a reply's shape or the UI moved, which is when a paid tool may misread Flow) and the folder of "
+        "its screenshots; a new build alone is said and is not drift, since most builds move nothing this repo "
+        "reads. Call it when Flow looks different, after a tool misread a page, or before a batch; on drift, stop "
+        "spending and have the owner run `video flow survey` (docs/flow-updates.md). About 40 s, 90 s with a "
+        "project, which also turns the project's Agent mode off and back on. Free."
+    ),
+)
+async def flow_check(project: str | None = None) -> str:
+    return _json(await backend.flow_check(project))
+
+
+@server.tool(
     name="flow_media",
     description=(
         "A project's media (id, kind, model, size, url), meta and models, always as one object, in Flow's own "
@@ -1901,7 +1925,8 @@ async def clip_recipe(project_id: str, media_id: str, workflow_id: str | None = 
 @server.tool(
     name="clip_extend",
     description=(
-        "Extend a clip with Veo 3.1 Lite. It spends credits and is ledgered: 10 credits per extend (measured). "
+        "Extend a clip with Veo 3.1 Lite. It spends credits and is ledgered: 10 credits per extend (measured on a "
+        "720p 8 s source and, 2026-10-08, on a 360p 4 s one). "
         "Flow greys Extend out on some clips (measured: on Omni clips, and on a Veo clip after Omni edits and a 1080p "
         "upscale); the call is then refused before the click, at no cost. The extension is a new clip inside a new "
         "scene (the source is copied in first): its own file answered HTTP 400 and clip_download could not open it "
@@ -1926,9 +1951,11 @@ async def clip_extend(
 @server.tool(
     name="clip_edit",
     description=(
-        "Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledgered: every edit measured "
-        "on this account cost 20 credits, while Flow's own price table lists Omni Flash Edit at 40, so budget for "
-        "40 and expect 20. This tool does not read the live price line before it clicks, so what stands between a "
+        "Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledgered, and the price follows "
+        "the source clip's cell: every edit of a 720p 8 s clip measured on this account cost 20 credits, the edit of "
+        "a 360p 4 s clip cost 10 (measured 2026-10-08), while Flow's own price table lists Omni Flash Edit at 40, so "
+        "budget for 40 and expect the source cell's price (the answer's balance_moved says when 20 was not it). "
+        "This tool does not read the live price line before it clicks, so what stands between a "
         "changed price and a surprise bill is the balance read before and after, answered as credits_before and "
         "credits_after (the ledger row holds their difference as `spent`). An edit cannot change what is said: it "
         "keeps the clip's audio, and a new line asked for in the prompt came out burned in as a subtitle (measured "

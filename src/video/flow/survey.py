@@ -13,6 +13,7 @@ flow_options.json; --write makes the current survey the new baseline.
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib
 import itertools
 import json
@@ -21,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from video.flow import agent, clips, composer, parsers, reader
+from video.flow import agent, clips, composer, parsers, reader, version, wire
 from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
@@ -100,12 +101,25 @@ def route_name(prefix: str, text: str, private: set[str], index: int) -> str:
     return f"{prefix} {kept[0]}" if kept else f"{prefix} {index}"
 
 
-def check_writable(ui: dict[str, Any], options: dict[str, Any] | None) -> None:
-    """Refuse a baseline a broken walk would leave: a failed route, no model, no count, or a cell with no price."""
+def _baseline_ui() -> dict[str, Any]:
+    return json.loads(UI_BASELINE.read_text(encoding="utf-8")) if UI_BASELINE.exists() else {"routes": {}}
+
+
+def check_writable(
+    ui: dict[str, Any], options: dict[str, Any] | None, base_ui: dict[str, Any] | None = None
+) -> None:
+    """Refuse a baseline a broken walk would leave: a failed route, a route the baseline holds that the walk skipped
+    or never reached (a project without a scene, review 2026-10-08), no model, no count, or a cell with no price."""
+    base_ui = _baseline_ui() if base_ui is None else base_ui
+    routes = ui.get("routes", {})
+    skipped = ui.get("skipped", {})
     problems = [
-        f"route {name!r} failed: {r['error']}"
-        for name, r in sorted(ui.get("routes", {}).items())
-        if r.get("error")
+        f"route {name!r} failed: {r['error']}" for name, r in sorted(routes.items()) if r.get("error")
+    ]
+    problems += [f"route {name!r} skipped: {why}" for name, why in sorted(skipped.items())]
+    problems += [
+        f"route {name!r} missing from the walk"
+        for name in sorted(set(base_ui.get("routes", {})) - set(routes) - set(skipped))
     ]
     if options is None:
         problems.append("the options walk could not be read")
@@ -160,7 +174,8 @@ def compare_ui(base: dict[str, Any], current: dict[str, Any]) -> list[tuple[str,
     for route, was in sorted(base.get("routes", {}).items()):
         now = current.get("routes", {}).get(route)
         if now is None:
-            found.append(("route missing", route, ""))
+            if route not in current.get("skipped", {}):
+                found.append(("route missing", route, ""))
             continue
         if now.get("error"):
             found.append(("route error", route, now["error"]))
@@ -306,10 +321,26 @@ class Walker:
         self.selectors = collect_selectors()
         self.private: set[str] = set()
         self.routes: dict[str, dict[str, Any]] = {}
+        self.skipped: dict[str, str] = {}
 
     @property
     def page(self) -> Any:
         return self.session.page
+
+    async def settle_mode(self) -> None:
+        """One composer mode before the project and sidebar routes are recorded: the mode the last run left made 31
+        of the 72 differences of the survey of 2026-10-08. The mode is the baseline's first; no baseline, no click."""
+        modes = (
+            json.loads(OPTIONS_BASELINE.read_text(encoding="utf-8"))["video"]["modes"]
+            if OPTIONS_BASELINE.exists()
+            else []
+        )
+        if not modes:
+            return
+        await composer._open_settings(self.page, "survey")
+        await self.radio(modes[0])
+        await self.page.keyboard.press("Escape")
+        await self.page.wait_for_timeout(600)
 
     async def record(self, route: str, scope: str | None = None) -> None:
         await self.page.wait_for_timeout(1_500)
@@ -467,6 +498,7 @@ class Walker:
         self.private |= {str(s.get("title") or "") for s in parsers.scenes_from_listing(listing)}
         self.agent_was_on = bool((await agent.set_mode(session, self.project_id, False)).get("was"))
         await session.goto(session.project_url(self.project_id), ready=PROJECT_READY)
+        await self.settle_mode()
         await self.record("project")
         items = await page.evaluate(
             "(sel) => [...document.querySelectorAll(sel)].map(e => (e.innerText||'').trim().split('\\n').pop().trim())",
@@ -486,19 +518,19 @@ class Walker:
             await self.radio(mode)
             await page.keyboard.press("Escape")
             await self.record(f"composer {mode}", "flow-prompt-box, flow-base-prompt-box")
-        videos = [
-            r
-            for r in records
-            if r.get("kind") == "video" and r.get("listed") and r.get("status") == clips.DONE_STATUS
-        ]
+        videos = _finished_videos(records)
         if videos:
             await self.guarded("clip editor", self.clip_editor(videos[0]["id"]))
+        else:
+            self.skipped["clip editor"] = "the project holds no finished video"
         scenes = [x for x in parsers.scenes_from_listing(listing) if not x.get("trashed")]
         if scenes:
             await self.guarded(
                 "scene editor",
                 self.open_and_record("scene editor", f"scene/{scenes[0]['scene_id']}", "flow-scene-builder"),
             )
+        else:
+            self.skipped["scene editor"] = "the project holds no scene"
         people = parsers.characters_from_listing(listing)
         if people:
             await self.guarded(
@@ -507,9 +539,96 @@ class Walker:
                     "character page", f"character/{people[0]['entity_id']}", "flow-character-edit-page"
                 ),
             )
+        else:
+            self.skipped["character page"] = "the project holds no character"
         if self.agent_was_on:
             await agent.set_mode(session, self.project_id, True)
-        return {"ui": {"routes": self.routes}, "walk": options}
+        return {"ui": {"routes": self.routes, "skipped": self.skipped}, "walk": options}
+
+
+def _finished_videos(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        r
+        for r in records
+        if r.get("kind") == "video" and r.get("listed") and r.get("status") == clips.DONE_STATUS
+    ]
+
+
+def missing_for_a_walk(listing: Any) -> list[str]:
+    """What a project lacks for every route to be walked: a finished video opens the clip editor, a scene the scene
+    editor, a character the character page. A listing the parsers cannot read lacks all three."""
+    try:
+        has = {
+            "finished video": bool(_finished_videos(parsers.records(listing))),
+            "scene": any(not s.get("trashed") for s in parsers.scenes_from_listing(listing)),
+            "character": bool(parsers.characters_from_listing(listing)),
+        }
+    except (LookupError, TypeError, ValueError):
+        return ["finished video", "scene", "character"]
+    return [name for name, present in has.items() if not present]
+
+
+async def pick_project(session: FlowSession, limit: int = 8) -> tuple[str | None, dict[str, list[str]]]:
+    """The first project of the grid that holds what a full walk needs, else None and what each one lacked."""
+    lacked: dict[str, list[str]] = {}
+    for card in parsers.projects(one(await reader.grid(session), "UpteDb"))[:limit]:
+        opening = functools.partial(session.goto, session.project_url(card["id"]), ready=PROJECT_READY)
+        lacks = missing_for_a_walk(one(await capture(session, opening, settle=8.0), "Zzl0ze"))
+        if not lacks:
+            return card["id"], lacked
+        lacked[card["id"]] = lacks
+    return None, lacked
+
+
+async def check(
+    session: FlowSession, project_id: str | None = None, out_root: Path = Path("out/check")
+) -> dict[str, Any]:
+    """Flow against the baselines for $0: the live build label, the shape of the free replies (the grid, and the
+    listing with a project), the home and project pages' labels and selectors. Drift is a wire or UI difference; a
+    new build alone is said and is not drift, since most builds move nothing this repo reads."""
+    base_ui = _baseline_ui()
+    folder = out_root / datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    folder.mkdir(parents=True, exist_ok=True)
+    walker = Walker(session, project_id or "", folder)
+    frames = await reader.grid(session)
+    live = await version.read(session.page)
+    walker.private |= {str(p.get("title") or "") for p in parsers.projects(one(frames, "UpteDb"))}
+    await walker.record("home")
+    views: tuple[str, ...] = ("grid",)
+    agent_was_on = False
+    if project_id:
+        opening = functools.partial(session.goto, session.project_url(project_id), ready=PROJECT_READY)
+        more = await capture(session, opening, settle=8.0)
+        listing = one(more, "Zzl0ze")
+        walker.private |= {str(m.get("title") or "") for m in parsers.media(listing)}
+        walker.private |= {str(r.get("prompt") or "")[:MAX_LABEL] for r in parsers.records(listing)}
+        walker.private |= {str(c.get("name") or "") for c in parsers.characters_from_listing(listing)}
+        walker.private |= {str(s.get("title") or "") for s in parsers.scenes_from_listing(listing)}
+        for rpcid, payloads in more.items():
+            frames.setdefault(rpcid, []).extend(payloads)
+        # As the survey records it: Agent mode off and one composer mode, so the page compares with the baseline.
+        agent_was_on = bool((await agent.set_mode(session, project_id, False)).get("was"))
+        await session.goto(session.project_url(project_id), ready=PROJECT_READY)
+        await walker.settle_mode()
+        await walker.record("project")
+        if agent_was_on:
+            await agent.set_mode(session, project_id, True)
+        views += ("project",)
+    routes = {name: base_ui["routes"][name] for name in walker.routes if name in base_ui.get("routes", {})}
+    ui = compare_ui({"routes": routes}, {"routes": walker.routes})
+    wired = wire.compare_frames(wire.baseline(), frames, views)
+    baseline_build = base_ui.get("build")
+    return {
+        "build": {
+            "live": live,
+            "baseline": baseline_build,
+            "changed": bool(live and baseline_build and live != baseline_build),
+        },
+        "ui": [list(finding) for finding in ui],
+        "wire": [list(finding) for finding in wired],
+        "drift": bool(ui) or wire.drifted(wired),
+        "folder": str(folder),
+    }
 
 
 async def survey(
@@ -518,6 +637,7 @@ async def survey(
     folder = out_root / datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     folder.mkdir(parents=True, exist_ok=True)
     result = await Walker(session, project_id, folder).run()
+    result["build"] = version.current or await version.read(session.page)
     (folder / "survey.json").write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
     result["folder"] = str(folder)
     return result
@@ -527,9 +647,12 @@ def report(
     result: dict[str, Any], *, write: bool
 ) -> tuple[list[tuple[str, str, str]], dict[str, Any] | None]:
     """Compare a survey with the baselines; with write, and only for a complete walk, make it the new baseline."""
-    base_ui = json.loads(UI_BASELINE.read_text(encoding="utf-8")) if UI_BASELINE.exists() else {"routes": {}}
+    base_ui = _baseline_ui()
     base_options = json.loads(OPTIONS_BASELINE.read_text(encoding="utf-8"))
     findings = compare_ui(base_ui, result["ui"])
+    findings += [
+        ("route skipped", route, why) for route, why in sorted(result["ui"].get("skipped", {}).items())
+    ]
     try:
         options: dict[str, Any] | None = options_from_walk(result["walk"])
     except OptionLayoutChanged as exc:
@@ -538,18 +661,35 @@ def report(
     if options is not None:
         findings += compare_options(base_options, options)
     if write:
-        check_writable(result["ui"], options)
+        check_writable(result["ui"], options, base_ui)
+        # The build and the day the walk ran: `flow check` reads the live build against this one.
+        baseline = {
+            "routes": result["ui"]["routes"],
+            "measured": datetime.now().astimezone().strftime("%Y-%m-%d"),
+            "build": result.get("build"),
+        }
         UI_BASELINE.write_text(
-            json.dumps(result["ui"], indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8"
+            json.dumps(baseline, indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8"
         )
         OPTIONS_BASELINE.write_text(json.dumps(options, indent=1, ensure_ascii=False), encoding="utf-8")
     return findings, options
 
 
-def run_sync(session_factory: Any, project_id: str, write: bool) -> tuple[list[tuple[str, str, str]], str]:
+def run_sync(
+    session_factory: Any, project_id: str | None, write: bool
+) -> tuple[list[tuple[str, str, str]], str]:
     async def go() -> dict[str, Any]:
         async with session_factory() as session:
-            return await survey(session, project_id)
+            chosen = project_id
+            if not chosen:
+                chosen, lacked = await pick_project(session)
+                if not chosen:
+                    said = "; ".join(f"{pid} lacks {', '.join(lacks)}" for pid, lacks in lacked.items())
+                    raise SurveyIncomplete(
+                        f"no project among the first {len(lacked)} holds a finished video, a scene and a "
+                        f"character ({said}); name one with --project"
+                    )
+            return await survey(session, chosen)
 
     result = asyncio.run(go())
     findings, _ = report(result, write=write)

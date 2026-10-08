@@ -19,7 +19,7 @@ from gflow_cli.api.client import FlowApiClient
 
 import video  # noqa: F401
 from video import gen, offscreen
-from video.flow import overlays
+from video.flow import overlays, version
 
 _GUARD = threading.Lock()
 _GUARD_POLL_S = 0.05
@@ -129,6 +129,9 @@ class FlowSession:
         await self.page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         if ready:
             await self.page.locator(ready).first.wait_for(state="visible", timeout=timeout_ms)
+        if version.current is None:
+            # The first Flow page of the process names the build every ledger row and paid answer then carries.
+            await version.read(self.page)
 
     @staticmethod
     def project_url(project_id: str) -> str:

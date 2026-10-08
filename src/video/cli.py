@@ -21,14 +21,17 @@ def flow() -> None:
 @click.option(
     "--project",
     "project_id",
-    required=True,
-    help="a project to walk (its composer, clips, scenes, characters)",
+    default=None,
+    help=(
+        "a project to walk (its composer, clips, scenes, characters); omitted, the first of the grid that holds a "
+        "finished video, a scene and a character is picked"
+    ),
 )
 @click.option(
     "--write", is_flag=True, help="make this survey the new baseline (flow_ui.json, flow_options.json)"
 )
 @click.option("--profile", default="default", show_default=True)
-def survey(project_id: str, write: bool, profile: str) -> None:
+def survey(project_id: str | None, write: bool, profile: str) -> None:
     """Walk Flow's pages and compare them with the repo's baselines; exit 1 on any difference ($0)."""
     from video.flow import survey as survey_mod
     from video.session import FlowSession
@@ -44,6 +47,28 @@ def survey(project_id: str, write: bool, profile: str) -> None:
     if write:
         click.echo("baselines written: src/video/flow/flow_ui.json, src/video/flow/flow_options.json")
     elif findings:
+        raise SystemExit(1)
+
+
+@flow.command()
+@click.option("--project", "project_id", default=None, help="also read this project's listing and page")
+@click.option("--profile", default="default", show_default=True)
+def check(project_id: str | None, profile: str) -> None:
+    """Flow against the repo's baselines, $0: the build label, the free replies' shapes, the home and project
+    pages; exit 1 on drift (a reply's shape or the UI moved), a new build alone is said."""
+    from video.flow import survey as survey_mod
+
+    report = _read(profile, lambda s: survey_mod.check(s, project_id))
+    build = report["build"]
+    changed = ", changed since the baseline" if build["changed"] else ""
+    click.echo(f"build {build['live'] or '?'} (baseline {build['baseline'] or 'none recorded'}{changed})")
+    for kind, where, what in report["ui"] + report["wire"]:
+        click.echo(f"{kind:22} {where:32} {what}")
+    click.echo(
+        f"{len(report['ui'])} ui and {len(report['wire'])} wire finding(s); "
+        f"{'DRIFT' if report['drift'] else 'no drift'}; screenshots in {report['folder']}"
+    )
+    if report["drift"]:
         raise SystemExit(1)
 
 

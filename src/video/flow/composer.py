@@ -17,9 +17,7 @@ import base64
 import contextlib
 import hashlib
 import json
-import os
 import re
-import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -30,7 +28,7 @@ from gflow_cli.data.redaction import redact_error_detail
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen, outcome
-from video.flow import agent, clips, overlays, reader
+from video.flow import agent, clips, overlays, reader, wire
 from video.flow import download as download_mod
 from video.session import PROJECT_READY, FlowSession
 
@@ -205,21 +203,8 @@ def _about_the_job(rpcids: str, job_rpcs: tuple[str, ...] = GFLOW_RPCS) -> bool:
     return any(rpcid in job_rpcs for rpcid in rpcids.split(","))
 
 
-CAPTURE_ENV = "VIDEO_CAPTURE_REPLIES"
-
-
-def _capture(rpcids: str, text: str) -> None:
-    """Write a reply Flow sent, raw, into the folder VIDEO_CAPTURE_REPLIES names: the fixtures that pin the reader are
-    built from replies Flow sent, never typed (a typed "CAE" in every fixture hid a week of unread replies)."""
-    folder = os.environ.get(CAPTURE_ENV)
-    if not folder:
-        return
-    try:
-        path = Path(folder)
-        path.mkdir(parents=True, exist_ok=True)
-        (path / f"{rpcids.replace(',', '+')}_{time.time_ns()}.txt").write_text(text, encoding="utf-8")
-    except OSError:
-        return
+CAPTURE_ENV = wire.CAPTURE_ENV
+_capture = wire.capture
 
 
 def _reply_read(flow: dict[str, Any], frames: Any) -> bool | None:

@@ -1,0 +1,1213 @@
+{
+ "measured": "2026-10-08",
+ "rpcs": {
+  "HTrJv": {
+   "view": "project",
+   "shape": {
+    "*": [
+     "null",
+     "null",
+     {
+      "*": [
+       "int",
+       [
+        "null",
+        "null",
+        "str",
+        "str",
+        "null",
+        "null",
+        "int",
+        "int",
+        "int",
+        "int",
+        "int"
+       ]
+      ]
+     },
+     {
+      "*": [
+       "str",
+       [
+        "str"
+       ]
+      ]
+     },
+     {
+      "*": [
+       "str",
+       {
+        "*": [
+         "str",
+         "null",
+         "null",
+         "null",
+         {
+          "*": [
+           "int",
+           {
+            "any": [
+             "list",
+             "records"
+            ]
+           }
+          ]
+         },
+         "null",
+         "null",
+         {
+          "*": [
+           {
+            "*": [
+             "int",
+             {
+              "any": [
+               "absent",
+               "int"
+              ]
+             },
+             {
+              "any": [
+               "absent",
+               "int"
+              ]
+             },
+             {
+              "any": [
+               "absent",
+               "int"
+              ]
+             },
+             {
+              "any": [
+               "absent",
+               "int"
+              ]
+             }
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "records"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "records"
+            ]
+           }
+          ]
+         },
+         "null",
+         {
+          "any": [
+           "int",
+           "null"
+          ]
+         },
+         "bool",
+         "null",
+         {
+          "*": [
+           "int",
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           }
+          ]
+         },
+         "null",
+         "int",
+         "null",
+         {
+          "any": [
+           "int",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "bool",
+           "null"
+          ]
+         },
+         "null",
+         "null",
+         "null",
+         [
+          {
+           "any": [
+            "absent",
+            "int",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "list"
+           ]
+          }
+         ],
+         {
+          "any": [
+           "bool",
+           "null"
+          ]
+         },
+         {
+          "*": [
+           "int"
+          ]
+         }
+        ]
+       },
+       {
+        "any": [
+         "bool",
+         "null"
+        ]
+       },
+       "str"
+      ]
+     },
+     {
+      "*": [
+       "str",
+       {
+        "*": [
+         "str",
+         "null",
+         "null",
+         "null",
+         {
+          "*": [
+           "int",
+           {
+            "any": [
+             "list",
+             "records"
+            ]
+           }
+          ]
+         },
+         "null",
+         "null",
+         "null",
+         {
+          "*": [
+           {
+            "*": [
+             "int"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "records"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "records"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "records"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "records"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "records"
+            ]
+           }
+          ]
+         },
+         {
+          "any": [
+           "int",
+           "null"
+          ]
+         },
+         "null",
+         "null",
+         "null",
+         {
+          "*": [
+           "int",
+           "int",
+           "int",
+           "int",
+           "int",
+           "int",
+           "int"
+          ]
+         },
+         "int",
+         "null",
+         "null",
+         "bool",
+         "null",
+         "null",
+         "null",
+         [
+          {
+           "any": [
+            "absent",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "int"
+           ]
+          }
+         ]
+        ]
+       },
+       {
+        "any": [
+         "bool",
+         "null"
+        ]
+       },
+       "str"
+      ]
+     },
+     "null",
+     {
+      "*": [
+       "str",
+       {
+        "*": [
+         "str",
+         "null",
+         "null",
+         "null",
+         {
+          "*": [
+           "int",
+           {
+            "*": [
+             "null",
+             "int"
+            ]
+           }
+          ]
+         },
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         "int",
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         {
+          "*": [
+           {
+            "*": [
+             "int"
+            ]
+           }
+          ]
+         }
+        ]
+       },
+       "null",
+       "str"
+      ]
+     }
+    ]
+   }
+  },
+  "UpteDb": {
+   "view": "grid",
+   "shape": [
+    {
+     "*": [
+      {
+       "any": [
+        "str",
+        "uuid"
+       ]
+      },
+      [
+       "str",
+       "null",
+       [
+        "int",
+        "int"
+       ],
+       {
+        "any": [
+         "absent",
+         "url"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "uuid"
+        ]
+       }
+      ]
+     ]
+    }
+   ]
+  },
+  "Yizz8d": {
+   "view": "grid",
+   "shape": [
+    "str",
+    "str",
+    "null",
+    "int",
+    "bool",
+    "null",
+    "null",
+    "null",
+    "null",
+    "null",
+    [
+     "str",
+     "str"
+    ],
+    "bool",
+    "bool"
+   ]
+  },
+  "Zzl0ze": {
+   "view": "project",
+   "shape": [
+    "null",
+    {
+     "*": [
+      "uuid",
+      "null",
+      "null",
+      [
+       {
+        "any": [
+         "null",
+         "str"
+        ]
+       },
+       [
+        "int",
+        "int"
+       ],
+       "null",
+       "null",
+       {
+        "any": [
+         "str",
+         "uuid"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "null",
+         "uuid"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "list"
+        ]
+       }
+      ],
+      "uuid",
+      {
+       "any": [
+        "absent",
+        "uuid"
+       ]
+      }
+     ]
+    },
+    {
+     "*": [
+      {
+       "any": [
+        "str",
+        "uuid"
+       ]
+      },
+      "uuid",
+      "uuid",
+      "str",
+      "null",
+      [
+       [
+        "int",
+        "int"
+       ],
+       {
+        "any": [
+         "null",
+         "str"
+        ]
+       },
+       "null",
+       "null",
+       "null",
+       "url",
+       [
+        {
+         "any": [
+          "null",
+          "records"
+         ]
+        },
+        {
+         "any": [
+          "list",
+          "null",
+          "records"
+         ]
+        },
+        {
+         "any": [
+          "null",
+          "records"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "list",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "int"
+         ]
+        }
+       ],
+       "null",
+       {
+        "any": [
+         "list",
+         "null"
+        ]
+       },
+       "int",
+       "url",
+       "null",
+       {
+        "any": [
+         "null",
+         "str"
+        ]
+       },
+       "int"
+      ],
+      {
+       "any": [
+        "list",
+        "null"
+       ]
+      },
+      {
+       "any": [
+        "absent",
+        "records"
+       ]
+      }
+     ]
+    },
+    {
+     "*": [
+      {
+       "any": [
+        "str",
+        "uuid"
+       ]
+      },
+      "int",
+      "str",
+      [
+       {
+        "any": [
+         "str",
+         "uuid"
+        ]
+       },
+       {
+        "any": [
+         "null",
+         "str"
+        ]
+       },
+       {
+        "any": [
+         "null",
+         "uuid"
+        ]
+       },
+       {
+        "any": [
+         "null",
+         "str"
+        ]
+       },
+       "null",
+       {
+        "any": [
+         "list",
+         "null"
+        ]
+       },
+       {
+        "any": [
+         "list",
+         "null"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "null"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "null"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "null"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "records"
+        ]
+       }
+      ]
+     ]
+    },
+    "null",
+    {
+     "any": [
+      "null",
+      "records"
+     ]
+    },
+    "null",
+    [
+     "null",
+     "null",
+     {
+      "*": [
+       "null",
+       "int",
+       "int",
+       "null",
+       "str"
+      ]
+     },
+     "null",
+     "int"
+    ]
+   ]
+  },
+  "eb1hJf": {
+   "view": "paid",
+   "shape": [
+    "null",
+    "int",
+    {
+     "*": [
+      "uuid",
+      "null",
+      "null",
+      [
+       "str",
+       [
+        "int",
+        "int"
+       ],
+       "null",
+       "null",
+       "uuid",
+       "uuid",
+       [
+        "int",
+        "int"
+       ]
+      ],
+      "uuid"
+     ]
+    },
+    {
+     "*": [
+      "uuid",
+      "uuid",
+      "uuid",
+      "null",
+      "null",
+      [
+       [
+        "int",
+        "int"
+       ],
+       "str",
+       "null",
+       "null",
+       "null",
+       "null",
+       [
+        "null",
+        [
+         [
+          "str",
+          "int",
+          [
+           "int"
+          ],
+          "null",
+          "int",
+          "int"
+         ],
+         {
+          "*": [
+           "null",
+           "int",
+           "uuid",
+           [
+            "null",
+            "null",
+            "int",
+            "int"
+           ]
+          ]
+         }
+        ],
+        {
+         "*": [
+          "null",
+          "null",
+          [
+           {
+            "*": [
+             "str"
+            ]
+           }
+          ]
+         ]
+        },
+        "null",
+        "int"
+       ],
+       "null",
+       [
+        "int"
+       ],
+       "int"
+      ],
+      "null",
+      {
+       "*": [
+        {
+         "any": [
+          "null",
+          "uuid"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "int",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "list",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "str"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "str"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "str"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "bool"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "int"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "jwpduf": {
+   "view": "paid",
+   "shape": [
+    "null",
+    {
+     "any": [
+      "int",
+      "null"
+     ]
+    },
+    {
+     "*": [
+      "uuid",
+      "uuid",
+      "uuid",
+      "null",
+      "null",
+      [
+       [
+        "int",
+        "int"
+       ],
+       "str",
+       "null",
+       "null",
+       "null",
+       "null",
+       [
+        "null",
+        [
+         [
+          "str",
+          "int",
+          [
+           "int"
+          ],
+          "null",
+          "int",
+          "int"
+         ],
+         {
+          "*": [
+           "null",
+           "int",
+           "uuid",
+           [
+            "null",
+            "null",
+            "int",
+            "int"
+           ]
+          ]
+         }
+        ],
+        {
+         "*": [
+          "null",
+          "null",
+          [
+           {
+            "*": [
+             "str"
+            ]
+           }
+          ]
+         ]
+        },
+        "null",
+        "int"
+       ],
+       "null",
+       [
+        "int"
+       ],
+       "int",
+       {
+        "any": [
+         "absent",
+         "null"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "null"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "null"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "int"
+        ]
+       }
+      ],
+      "null",
+      {
+       "*": [
+        {
+         "any": [
+          "null",
+          "uuid"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "int",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "list",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "str"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "str"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "str"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "bool"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "int"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "ngNC2": {
+   "view": "project",
+   "shape": [
+    "uuid",
+    [
+     "str",
+     "uuid"
+    ],
+    "null",
+    "null",
+    "null",
+    [
+     "null",
+     "null",
+     {
+      "*": [
+       {
+        "any": [
+         "null",
+         "str"
+        ]
+       },
+       "int",
+       "int",
+       {
+        "any": [
+         "absent",
+         "str"
+        ]
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  "nzlxg": {
+   "view": "grid",
+   "shape": [
+    "int",
+    "int",
+    "int",
+    "int",
+    "null",
+    "int"
+   ]
+  },
+  "tRARke": {
+   "view": "project",
+   "shape": [
+    {
+     "*": [
+      {
+       "any": [
+        "str",
+        "uuid"
+       ]
+      },
+      "int",
+      "str",
+      "str",
+      "null",
+      "uuid",
+      "null",
+      [
+       "int",
+       "int"
+      ],
+      [
+       "int",
+       "int"
+      ],
+      "null",
+      "null",
+      "str",
+      "int",
+      "null",
+      "null",
+      "url",
+      "null",
+      "str",
+      "bool",
+      "null",
+      "int",
+      {
+       "any": [
+        "null",
+        "url"
+       ]
+      },
+      {
+       "any": [
+        "list",
+        "null"
+       ]
+      },
+      "bool",
+      "int"
+     ]
+    }
+   ]
+  },
+  "yBhWQ": {
+   "view": "project",
+   "shape": [
+    {
+     "*": [
+      "str",
+      "int"
+     ]
+    }
+   ]
+  }
+ }
+}

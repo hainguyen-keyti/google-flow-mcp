@@ -22,6 +22,8 @@ from typing import Any
 
 from gflow_cli.data.redaction import redact_error_detail
 
+from video.flow import version
+
 VIDEO_KINDS = ("t2v", "i2v", "r2v")
 IMAGE_KINDS = ("t2i", "i2i")
 KINDS = VIDEO_KINDS + IMAGE_KINDS
@@ -194,6 +196,8 @@ class Ledger:
     def append(self, job_id: str, status: str, **fields: Any) -> None:
         check_job_id(job_id)
         row = {"ts": time.time(), "job_id": job_id, "status": status, **fields, "code": code_version()}
+        if version.current:
+            row["flow_build"] = version.current
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(_scrubbed(row), ensure_ascii=False, default=_scrub_other) + "\n")

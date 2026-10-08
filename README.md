@@ -13,7 +13,7 @@ not been measured, it says so.
 
 ## What it is, and what it is not
 
-**It is** a control layer: 49 MCP tools plus a CLI, with a spend ledger, a double-charge guard, and prices in
+**It is** a control layer: 50 MCP tools plus a CLI, with a spend ledger, a double-charge guard, and prices in
 every tool description.
 
 **It is not** a video maker. The script, the shot list, the camera angles and the quality of the result are the
@@ -76,7 +76,7 @@ cp .mcp.json.example .mcp.json
 ```
 
 Edit the copy if `uv` is not on your PATH, then open the folder with an MCP client (Claude Code reads
-`.mcp.json` from the project root). The server serves **49 tools**; every description carries its price.
+`.mcp.json` from the project root). The server serves **50 tools**; every description carries its price.
 
 A server that is already running does **not** pick up new code, and an open session keeps the old tool
 descriptions: after changing anything here, start a new session.

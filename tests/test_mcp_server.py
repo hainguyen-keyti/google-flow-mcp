@@ -82,6 +82,8 @@ EXPECTED_TOOLS = {
     "job_collect",
     # Plan AO: prices, lengths and caps as data, 48 to 49 on purpose.
     "flow_capabilities",
+    # Plan AQ: the Flow build, reply shapes and UI against the baselines, 49 to 50 on purpose.
+    "flow_check",
 }
 
 
@@ -172,6 +174,7 @@ TOOL_CALLS: dict[str, dict] = {
     "job_status": {"job_id": "job-status"},
     "job_collect": {"job_id": "job-collect"},
     "flow_capabilities": {},
+    "flow_check": {},
 }
 
 
@@ -836,6 +839,45 @@ def test_a_paid_cell_goes_out_with_its_table_price_in_the_answer(
     # Omni's price depends on the resolution radio the composer was left on; the run pins it first. Veo has no row.
     model = change.get("model", "omni-flash")
     assert pinned == ([change.get("resolution", "720p")] if model == "omni-flash" else []), pinned
+
+
+def test_a_paid_answer_carries_the_flow_build_the_process_read(monkeypatch, tmp_path):
+    # Plan AQ (I-drift-1): the answer says which Flow build it ran on, once a session has read one.
+    async def no_pin(page, resolution):
+        return None
+
+    monkeypatch.setattr(mcp_server.ingredients_mod, "pin_resolution", no_pin)
+    monkeypatch.setattr(mcp_server.version, "current", "Zz9.1.O")
+
+    answer = _answer_of(monkeypatch, tmp_path, "gen_t2v", SPEND_CALLS["gen_t2v"])
+
+    assert answer["flow_build"] == "Zz9.1.O", answer
+
+
+def test_flow_check_is_free_and_answers_the_build_and_the_drift(monkeypatch):
+    asked = []
+
+    async def fake_check(self, project_id=None):
+        asked.append(project_id)
+        return {
+            "build": {"live": "Zz9.1.O", "baseline": None, "changed": False},
+            "ui": [],
+            "wire": [],
+            "drift": False,
+        }
+
+    monkeypatch.setattr(mcp_server.Backend, "flow_check", fake_check)
+
+    async def fn(session):
+        return [
+            await session.call_tool("flow_check", {}),
+            await session.call_tool("flow_check", {"project": "P1"}),
+        ]
+
+    first, second = with_client(fn)
+    assert _payload(first)["build"]["live"] == "Zz9.1.O" and _payload(second)["drift"] is False
+    assert asked == [None, "P1"]
+    assert served_tool_objects()["flow_check"].description.endswith("Free.")
 
 
 def _answer_of(monkeypatch, tmp_path, tool, arguments):

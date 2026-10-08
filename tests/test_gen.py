@@ -682,3 +682,17 @@ def test_no_test_leaves_a_fake_code_marker_behind(tmp_path):
 
     assert ledger.rows("job-real")[0]["code"] == gen.code_version()
     assert not gen.code_version().startswith("abc1234"), gen.code_version()
+
+
+def test_a_row_carries_the_flow_build_once_the_process_read_one(monkeypatch, tmp_path):
+    # Plan AQ (I-drift-1): a run that went wrong can be matched to the Flow build it ran on.
+    from video.flow import version
+
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    monkeypatch.setattr(version, "current", None)
+    ledger.append("job-before", "planned")
+    monkeypatch.setattr(version, "current", "Zz9.1.O")
+    ledger.append("job-after", "planned")
+
+    assert "flow_build" not in ledger.rows("job-before")[0]
+    assert ledger.rows("job-after")[0]["flow_build"] == "Zz9.1.O"

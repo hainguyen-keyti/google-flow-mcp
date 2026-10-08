@@ -412,3 +412,42 @@ def test_the_home_page_is_ready_on_an_account_with_no_projects():
     assert session_mod.NEW_PROJECT_BUTTON in selectors, selectors
     # Scoped to the signed-in projects page, so no other page's button can pass for a signed-in grid.
     assert session_mod.NEW_PROJECT_BUTTON == "flow-projects-page button.new-project-button"
+
+
+def test_the_first_navigation_reads_the_flow_build_once_for_the_process(monkeypatch, tmp_path):
+    # Plan AQ (I-drift-1): the build every ledger row and paid answer carries comes off the first Flow page.
+    from video.flow import version
+
+    monkeypatch.setattr(version, "current", None)
+
+    class _Locator:
+        first = None
+
+        async def wait_for(self, **kwargs):
+            return None
+
+    class _Page:
+        def __init__(self):
+            self.evaluated = 0
+            locator = _Locator()
+            locator.first = locator
+            self._locator = locator
+
+        async def goto(self, url, **kwargs):
+            return None
+
+        def locator(self, selector):
+            return self._locator
+
+        async def evaluate(self, js):
+            self.evaluated += 1
+            return ["https://g/k=boq-labs-ai-sandbox.AiSandboxAngularFrontend.en.Zz9.1.O/"]
+
+    session = FlowSession(profile_dir=tmp_path)
+    session.page = _Page()
+
+    asyncio.run(session.goto("https://flow.google.com/", ready="flow-projects-page"))
+    asyncio.run(session.goto("https://flow.google.com/project/x"))
+
+    assert version.current == "Zz9.1.O"
+    assert session.page.evaluated == 1, "read once per process, not on every navigation"

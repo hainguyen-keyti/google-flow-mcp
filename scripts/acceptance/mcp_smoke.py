@@ -29,6 +29,7 @@ ever changes, so this row cannot start costing money quietly.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import re
@@ -49,7 +50,14 @@ MEDIA_LIMIT = 20
 MEDIA_CEILING = 20_000
 
 # Free AND side-effect free: safe to call on the owner's live account on every run.
-READ_ONLY_NO_ARGS = ("flow_lane", "flow_projects", "flow_credits", "flow_tools", "flow_capabilities")
+READ_ONLY_NO_ARGS = (
+    "flow_lane",
+    "flow_projects",
+    "flow_credits",
+    "flow_tools",
+    "flow_capabilities",
+    "flow_check",
+)
 # The surveyed table itself, read here off the file and not through the code under test.
 OPTIONS_FILE = Path(mcp_server.__file__).with_name("flow") / "flow_options.json"
 READ_ONLY_PER_PROJECT = ("flow_media", "flow_characters", "flow_uploads", "scene_list")
@@ -187,6 +195,19 @@ def a_balance(payload):
     balance = payload.get("balance") if isinstance(payload, dict) else None
     if isinstance(balance, bool) or not isinstance(balance, int) or balance < 0:
         return f"balance is {balance!r}, expected an int of 0 or more"
+    return None
+
+
+def a_check_report(payload):
+    # Plan AQ: the drift check must name the live build and say whether what the repo reads moved.
+    if not isinstance(payload, dict) or not isinstance(payload.get("build"), dict):
+        return f"expected an object holding a build, got {str(payload)[:60]}"
+    if not payload["build"].get("live"):
+        return f"no live build label was read: {payload['build']}"
+    if not isinstance(payload.get("drift"), bool) or not isinstance(payload.get("wire"), list):
+        return f"drift {payload.get('drift')!r} or wire {str(payload.get('wire'))[:40]!r} is not what the tool promises"
+    if payload["drift"]:
+        return f"Flow drifted from the baselines: ui {payload.get('ui')}, wire {payload['wire']}"
     return None
 
 
@@ -518,6 +539,7 @@ async def run(findings):
                     # Called with no project on purpose: that is the path that opens the first project itself.
                     "flow_tools": a_tool_list,
                     "flow_capabilities": a_capability_map,
+                    "flow_check": a_check_report,
                 }
                 projects = None
                 for name in READ_ONLY_NO_ARGS:
@@ -701,6 +723,14 @@ async def run(findings):
 
 
 async def main() -> int:
+    parser = argparse.ArgumentParser(description="The read tools against the real Flow, $0.")
+    parser.add_argument(
+        "--profile",
+        default="default",
+        help="the gflow profile (account) to read; another one when the default is leased by a running server",
+    )
+    args = parser.parse_args()
+    mcp_server.backend = mcp_server.Backend(profile=args.profile)
     findings: list[dict[str, str]] = []
     try:
         await run(findings)
