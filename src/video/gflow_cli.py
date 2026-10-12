@@ -3,7 +3,7 @@
 python -m video.gflow_cli video t2v "..." --project <id> --json
 """
 
-import re
+import json
 import sys
 
 from gflow_cli.cli import main
@@ -19,11 +19,26 @@ def hides_window(argv: list[str]) -> bool:
     return command is not None and command != "auth"
 
 
+def requested_models(body: str) -> set[str]:
+    """The model each request of an image submit body (rpc ogiZ0b, form-decoded) names: the sixth field of every
+    request in the second element of the inner JSON, measured 2026-10-12 on a t2i and an i2i
+    (tests/fixtures/requests). Empty for a body in any other layout."""
+    start = body.find("f.req=")
+    if start < 0:
+        return set()
+    try:
+        outer, _ = json.JSONDecoder().raw_decode(body, start + len("f.req="))
+        return {request[5] for request in json.loads(outer[0][0][1])[1]}
+    except (ValueError, TypeError, IndexError, KeyError):
+        return set()
+
+
 def accept_nano_banana_2_1() -> None:
     """Measured 2026-10-07 (out/i2i_probe): Flow's image menu offers "Nano Banana 2.1" where it offered "Nano Banana
     2", gflow's matcher (contains "Nano Banana 2", not "Lite") picks it, and the submit body names it BELUGA, so gflow
     0.78.0 (0.83.0 too) refused every nano2 image as made with persisted settings. A Nano Banana 2 request whose body
-    names BELUGA is that run; every other check gflow makes of the body still holds."""
+    names BELUGA in the model field of every request is that run; a beluga in the prompt sits elsewhere and does not
+    count (review 2026-10-08, D8), and every other check gflow makes of the body still holds."""
     from gflow_cli.api.image import Model
     from gflow_cli.api.transports import migrated_composer
 
@@ -32,9 +47,7 @@ def accept_nano_banana_2_1() -> None:
         return
 
     def check(body, reference_ids, model=None):
-        # The quoted model field opens the request's inner array (`[\"BELUGA\",\"<reference>\"...`); a prompt that
-        # mentions a beluga is quoted elsewhere and must not pass for it (review 2026-10-08, D8).
-        if model is Model.NARWHAL and body and re.search(r'\[\\*"BELUGA\\*"', body):
+        if model is Model.NARWHAL and body and requested_models(body) == {"BELUGA"}:
             return checked(body, reference_ids, None)
         return checked(body, reference_ids, model)
 

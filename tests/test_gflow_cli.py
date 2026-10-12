@@ -1,12 +1,17 @@
 """The repo's gflow wrapper: what it changes in gflow before running it."""
 
+import json
+from pathlib import Path
+
 import pytest
 from gflow_cli.api.image import Model as ImageModel
 from gflow_cli.api.transports import batchexecute, migrated_composer
 
 from video import gflow_cli
 
-REF = "e61f5b7f-5b59-4b25-bb83-8640d6807443"
+REQUESTS = Path(__file__).parent / "fixtures" / "requests"
+# out/ar/capture_image_bodies.py maps a body's references to stand-ins before any other uuid.
+REF = "00000000-0000-4000-8000-000000000001"
 UUID1 = "e61f5b7f-5b59-4b25-bb83-8640d6807441"
 UUID2 = "e61f5b7f-5b59-4b25-bb83-8640d6807442"
 UUID3 = "e61f5b7f-5b59-4b25-bb83-8640d6807443"
@@ -19,39 +24,71 @@ def patched(monkeypatch):
     return migrated_composer._image_body_problem
 
 
-def test_a_nano_banana_2_request_whose_body_names_2_1_is_the_run_asked_for(patched):
-    # Measured 2026-10-07 (out/i2i_probe): Flow's menu offers "Nano Banana 2.1" in place of "Nano Banana 2", gflow's
-    # matcher picks it, and the ogiZ0b body names BELUGA, so gflow 0.78.0 refused every nano2 image as "persisted
-    # settings" (WireFormatError, exit 7).
-    body = f'f.req=[["ogiZ0b","[\\\\"BELUGA\\\\",\\\\"{REF}\\\\"]"]]'
+def _captured(kind):
+    # The ogiZ0b bodies Flow received on 2026-10-12 (one t2i, one i2i, nano2, count 1), form-decoded as gflow hands
+    # them to its check, captured by out/ar/capture_image_bodies.py with the `at` value, tokens and uuids replaced.
+    return (REQUESTS / f"ogiZ0b_{kind}.txt").read_text(encoding="utf-8")
 
-    assert patched(body, (REF,), ImageModel.NARWHAL) is None
+
+def _with_requests(body, change):
+    start = body.index("f.req=") + len("f.req=")
+    outer, end = json.JSONDecoder().raw_decode(body, start)
+    inner = json.loads(outer[0][0][1])
+    change(inner[1])
+    outer[0][0][1] = json.dumps(inner, separators=(",", ":"))
+    return body[:start] + json.dumps(outer, separators=(",", ":")) + body[end:]
+
+
+@pytest.mark.parametrize(("kind", "references"), [("t2i", ()), ("i2i", (REF,))])
+def test_the_bodies_flow_received_for_a_nano_banana_2_request_are_the_run_asked_for(
+    patched, kind, references
+):
+    # Flow's menu offers "Nano Banana 2.1" in place of "Nano Banana 2" (2026-10-07), gflow's matcher picks it, and the
+    # body names it BELUGA as the sixth field of each request, so gflow 0.78.0 refuses every nano2 image as "persisted
+    # settings" (WireFormatError, exit 7). The check of 2026-10-08 looked for `[\"BELUGA\"`, a layout never measured.
+    assert patched(_captured(kind), references, ImageModel.NARWHAL) is None
+
+
+def test_another_model_in_the_model_field_is_refused_whatever_the_prompt_says(patched):
+    # Review 2026-10-08 (D8): a check that matched the word anywhere passed a prompt that mentions a beluga.
+    body = _with_requests(_captured("t2i"), lambda requests: requests[0].__setitem__(5, "GEM_PIX_2"))
+    body = body.replace("soft daylight", "soft daylight, a BELUGA toy beside it")
+
+    assert "BELUGA" in body
+    assert "NARWHAL" in patched(body, (), ImageModel.NARWHAL)
+
+
+def test_every_request_of_the_body_has_to_name_the_model(patched):
+    def second_request_on_another_model(requests):
+        requests.append(list(requests[0]))
+        requests[1][5] = "GEM_PIX_2"
+
+    body = _with_requests(_captured("t2i"), second_request_on_another_model)
+
+    assert "NARWHAL" in patched(body, (), ImageModel.NARWHAL)
+
+
+def test_a_body_in_a_layout_never_measured_goes_to_gflows_own_check(patched):
+    # The hand-typed body the check of 2026-10-08 was written against; Flow's bodies do not look like this.
+    body = 'f.req=[["ogiZ0b","[\\\\"BELUGA\\\\"]"]]'
+
+    assert "NARWHAL" in patched(body, (), ImageModel.NARWHAL)
 
 
 @pytest.mark.parametrize(
-    ("body", "says"),
+    ("body", "references", "says"),
     [
-        (f'f.req=[["ogiZ0b","[\\\\"GEM_PIX_2\\\\",\\\\"{REF}\\\\"]"]]', "NARWHAL"),
-        ('f.req=[["ogiZ0b","[\\\\"BELUGA\\\\"]"]]', "missing uploaded reference"),
-        ("", "could not be read"),
+        (_captured("i2i"), ("00000000-0000-4000-8000-000000000099",), "missing uploaded reference"),
+        ("", (), "could not be read"),
     ],
-    ids=["another model", "the reference missing", "no body"],
+    ids=["a reference missing", "no body"],
 )
-def test_every_other_check_of_the_body_still_refuses(patched, body, says):
-    assert says in patched(body, (REF,), ImageModel.NARWHAL)
+def test_every_other_check_of_the_body_still_refuses(patched, body, references, says):
+    assert says in patched(body, references, ImageModel.NARWHAL)
 
 
 def test_another_model_is_checked_as_gflow_checks_it(patched):
-    body = f'f.req=[["ogiZ0b","[\\\\"BELUGA\\\\",\\\\"{REF}\\\\"]"]]'
-
-    assert "GEM_PIX_2" in patched(body, (REF,), ImageModel.GEM_PIX_2)
-
-
-def test_a_prompt_that_mentions_a_beluga_does_not_pass_for_the_model_field(patched):
-    # Review 2026-10-08 (D8): the wrapper matched the word anywhere in the body, the prompt included.
-    body = f'f.req=[["ogiZ0b","[\\\\"GEM_PIX_2\\\\",\\\\"{REF}\\\\",\\\\"a BELUGA whale\\\\"]"]]'
-
-    assert "NARWHAL" in patched(body, (REF,), ImageModel.NARWHAL)
+    assert "GEM_PIX_2" in patched(_captured("t2i"), (), ImageModel.GEM_PIX_2)
 
 
 def _record(version):
