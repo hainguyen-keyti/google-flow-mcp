@@ -38,6 +38,8 @@ RESULTS = BASE / "results.jsonl"
 CTX = BASE / "ctx.json"
 RUN = time.strftime("%Y%m%d-%H%M%S")
 PROMPT_STILL = "A small yellow rubber duck floating in a white bathtub full of foam, soft daylight, static camera, no people"
+# The clip the scene steps add: Flow titles a media from its prompt, and scene_add_clip refuses a shared title.
+PROMPT_CLIP = "A glass wind chime swaying in a light breeze on a wooden porch, static camera, no people"
 
 
 def _ids(answer: Any, *keys: str) -> Any:
@@ -550,7 +552,7 @@ step(
     "gen_video",
     lambda c: {
         "project": c["P"],
-        "prompt": PROMPT_STILL + ", the duck bobs gently",
+        "prompt": PROMPT_CLIP,
         "model": "omni-flash",
         "resolution": "360p",
         "duration": 4,
@@ -566,7 +568,7 @@ step(
     "gen_video",
     lambda c: {
         "project": c["P"],
-        "prompt": PROMPT_STILL + ", the duck bobs gently",
+        "prompt": PROMPT_CLIP,
         "model": "omni-flash",
         "resolution": "360p",
         "duration": 4,
