@@ -30,13 +30,20 @@ def _captured(kind):
     return (REQUESTS / f"ogiZ0b_{kind}.txt").read_text(encoding="utf-8")
 
 
-def _with_requests(body, change):
+def _with_envelopes(body, change):
     start = body.index("f.req=") + len("f.req=")
     outer, end = json.JSONDecoder().raw_decode(body, start)
-    inner = json.loads(outer[0][0][1])
-    change(inner[1])
-    outer[0][0][1] = json.dumps(inner, separators=(",", ":"))
+    change(outer[0])
     return body[:start] + json.dumps(outer, separators=(",", ":")) + body[end:]
+
+
+def _with_requests(body, change):
+    def rewrite(envelopes):
+        inner = json.loads(envelopes[0][1])
+        change(inner[1])
+        envelopes[0][1] = json.dumps(inner, separators=(",", ":"))
+
+    return _with_envelopes(body, rewrite)
 
 
 @pytest.mark.parametrize(("kind", "references"), [("t2i", ()), ("i2i", (REF,))])
@@ -49,13 +56,16 @@ def test_the_bodies_flow_received_for_a_nano_banana_2_request_are_the_run_asked_
     assert patched(_captured(kind), references, ImageModel.NARWHAL) is None
 
 
-def test_another_model_in_the_model_field_is_refused_whatever_the_prompt_says(patched):
-    # Review 2026-10-08 (D8): a check that matched the word anywhere passed a prompt that mentions a beluga.
+@pytest.mark.parametrize("word", ["BELUGA", "NARWHAL"])
+def test_another_model_in_the_model_field_is_refused_whatever_the_prompt_says(patched, word):
+    # Review 2026-10-08 (D8): a check that matched the word anywhere passed a prompt that mentions a beluga, and
+    # gflow's own check matches NARWHAL anywhere in the body the same way (review of plan AR, 2026-10-12).
     body = _with_requests(_captured("t2i"), lambda requests: requests[0].__setitem__(5, "GEM_PIX_2"))
-    body = body.replace("soft daylight", "soft daylight, a BELUGA toy beside it")
+    body = body.replace("soft daylight", f"soft daylight, a {word} toy beside it")
+    problem = patched(body, (), ImageModel.NARWHAL)
 
-    assert "BELUGA" in body
-    assert "NARWHAL" in patched(body, (), ImageModel.NARWHAL)
+    assert word in body
+    assert problem is not None and "NARWHAL" in problem
 
 
 def test_every_request_of_the_body_has_to_name_the_model(patched):
@@ -66,6 +76,35 @@ def test_every_request_of_the_body_has_to_name_the_model(patched):
     body = _with_requests(_captured("t2i"), second_request_on_another_model)
 
     assert "NARWHAL" in patched(body, (), ImageModel.NARWHAL)
+
+
+def _second_envelope_on_another_model(envelopes):
+    inner = json.loads(envelopes[0][1])
+    inner[1][0][5] = "GEM_PIX_2"
+    envelopes.append([envelopes[0][0], json.dumps(inner, separators=(",", ":")), *envelopes[0][2:]])
+
+
+@pytest.mark.parametrize(
+    "change",
+    [_second_envelope_on_another_model, lambda envelopes: envelopes[0].__setitem__(0, "XYZ")],
+    ids=["a second envelope on another model", "an envelope of another rpc"],
+)
+def test_only_the_one_image_envelope_flow_sends_is_read(patched, change):
+    assert "NARWHAL" in patched(_with_envelopes(_captured("t2i"), change), (), ImageModel.NARWHAL)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda requests: requests.__setitem__(0, None),
+        lambda requests: requests.__setitem__(0, []),
+        lambda requests: requests.__setitem__(0, {"5": "BELUGA"}),
+        lambda requests: requests[0].__setitem__(5, ["BELUGA"]),
+    ],
+    ids=["a null request", "a short request", "a request as an object", "a model as a list"],
+)
+def test_a_body_whose_requests_cannot_be_read_goes_to_gflows_own_check(patched, change):
+    assert "NARWHAL" in patched(_with_requests(_captured("t2i"), change), (), ImageModel.NARWHAL)
 
 
 def test_a_body_in_a_layout_never_measured_goes_to_gflows_own_check(patched):

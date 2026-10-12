@@ -225,6 +225,15 @@ def test_a_healthy_account_passes_every_row(monkeypatch):
     assert _failing(rows) == {}
 
 
+@pytest.mark.parametrize("version_field", ["CAE", "CAI"])
+def test_a_version_field_written_before_2026_10_05_still_passes(monkeypatch, version_field):
+    # Records made before Flow moved to null keep their string (project LeeLyLy, 2026-09-18: CAE and CAI).
+    replies = _replies()
+    replies["versions"][0]["type"] = version_field
+
+    assert _failing(_rows(monkeypatch, replies)) == {}
+
+
 def test_the_smoke_asks_where_a_job_the_ledger_settled_stands(monkeypatch, _out):
     # job_status needs a job id the way scene_clips needs a scene id; the gate takes the newest job one ledger alone
     # settled as done, which the server answers from the row with no browser (the offline account has none).
@@ -353,6 +362,10 @@ def _meta_of_another_project(replies):
 def _grid_rows_instead_of_versions(replies):
     # The shape a swallowed all_versions produces: grid rows carry no `listed`, version records always do.
     replies["versions"] = [dict(replies["media"]["media"][0])]
+
+
+def _version_without_workflow(replies):
+    replies["versions"][0]["workflow_id"] = None
 
 
 def _version_field_of_another_kind(replies):
@@ -546,6 +559,7 @@ CORRUPTIONS = [
     ("flow_media", _meta_of_another_project),
     ("flow_media all", _grid_rows_instead_of_versions),
     ("flow_media all", _version_field_of_another_kind),
+    ("flow_media all", _version_without_workflow),
     # A bare list breaks both reads of the versions, the plain one and the filtered one.
     (("flow_media all", "flow_media filtered"), _versions_as_a_bare_list),
     # No entity id also leaves flow_voices nothing to read, so both rows go non-PASS.

@@ -1,24 +1,20 @@
 """The live verification script's steps, read without running them."""
 
+import asyncio
 import importlib.util
 import os
 from pathlib import Path
 
 import pytest
 
+from video import mcp_server
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "acceptance" / "mcp_verify_all.py"
+# A served tool that takes a prompt makes a media from it, and Flow titles that media from the prompt.
 MAKES_MEDIA = {
-    "gen_video",
-    "job_submit",
-    "gen_t2i",
-    "gen_i2i",
-    "gen_t2v",
-    "gen_i2v",
-    "gen_r2v",
-    "gen_character",
-    "character_create",
-    "clip_extend",
-    "clip_edit",
+    tool.name
+    for tool in asyncio.run(mcp_server.server.list_tools())
+    if "prompt" in tool.input_schema["properties"]
 }
 
 
