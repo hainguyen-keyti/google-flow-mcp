@@ -347,18 +347,38 @@ class Walker:
     def page(self) -> Any:
         return self.session.page
 
-    async def settle_mode(self) -> None:
-        """One composer mode before the project and sidebar routes are recorded: the mode the last run left made 31
-        of the 72 differences of the survey of 2026-10-08. The mode is the baseline's first; no baseline, no click."""
+    @staticmethod
+    def first_mode() -> str | None:
         modes = (
             json.loads(OPTIONS_BASELINE.read_text(encoding="utf-8"))["video"]["modes"]
             if OPTIONS_BASELINE.exists()
             else []
         )
-        if not modes:
+        return modes[0] if modes else None
+
+    async def settle(self) -> None:
+        """Inside the open settings: the Video tab, the baseline's first mode, its first model, x1, the one composer
+        state every route is recorded in. The mode the last run left made 31 of the 72 differences of the survey of
+        2026-10-08; the Image tab and the Veo model the day's runs left made all 34 of 2026-10-12, since the mode
+        radio is not shown on the Image tab."""
+        await self.radio("Video")
+        mode = self.first_mode()
+        if mode:
+            await self.radio(mode)
+        _, names = await self.model_names()
+        await self.page.keyboard.press("Escape")
+        await self.page.wait_for_timeout(600)
+        if names:
+            await self.pick_model(names[0])
+        await self.pane()
+        await self.radio("x1")
+
+    async def settle_mode(self) -> None:
+        """The settled composer before the project and sidebar routes are recorded; no baseline, no click."""
+        if not self.first_mode():
             return
         await composer._open_settings(self.page, "survey")
-        await self.radio(modes[0])
+        await self.settle()
         await self.page.keyboard.press("Escape")
         await self.page.wait_for_timeout(600)
 
@@ -465,8 +485,9 @@ class Walker:
 
     async def walk_settings(self) -> dict[str, Any]:
         await composer._open_settings(self.page, "survey")
-        # The panel opens on the tab the last run left: Image after gen_i2i, which hides Frames and Ingredients.
-        await self.radio("Video")
+        # The panel opens on the tab, the model and the count the last run left: Image after gen_i2i hides Frames and
+        # Ingredients, and a Veo model hides Omni's lengths and resolutions.
+        await self.settle()
         await self.record("composer settings", _PANE)
         video: dict[str, Any] = {"aspects": [], "modes": {}}
         first_model = None

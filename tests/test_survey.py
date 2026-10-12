@@ -347,7 +347,10 @@ def test_the_walk_settles_one_composer_mode_before_recording_the_project_and_the
     )
 
 
-def test_settling_the_mode_opens_the_settings_and_picks_the_baseline_first_mode(monkeypatch, tmp_path):
+def test_settling_puts_the_composer_on_video_the_first_mode_the_first_model_and_x1(monkeypatch, tmp_path):
+    # Survey 2026-10-12: the day's runs left the account's composer on Image (Nano Banana 2.1), where the mode radio
+    # is not shown, so a settle that clicked the mode alone recorded the project and six sidebar pages with the Image
+    # composer (32 of the 34 differences).
     opened = []
 
     async def opened_settings(page, label="settings"):
@@ -360,7 +363,13 @@ def test_settling_the_mode_opens_the_settings_and_picks_the_baseline_first_mode(
     asyncio.run(walker.settle_mode())
 
     first = json.loads(survey.OPTIONS_BASELINE.read_text(encoding="utf-8"))["video"]["modes"][0]
-    assert opened == ["survey"] and walker.log == [("radio", first)], (opened, walker.log)
+    assert opened == ["survey"], opened
+    assert walker.log == [
+        ("radio", "Video"),
+        ("radio", first),
+        ("model", "Omni 1.1 Flash"),
+        ("radio", "x1"),
+    ], walker.log
 
 
 def test_what_a_project_lacks_for_a_full_walk_is_named():
@@ -555,6 +564,7 @@ def test_check_reads_the_build_the_free_replies_and_the_pages_and_reports_no_dri
     monkeypatch.setattr(survey.agent, "set_mode", fake_set_mode)
     monkeypatch.setattr(survey.composer, "_open_settings", opened)
     monkeypatch.setattr(survey.Walker, "radio", lambda self, text: _settled())
+    monkeypatch.setattr(survey.Walker, "model_names", lambda self: _no_models())
     monkeypatch.setattr(survey.version, "current", None)
     base = json.loads(survey.UI_BASELINE.read_text(encoding="utf-8"))
     # The labels the page answers are empty, so the baseline's labels are made empty too: this is a wire and build
@@ -573,6 +583,10 @@ def test_check_reads_the_build_the_free_replies_and_the_pages_and_reports_no_dri
 
 async def _settled():
     return True
+
+
+async def _no_models():
+    return None, []
 
 
 def test_check_with_a_project_compares_the_listing_and_a_moved_status_cell_is_drift(monkeypatch, tmp_path):
@@ -606,6 +620,7 @@ def test_check_with_a_project_compares_the_listing_and_a_moved_status_cell_is_dr
     monkeypatch.setattr(survey.agent, "set_mode", fake_set_mode)
     monkeypatch.setattr(survey.composer, "_open_settings", opened)
     monkeypatch.setattr(survey.Walker, "radio", lambda self, text: _settled())
+    monkeypatch.setattr(survey.Walker, "model_names", lambda self: _no_models())
     monkeypatch.setattr(survey.version, "current", None)
     base = json.loads(survey.UI_BASELINE.read_text(encoding="utf-8"))
     for route in base["routes"].values():
@@ -815,6 +830,22 @@ def test_the_settings_panel_is_recorded_on_the_video_tab_whatever_tab_it_opened_
 
     recorded = [entry for entry in walker.log if entry[0] == "record"]
     assert recorded == [("record", "composer settings", "Video")], walker.log
+
+
+def test_the_settings_panel_is_recorded_after_the_same_settle_whatever_model_the_last_run_left(
+    monkeypatch, tmp_path
+):
+    # Survey 2026-10-12: recorded on the Veo model the last run left, the panel lacked Omni's lengths and
+    # resolutions (6 of the 34 differences).
+    walker = _walk_settings(monkeypatch, tmp_path)
+
+    recorded = walker.log.index(("record", "composer settings", "Video"))
+    assert walker.log[:recorded] == [
+        ("radio", "Video"),
+        ("radio", "Frames"),
+        ("model", "Omni 1.1 Flash"),
+        ("radio", "x1"),
+    ], walker.log
 
 
 def test_the_walk_leaves_the_composer_on_the_first_model_at_x1(monkeypatch, tmp_path):
