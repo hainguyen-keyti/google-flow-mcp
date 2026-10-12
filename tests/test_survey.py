@@ -372,6 +372,83 @@ def test_settling_puts_the_composer_on_video_the_first_mode_the_first_model_and_
     ], walker.log
 
 
+class _NoVideoTabWalker:
+    """A panel left on Image whose Video tab cannot be found (a renamed tab, say)."""
+
+    @staticmethod
+    def make(tmp_path):
+        walker = _SettingsWalker(tmp_path)
+        clicked = walker.radio
+
+        async def radio(text):
+            if text == "Video":
+                walker.log.append(("radio", text))
+                return False
+            return await clicked(text)
+
+        walker.radio = radio
+        return walker
+
+
+def test_a_composer_that_cannot_reach_the_video_tab_is_not_settled_and_its_model_is_left_alone(tmp_path):
+    # Review of plan AS (D2): the settle went on after a Video tab it could not find and picked the first model of
+    # the Image tab's menu, a lasting change to the account's image model.
+    walker = _NoVideoTabWalker.make(tmp_path)
+
+    settled = asyncio.run(walker.settle())
+
+    assert settled is False
+    assert not [entry for entry in walker.log if entry[0] == "model"], walker.log
+    assert walker.tab == "Image"
+
+
+def test_the_settings_walk_stops_when_the_composer_cannot_be_settled(monkeypatch, tmp_path):
+    async def opened(page, label="settings"):
+        return ""
+
+    monkeypatch.setattr(survey.composer, "_open_settings", opened)
+    walker = _NoVideoTabWalker.make(tmp_path)
+
+    with pytest.raises(survey.SurveyIncomplete, match="Video tab"):
+        asyncio.run(walker.walk_settings())
+    assert not [entry for entry in walker.log if entry[0] == "record"], walker.log
+
+
+def test_the_walk_stops_before_any_page_when_the_composer_cannot_be_settled(monkeypatch, tmp_path):
+    class _Session:
+        page = _SettingsPage()
+
+        def project_url(self, project_id):
+            return f"https://flow/project/{project_id}"
+
+        async def goto(self, url, ready=None):
+            return None
+
+    async def unsettled(self):
+        return False
+
+    recorded = []
+
+    async def record(self, route, scope=None):
+        recorded.append(route)
+
+    monkeypatch.setattr(survey.Walker, "settle_mode", unsettled)
+    monkeypatch.setattr(survey.Walker, "record", record)
+    walker = survey.Walker(_Session(), "P", tmp_path)
+
+    with pytest.raises(survey.SurveyIncomplete, match="Video tab"):
+        asyncio.run(walker._walk([], []))
+    assert recorded == []
+
+
+def test_the_check_settles_the_composer_before_it_records_the_project_page():
+    # Review of plan AS (D4): the check tests fake the settle away, so only the order in the source pins it.
+    import inspect
+
+    source = inspect.getsource(survey.check)
+    assert source.index("settle_mode()") < source.index('record("project")')
+
+
 def test_what_a_project_lacks_for_a_full_walk_is_named():
     listing = json.loads((Path(__file__).parent / "fixtures" / "rpc" / "Zzl0ze_character.json").read_text())[
         "payload"
@@ -634,6 +711,46 @@ def test_check_with_a_project_compares_the_listing_and_a_moved_status_cell_is_dr
     assert any(
         where.startswith("Zzl0ze") and kind in survey.wire.DRIFT for kind, where, _ in report["wire"]
     ), report["wire"]
+
+
+def test_a_check_whose_composer_cannot_be_settled_reports_the_project_page_as_a_route_error(
+    monkeypatch, tmp_path
+):
+    # Review of plan AS (D2): a project page recorded with an unsettled composer reads as a label change, and a
+    # settle that raised would lose the wire report; a route error is drift and keeps the rest of the check.
+    grid = {"UpteDb": [_fixture("UpteDb")], "nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
+    project = {name: [_fixture(name)] for name in ("Zzl0ze", "ngNC2", "yBhWQ", "HTrJv", "tRARke")}
+    recorded = []
+
+    async def fake_grid(session, settle=6.0):
+        return grid
+
+    async def fake_capture(session, action, *, settle):
+        await action()
+        return project
+
+    async def fake_set_mode(session, project_id, enabled):
+        return {"enabled": enabled, "was": False}
+
+    async def unsettled(self):
+        return False
+
+    async def record(self, route, scope=None):
+        recorded.append(route)
+
+    monkeypatch.setattr(survey.reader, "grid", fake_grid)
+    monkeypatch.setattr(survey, "capture", fake_capture)
+    monkeypatch.setattr(survey.agent, "set_mode", fake_set_mode)
+    monkeypatch.setattr(survey.Walker, "settle_mode", unsettled)
+    monkeypatch.setattr(survey.Walker, "record", record)
+    monkeypatch.setattr(survey.version, "current", None)
+    monkeypatch.setattr(survey, "_baseline_ui", lambda: {"routes": {}, "build": "Zz9.1.O"})
+
+    report = asyncio.run(survey.check(_CheckSession(), "P1", out_root=tmp_path))
+
+    assert "project" not in recorded, recorded
+    assert [kind for kind, route, _ in report["ui"] if route == "project"] == ["route error"], report["ui"]
+    assert report["drift"] is True, report
 
 
 def test_a_write_through_report_is_refused_on_a_skipped_route_and_the_picker_skips_a_project_lacking_a_scene(

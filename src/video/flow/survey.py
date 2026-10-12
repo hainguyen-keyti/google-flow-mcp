@@ -84,6 +84,9 @@ class SurveyIncomplete(Exception):
     """A walk that must not become the baseline: flow_options.json feeds gen_video's money guard."""
 
 
+UNSETTLED = "the composer could not be put on the Video tab at x1, so no page can be recorded the way the baseline was"
+
+
 class OptionLayoutChanged(Exception):
     """The settings pane shows rows or a split between modes that options_from_walk cannot express yet."""
 
@@ -356,31 +359,35 @@ class Walker:
         )
         return modes[0] if modes else None
 
-    async def settle(self) -> None:
+    async def settle(self) -> bool:
         """Inside the open settings: the Video tab, the baseline's first mode, its first model, x1, the one composer
         state every route is recorded in. The mode the last run left made 31 of the 72 differences of the survey of
         2026-10-08; the Image tab and the Veo model the day's runs left made all 34 of 2026-10-12, since the mode
-        radio is not shown on the Image tab."""
-        await self.radio("Video")
+        radio is not shown on the Image tab. False when the Video tab or x1 is not there, and then no model is
+        picked, since a model picked on the Image tab would change the account's image model."""
+        if not await self.radio("Video"):
+            return False
         mode = self.first_mode()
         if mode:
             await self.radio(mode)
         _, names = await self.model_names()
         await self.page.keyboard.press("Escape")
         await self.page.wait_for_timeout(600)
+        await self.pane()
         if names:
             await self.pick_model(names[0])
         await self.pane()
-        await self.radio("x1")
+        return await self.radio("x1")
 
-    async def settle_mode(self) -> None:
+    async def settle_mode(self) -> bool:
         """The settled composer before the project and sidebar routes are recorded; no baseline, no click."""
         if not self.first_mode():
-            return
+            return True
         await composer._open_settings(self.page, "survey")
-        await self.settle()
+        settled = await self.settle()
         await self.page.keyboard.press("Escape")
         await self.page.wait_for_timeout(600)
+        return settled
 
     async def loaded(self) -> int:
         """Wait out Flow's "Loading..." placeholder before a route is recorded: the scene editor recorded on
@@ -487,10 +494,10 @@ class Walker:
         await composer._open_settings(self.page, "survey")
         # The panel opens on the tab, the model and the count the last run left: Image after gen_i2i hides Frames and
         # Ingredients, and a Veo model hides Omni's lengths and resolutions.
-        await self.settle()
+        if not await self.settle():
+            raise SurveyIncomplete(UNSETTLED)
         await self.record("composer settings", _PANE)
         video: dict[str, Any] = {"aspects": [], "modes": {}}
-        first_model = None
         groups = (await self.pane())["groups"]
         modes = [_plain(o["t"]) for o in groups[1]]
         for mode in modes:
@@ -500,7 +507,6 @@ class Walker:
             await self.page.wait_for_timeout(600)
             await self.pane()
             video["modes"][mode] = {}
-            first_model = first_model or (names[0] if names else None)
             for name in names:
                 await self.pick_model(name)
                 state = await self.pane()
@@ -527,14 +533,10 @@ class Walker:
             "counts": [int(_plain(o["t"])[1:]) for o in state["groups"][2]],
             "price_x1": state["price"],
         }
-        await self.radio("Video")
         # The last cell priced (x4 of the dearest model) can outrun the balance and put Flow's insufficient-credits
         # warning where Start generation stands in the composer pages recorded next (survey 2026-09-30).
-        if modes:
-            await self.radio(modes[0])
-        if first_model:
-            await self.pick_model(first_model)
-        await self.radio("x1")
+        if not await self.settle():
+            raise SurveyIncomplete(UNSETTLED)
         await self.page.keyboard.press("Escape")
         return {"measured": datetime.now().astimezone().strftime("%Y-%m-%d"), "video": video, "image": image}
 
@@ -566,7 +568,8 @@ class Walker:
     async def _walk(self, listing: Any, records: list[dict[str, Any]]) -> dict[str, Any]:
         session, page = self.session, self.page
         await session.goto(session.project_url(self.project_id), ready=PROJECT_READY)
-        await self.settle_mode()
+        if not await self.settle_mode():
+            raise SurveyIncomplete(UNSETTLED)
         await self.record("project")
         items = await page.evaluate(
             "(sel) => [...document.querySelectorAll(sel)].map(e => (e.innerText||'').trim().split('\\n').pop().trim())",
@@ -667,6 +670,7 @@ async def check(
     await walker.record("home")
     views: tuple[str, ...] = ("grid",)
     agent_was_on = False
+    unsettled: list[tuple[str, str, str]] = []
     if project_id:
         opening = functools.partial(session.goto, session.project_url(project_id), ready=PROJECT_READY)
         more = await capture(session, opening, settle=8.0)
@@ -681,14 +685,16 @@ async def check(
         agent_was_on = bool((await agent.set_mode(session, project_id, False)).get("was"))
         try:
             await session.goto(session.project_url(project_id), ready=PROJECT_READY)
-            await walker.settle_mode()
-            await walker.record("project")
+            if await walker.settle_mode():
+                await walker.record("project")
+            else:
+                unsettled.append(("route error", "project", UNSETTLED))
         finally:
             if agent_was_on:
                 await agent.set_mode(session, project_id, True)
         views += ("project",)
     routes = {name: base_ui["routes"][name] for name in walker.routes if name in base_ui.get("routes", {})}
-    ui = compare_ui({"routes": routes}, {"routes": walker.routes})
+    ui = compare_ui({"routes": routes}, {"routes": walker.routes}) + unsettled
     wired = wire.compare_frames(wire.baseline(), frames, views)
     baseline_build = base_ui.get("build")
     return {

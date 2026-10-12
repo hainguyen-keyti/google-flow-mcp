@@ -600,12 +600,7 @@
        "null",
        "null",
        "null",
-       {
-        "any": [
-         "null",
-         "url"
-        ]
-       },
+       "url",
        [
         {
          "opt": {
@@ -705,12 +700,7 @@
         ]
        },
        "int",
-       {
-        "any": [
-         "absent",
-         "url"
-        ]
-       },
+       "url",
        {
         "any": [
          "absent",
@@ -902,41 +892,6 @@
          }
         ]
        }
-      },
-      {
-       "any": [
-        "absent",
-        "null"
-       ]
-      },
-      {
-       "any": [
-        "absent",
-        "null"
-       ]
-      },
-      {
-       "opt": [
-        [
-         "null",
-         "null",
-         "null",
-         "null",
-         "null",
-         "null",
-         "str",
-         "str",
-         "str",
-         "str",
-         "str",
-         [
-          [
-           "str",
-           "str"
-          ]
-         ]
-        ]
-       ]
       }
      ]
     },

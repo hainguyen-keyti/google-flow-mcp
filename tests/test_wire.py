@@ -133,6 +133,29 @@ def _character_name_moved(payload):
     return payload
 
 
+def _media_urls_gone(payload):
+    # Where the parsers, clips.is_done and flow_download read a media's URL (parsers.py `_record_fields`).
+    for record in payload[2]:
+        record[5][5] = None
+        if len(record[5]) > 10:
+            record[5][10] = None
+        if len(record) > 7 and isinstance(record[7], list):
+            for part in record[7]:
+                if isinstance(part, list) and len(part) > 8:
+                    part[8] = None
+    return payload
+
+
+def test_every_media_url_gone_null_is_drift_on_the_real_baseline():
+    # Review of plan AS (blocking): three custom-voice records, which carry no URL, folded into the baseline from a
+    # capture made every URL position optional, and a listing that lost all its URLs passed the check in silence.
+    base = wire.baseline()["rpcs"]["Zzl0ze"]["shape"]
+    gone = _media_urls_gone(_listing())
+
+    assert not any(record[5][5] for record in gone[2])
+    assert wire.drifted(wire.compare(base, wire.skeleton(gone)))
+
+
 def _recipe_arm_replaced(payload):
     for record in payload[2]:
         record[5][6][1] = [["x", 1], 7, "y"]
