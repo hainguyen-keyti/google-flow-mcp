@@ -289,7 +289,8 @@ def media_of(project_id):
 
 def versions_of(project_id):
     # all_versions keeps the object and adds `versions` (2026-09-15); a bare list is the old, broken shape.
-    # Grid rows carry no `type` and version records always do, so a swallowed all_versions shows up here.
+    # Only version records carry `listed` (parsers.records), so a swallowed all_versions shows up here; `type` is
+    # null on every record Flow made since 2026-10-05 (measured 2026-10-12), so it cannot tell the two apart.
     def check(payload):
         if not isinstance(payload, dict):
             return f"expected an object, got {type(payload).__name__}"
@@ -299,8 +300,10 @@ def versions_of(project_id):
         for record in versions:
             if not isinstance(record, dict) or record.get("project_id") != project_id:
                 return "a version record belongs to another project"
-            if not isinstance(record.get("type"), str) or not record.get("workflow_id"):
-                return "a record has no type or workflow_id: grid rows came back instead of versions"
+            if not isinstance(record.get("listed"), bool) or not record.get("workflow_id"):
+                return "a record has no listed flag or workflow_id: grid rows came back instead of versions"
+            if record.get("type") is not None and not isinstance(record["type"], str):
+                return f"a record's type is {record['type']!r}, expected a string or null"
         return None
 
     return check

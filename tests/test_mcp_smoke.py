@@ -42,7 +42,8 @@ def _replies(first=PROJECT, empty=False):
         "workflow_id": "w1",
     }
     version = {key: value for key, value in grid_row.items() if key != "title"} | {
-        "type": "CAE",
+        # Null on every record Flow made since 2026-10-05 ("CAE" before), measured 2026-10-12 on 20 records.
+        "type": None,
         "listed": True,
     }
     scene = {"scene_id": "s1", "title": "s", "trashed": False, "created": 1, "updated": 1}
@@ -350,8 +351,13 @@ def _meta_of_another_project(replies):
 
 
 def _grid_rows_instead_of_versions(replies):
-    # The shape a swallowed all_versions produces: grid rows carry no `type`, version records always do.
+    # The shape a swallowed all_versions produces: grid rows carry no `listed`, version records always do.
     replies["versions"] = [dict(replies["media"]["media"][0])]
+
+
+def _version_field_of_another_kind(replies):
+    # The version field has been a string ("CAE", "CAI", "CAM") or null; anything else is a shape nobody has read.
+    replies["versions"][0]["type"] = 2
 
 
 def _versions_as_a_bare_list(replies):
@@ -539,6 +545,7 @@ CORRUPTIONS = [
     ("flow_credits", _null_balance),
     ("flow_media", _meta_of_another_project),
     ("flow_media all", _grid_rows_instead_of_versions),
+    ("flow_media all", _version_field_of_another_kind),
     # A bare list breaks both reads of the versions, the plain one and the filtered one.
     (("flow_media all", "flow_media filtered"), _versions_as_a_bare_list),
     # No entity id also leaves flow_voices nothing to read, so both rows go non-PASS.
