@@ -1,5 +1,5 @@
 {
- "measured": "2026-10-08",
+ "measured": "2026-10-12",
  "rpcs": {
   "HTrJv": {
    "view": "project",
@@ -192,7 +192,14 @@
          "null"
         ]
        },
-       "str"
+       "str",
+       {
+        "opt": [
+         [
+          "str"
+         ]
+        ]
+       }
       ]
      },
      {
@@ -267,7 +274,61 @@
            "int",
            "int",
            "int",
-           "int"
+           "int",
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           },
+           {
+            "any": [
+             "absent",
+             "int"
+            ]
+           }
           ]
          ],
          "int",
@@ -305,7 +366,14 @@
          "null"
         ]
        },
-       "str"
+       "str",
+       {
+        "opt": [
+         [
+          "str"
+         ]
+        ]
+       }
       ]
      },
      "null",
@@ -394,21 +462,53 @@
        }
       ]
      ]
+    },
+    {
+     "any": [
+      "absent",
+      "str"
+     ]
+    },
+    {
+     "any": [
+      "absent",
+      "str"
+     ]
     }
    ]
   },
   "Yizz8d": {
    "view": "grid",
    "shape": [
+    {
+     "any": [
+      "null",
+      "str"
+     ]
+    },
     "str",
-    "str",
     "null",
-    "int",
-    "bool",
+    {
+     "any": [
+      "int",
+      "null"
+     ]
+    },
+    {
+     "any": [
+      "bool",
+      "null"
+     ]
+    },
     "null",
     "null",
     "null",
-    "null",
+    {
+     "any": [
+      "null",
+      "str"
+     ]
+    },
     "null",
     [
      "str",
@@ -479,7 +579,12 @@
       },
       "uuid",
       "uuid",
-      "str",
+      {
+       "any": [
+        "null",
+        "str"
+       ]
+      },
       "null",
       [
        [
@@ -495,7 +600,12 @@
        "null",
        "null",
        "null",
-       "url",
+       {
+        "any": [
+         "null",
+         "url"
+        ]
+       },
        [
         {
          "opt": {
@@ -541,10 +651,24 @@
                },
                {
                 "opt": [
-                 [
-                  "uuid",
-                  "str"
-                 ]
+                 {
+                  "opt": [
+                   "uuid",
+                   "str"
+                  ]
+                 },
+                 {
+                  "any": [
+                   "absent",
+                   "null"
+                  ]
+                 },
+                 {
+                  "opt": [
+                   "uuid",
+                   "str"
+                  ]
+                 }
                 ]
                }
               ]
@@ -581,15 +705,31 @@
         ]
        },
        "int",
-       "url",
-       "null",
        {
         "any": [
+         "absent",
+         "url"
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "null"
+        ]
+       },
+       {
+        "any": [
+         "absent",
          "null",
          "str"
         ]
        },
-       "int"
+       {
+        "any": [
+         "absent",
+         "int"
+        ]
+       }
       ],
       {
        "opt": [
@@ -618,7 +758,19 @@
           "null",
           "null",
           "url",
-          "int"
+          "int",
+          {
+           "any": [
+            "absent",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "absent",
+            "str"
+           ]
+          }
          ]
         },
         [
@@ -736,9 +888,55 @@
            "absent",
            "int"
           ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "opt": [
+           "int"
+          ]
          }
         ]
        }
+      },
+      {
+       "any": [
+        "absent",
+        "null"
+       ]
+      },
+      {
+       "any": [
+        "absent",
+        "null"
+       ]
+      },
+      {
+       "opt": [
+        [
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         "str",
+         "str",
+         "str",
+         "str",
+         "str",
+         [
+          [
+           "str",
+           "str"
+          ]
+         ]
+        ]
+       ]
       }
      ]
     },
@@ -856,23 +1054,48 @@
       ]
      ]
     },
-    "null",
     {
-     "opt": [
-      [
+     "opt": {
+      "*": [
+       "uuid",
+       "str",
+       "null",
+       [
+        "int",
+        "int"
+       ],
+       [
+        "int",
+        "int"
+       ],
+       "int",
+       "null",
+       [
+        {
+         "any": [
+          "absent",
+          "bool"
+         ]
+        }
+       ]
+      ]
+     }
+    },
+    {
+     "opt": {
+      "*": [
        "uuid",
        "uuid",
        "null",
        [
         "int",
         "str",
-        [
-         [
-          [
-           "uuid"
-          ]
+        {
+         "any": [
+          "list",
+          "records"
          ]
-        ]
+        }
        ],
        "uuid",
        [
@@ -888,9 +1111,54 @@
         "int"
        ]
       ]
-     ]
+     }
     },
-    "null",
+    {
+     "opt": {
+      "*": [
+       [
+        "uuid",
+        "null",
+        "null",
+        [
+         "str",
+         [
+          "int",
+          "int"
+         ],
+         "null",
+         "null",
+         "uuid",
+         "uuid",
+         [
+          "int",
+          "int"
+         ]
+        ],
+        "uuid"
+       ],
+       "uuid",
+       [
+        {
+         "any": [
+          "int",
+          "null"
+         ]
+        },
+        [
+         "int"
+        ],
+        [],
+        [
+         "int"
+        ],
+        [
+         "int"
+        ]
+       ]
+      ]
+     }
+    },
     [
      "null",
      "null",
@@ -1383,6 +1651,18 @@
         ]
        }
       ]
+     },
+     {
+      "any": [
+       "absent",
+       "null"
+      ]
+     },
+     {
+      "any": [
+       "absent",
+       "int"
+      ]
      }
     ]
    ]
@@ -1395,7 +1675,13 @@
     "int",
     "int",
     "null",
-    "int"
+    "int",
+    {
+     "opt": [
+      "int",
+      "int"
+     ]
+    }
    ]
   },
   "tRARke": {
@@ -1447,7 +1733,12 @@
        ]
       },
       "bool",
-      "int"
+      {
+       "any": [
+        "absent",
+        "int"
+       ]
+      }
      ]
     }
    ]
