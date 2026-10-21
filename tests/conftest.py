@@ -1,14 +1,19 @@
 import pytest
+from playwright._impl._network import Response
 from playwright.async_api import BrowserType
 
-from video import mcp_server, offscreen
+from video import bodies, mcp_server, offscreen
 
 
 @pytest.fixture(autouse=True)
 def _playwrights_own_launch(monkeypatch):
-    """A test that calls the real offscreen.install() would leave Playwright's launch wrapped for every later test."""
+    """A test that calls the real offscreen.install() or bodies.install() would leave Playwright's launch wrapped, and
+    its Response.body patched, for every later test."""
     monkeypatch.setattr(BrowserType, "launch_persistent_context", BrowserType.launch_persistent_context)
     monkeypatch.setattr(offscreen, "_installed", offscreen._installed)
+    monkeypatch.setattr(Response, "body", Response.body)
+    monkeypatch.setattr(bodies, "_installed", bodies._installed)
+    monkeypatch.setattr(bodies, "_bodies", bodies._bodies.__class__())
 
 
 @pytest.fixture(autouse=True)
