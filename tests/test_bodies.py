@@ -204,3 +204,32 @@ def test_the_switch_leaves_playwright_alone(launch, monkeypatch):
     context = _launch()
 
     assert context.routes == [] and Response.body is before and bodies._installed is False
+
+
+def test_the_repos_own_browser_session_installs_it_before_it_launches(monkeypatch, fresh):
+    import pathlib
+
+    from video import offscreen
+    from video import session as session_mod
+
+    order = []
+    monkeypatch.setattr(offscreen, "install", lambda: order.append("offscreen"))
+    monkeypatch.setattr(session_mod.bodies, "install", lambda: order.append("bodies"))
+
+    class _Client:
+        async def __aenter__(self):
+            order.append("launch")
+            raise RuntimeError("stop here")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    def factory(profile_dir, *, headless):
+        order.append("factory")
+        return _Client()
+
+    session = session_mod.FlowSession(profile_dir=pathlib.Path("/tmp/profile"), client_factory=factory)
+    with pytest.raises(RuntimeError, match="stop here"):
+        asyncio.run(session.__aenter__())
+
+    assert order[:3] == ["offscreen", "bodies", "factory"], order

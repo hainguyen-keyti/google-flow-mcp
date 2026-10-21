@@ -211,6 +211,10 @@ def test_the_gflow_entry_point_installs_it_for_a_generation_and_never_for_a_sign
         order = []
         monkeypatch.setattr(gflow_cli.offscreen, "install", lambda order=order: order.append("install"))
         monkeypatch.setattr(gflow_cli, "main", lambda order=order: order.append("main"))
+        # The real patches would stay on gflow for every later test (test_gflow_cli's "patch is gone" test).
+        monkeypatch.setattr(gflow_cli.bodies, "install", lambda: None)
+        monkeypatch.setattr(gflow_cli, "accept_nano_banana_2_1", lambda: None)
+        monkeypatch.setattr(gflow_cli, "accept_generation_record_null_version", lambda: None)
         gflow_cli.run(argv)
         assert order == expected, (argv, order)
 

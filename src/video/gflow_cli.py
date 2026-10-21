@@ -9,7 +9,7 @@ import sys
 from gflow_cli.cli import main
 
 import video  # noqa: F401
-from video import offscreen
+from video import bodies, offscreen
 
 
 def hides_window(argv: list[str]) -> bool:
@@ -87,6 +87,7 @@ def accept_generation_record_null_version() -> None:
 
 
 def run(argv: list[str]) -> None:
+    bodies.install()
     if hides_window(argv[1:]):
         offscreen.install()
     accept_nano_banana_2_1()

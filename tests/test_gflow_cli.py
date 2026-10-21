@@ -156,6 +156,7 @@ def test_the_patch_is_gone_from_gflow_once_its_test_has_run():
 
 def test_the_wrapper_applies_it_before_gflow_runs(monkeypatch):
     applied = []
+    monkeypatch.setattr(gflow_cli.bodies, "install", lambda: applied.append("bodies"))
     monkeypatch.setattr(gflow_cli, "accept_nano_banana_2_1", lambda: applied.append("nano2"))
     monkeypatch.setattr(
         gflow_cli, "accept_generation_record_null_version", lambda: applied.append("gen_null")
@@ -165,4 +166,4 @@ def test_the_wrapper_applies_it_before_gflow_runs(monkeypatch):
 
     gflow_cli.run(["python", "image", "i2i", "a prompt"])
 
-    assert applied == ["nano2", "gen_null", "main"]
+    assert applied == ["bodies", "nano2", "gen_null", "main"]
