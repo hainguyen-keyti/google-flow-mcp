@@ -233,3 +233,8 @@ def test_the_repos_own_browser_session_installs_it_before_it_launches(monkeypatc
         asyncio.run(session.__aenter__())
 
     assert order[:3] == ["offscreen", "bodies", "factory"], order
+
+
+def test_the_route_covers_flows_batchexecute_calls():
+    # Every reply this repo and gflow read comes from `/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=...`.
+    assert bodies.PATTERN == "**/batchexecute*"
