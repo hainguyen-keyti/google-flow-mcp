@@ -85,6 +85,7 @@ class SurveyIncomplete(Exception):
 
 
 UNSETTLED = "the composer could not be put on the Video tab at x1, so no page can be recorded the way the baseline was"
+UNHEARD = "the listing (Zzl0ze) was not heard, so the project page was not recorded: without it the titles cannot be filtered from the labels"
 
 
 class OptionLayoutChanged(Exception):
@@ -674,25 +675,30 @@ async def check(
     if project_id:
         opening = functools.partial(session.goto, session.project_url(project_id), ready=PROJECT_READY)
         more = await capture(session, opening, settle=8.0)
-        listing = one(more, "Zzl0ze")
-        walker.private |= {str(m.get("title") or "") for m in parsers.media(listing)}
-        walker.private |= {str(r.get("prompt") or "")[:MAX_LABEL] for r in parsers.records(listing)}
-        walker.private |= {str(c.get("name") or "") for c in parsers.characters_from_listing(listing)}
-        walker.private |= {str(s.get("title") or "") for s in parsers.scenes_from_listing(listing)}
         for rpcid, payloads in more.items():
             frames.setdefault(rpcid, []).extend(payloads)
-        # As the survey records it: Agent mode off and one composer mode, so the page compares with the baseline.
-        agent_was_on = bool((await agent.set_mode(session, project_id, False)).get("was"))
-        try:
-            await session.goto(session.project_url(project_id), ready=PROJECT_READY)
-            if await walker.settle_mode():
-                await walker.record("project")
-            else:
-                unsettled.append(("route error", "project", UNSETTLED))
-        finally:
-            if agent_was_on:
-                await agent.set_mode(session, project_id, True)
         views += ("project",)
+        # A listing that did not arrive is the wire check's "rpc not heard" (Chrome 155 lost it on 2026-10-21), not a
+        # traceback in place of the report; the page is not recorded without it, and Agent mode is left alone.
+        if "Zzl0ze" not in more:
+            unsettled.append(("route error", "project", UNHEARD))
+        else:
+            listing = more["Zzl0ze"][0]
+            walker.private |= {str(m.get("title") or "") for m in parsers.media(listing)}
+            walker.private |= {str(r.get("prompt") or "")[:MAX_LABEL] for r in parsers.records(listing)}
+            walker.private |= {str(c.get("name") or "") for c in parsers.characters_from_listing(listing)}
+            walker.private |= {str(s.get("title") or "") for s in parsers.scenes_from_listing(listing)}
+            # As the survey records it: Agent mode off and one composer mode, so the page compares with the baseline.
+            agent_was_on = bool((await agent.set_mode(session, project_id, False)).get("was"))
+            try:
+                await session.goto(session.project_url(project_id), ready=PROJECT_READY)
+                if await walker.settle_mode():
+                    await walker.record("project")
+                else:
+                    unsettled.append(("route error", "project", UNSETTLED))
+            finally:
+                if agent_was_on:
+                    await agent.set_mode(session, project_id, True)
     routes = {name: base_ui["routes"][name] for name in walker.routes if name in base_ui.get("routes", {})}
     ui = compare_ui({"routes": routes}, {"routes": walker.routes}) + unsettled
     wired = wire.compare_frames(wire.baseline(), frames, views)

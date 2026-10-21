@@ -753,6 +753,44 @@ def test_a_check_whose_composer_cannot_be_settled_reports_the_project_page_as_a_
     assert report["drift"] is True, report
 
 
+def test_a_check_whose_listing_was_not_heard_reports_it_as_drift_instead_of_raising(monkeypatch, tmp_path):
+    # Measured 2026-10-21: Chrome 155 lost Zzl0ze on a project load and `flow check --project` died with a traceback
+    # at `one(more, "Zzl0ze")`, leaving no report at all, while the wire check already knows to say "rpc not heard".
+    # Without the listing the page's titles cannot be filtered from its labels, so the page is not recorded either,
+    # and the owner's Agent mode is not touched.
+    grid = {"UpteDb": [_fixture("UpteDb")], "nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
+    project = {name: [_fixture(name)] for name in ("ngNC2", "yBhWQ", "HTrJv", "tRARke")}
+    recorded, modes = [], []
+
+    async def fake_grid(session, settle=6.0):
+        return grid
+
+    async def fake_capture(session, action, *, settle):
+        await action()
+        return project
+
+    async def fake_set_mode(session, project_id, enabled):
+        modes.append(enabled)
+        return {"enabled": enabled, "was": True}
+
+    async def record(self, route, scope=None):
+        recorded.append(route)
+
+    monkeypatch.setattr(survey.reader, "grid", fake_grid)
+    monkeypatch.setattr(survey, "capture", fake_capture)
+    monkeypatch.setattr(survey.agent, "set_mode", fake_set_mode)
+    monkeypatch.setattr(survey.Walker, "record", record)
+    monkeypatch.setattr(survey.version, "current", None)
+    monkeypatch.setattr(survey, "_baseline_ui", lambda: {"routes": {}, "build": "Zz9.1.O"})
+
+    report = asyncio.run(survey.check(_CheckSession(), "P1", out_root=tmp_path))
+
+    assert recorded == ["home"], recorded
+    assert ["rpc not heard", "Zzl0ze", "expected on the project view"] in report["wire"], report["wire"]
+    assert [kind for kind, route, _ in report["ui"] if route == "project"] == ["route error"], report["ui"]
+    assert report["drift"] is True and modes == [], report
+
+
 def test_a_write_through_report_is_refused_on_a_skipped_route_and_the_picker_skips_a_project_lacking_a_scene(
     monkeypatch, tmp_path
 ):
