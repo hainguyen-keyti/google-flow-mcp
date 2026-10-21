@@ -23,6 +23,7 @@ os.environ.setdefault("GFLOW_CLI_LOG_LEVEL", "WARNING")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+from video import bodies
 from video.flow import reader, version, wire
 from video.flow.reader import capture
 from video.session import PROJECT_READY, FlowSession
@@ -72,12 +73,17 @@ async def run(profile: str, project: str, loads: int) -> list[dict]:
 
 async def judge(view: str, index: int, frames, reads: Reads, build) -> dict:
     ok, failed = await reads.settle()
+    served, fallen = bodies.counts["served"], bodies.counts["fallen_back"]
+    bodies.counts.update(served=0, fallen_back=0)
     missing = sorted(expected(view) - set(frames))
+    # With the route on, a read answered by Chrome instead of the route is a call the route did not see (review D9).
+    on = os.environ.get("VIDEO_REPLY_BODIES", "1") != "0"
+    escaped = fallen if on else 0
     return {
         "name": f"{view} read {index}",
-        "status": "PASS" if not missing and not failed else "FAIL",
-        "detail": f"heard {len(frames)} rpcs, read {ok} replies, {failed} unreadable, missing {missing or 'none'}"
-        + (f", build {build}" if index == 1 else ""),
+        "status": "PASS" if not missing and not failed and not escaped else "FAIL",
+        "detail": f"heard {len(frames)} rpcs, read {ok} replies ({served} from the route, {fallen} from Chrome), "
+        f"{failed} unreadable, missing {missing or 'none'}" + (f", build {build}" if index == 1 else ""),
     }
 
 

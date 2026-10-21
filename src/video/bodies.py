@@ -6,10 +6,14 @@ Measured 2026-10-21: Chrome 155 (it updated itself on 2026-10-16 and 2026-10-20)
 page reads it as a stream (microsoft/playwright#42742, a Chromium bug no Playwright release fixes). Every listener in
 this repo and in gflow reads a reply with `response.text()`, which goes through `Response.body`.
 
-A route in front of every batchexecute request fetches the reply itself, keeps the bytes, and gives the page the
-status, headers and body it fetched; `Response.body` is then answered from those bytes (133 of 133 replies over four
-page loads, against 30 of 41 without it). The route never sends a request twice: it fetches with no retry and aborts
-the route on any failure, since a `continue_` after a fetch that reached Flow would submit a paid job again.
+A route in front of every batchexecute call of Flow's host fetches the reply itself, keeps the bytes, and gives the
+page the status, headers and body it fetched; `Response.body` is then answered from those bytes (170 of 170 replies
+over five page loads, against 118 of 139 without it). With the route, Playwright's driver is the client that sends
+every call, paid submits included (the owner's decision of 2026-10-22, measured on one paid clip). The route never
+sends a request twice: it fetches with no retry, follows no redirect, waits as long as the page would (replies of 90 s
+were measured on a scene add), and aborts the route when the fetch fails, since a `continue_` after a fetch that
+reached Flow would submit a paid job again; a POST whose body Chrome withholds from the route (a blob, a file, a
+stream) is left to Chrome, since a fetch would send it empty.
 
 Installed once per process like `offscreen`, on the launch gflow and this repo share. VIDEO_REPLY_BODIES=0 leaves
 Playwright alone.
@@ -21,16 +25,25 @@ import contextlib
 import os
 from collections import OrderedDict
 from typing import Any
+from urllib.parse import urlsplit
 
 from playwright._impl._network import Response
 from playwright.async_api import BrowserType
 
 ENV = "VIDEO_REPLY_BODIES"
-PATTERN = "**/batchexecute*"
+# Measured 2026-10-21: every reply the parsers read answers a POST to this host and path.
+HOST = "flow.google.com"
+PATH_END = "/batchexecute"
 # Bodies kept: the largest reply measured is a 366 KB listing, so the bound caps the cache well under 200 MB.
 KEPT = 512
 _installed = False
 _bodies: OrderedDict[str, bytes] = OrderedDict()
+counts = {"routed": 0, "served": 0, "fallen_back": 0}
+
+
+def covers(url: str) -> bool:
+    parts = urlsplit(url)
+    return parts.netloc == HOST and parts.path.endswith(PATH_END)
 
 
 def _guid(request: Any) -> str:
@@ -46,22 +59,42 @@ def remember(guid: str, body: bytes) -> None:
 
 
 async def handle(route: Any) -> None:
-    """Fetch the reply once, keep its bytes, give the page what was fetched; on any failure abort, never continue."""
+    """Fetch the reply once, keep its bytes, give the page what was fetched; a failed fetch aborts, never continues."""
+    request = route.request
+    if request.method == "POST" and request.post_data_buffer is None:
+        await route.continue_()
+        return
+    reply = None
     try:
-        reply = await route.fetch(max_retries=0)
+        reply = await route.fetch(max_retries=0, max_redirects=0, timeout=0)
         body = await reply.body()
-        remember(_guid(route.request), body)
+    except Exception:  # noqa: BLE001
+        with contextlib.suppress(Exception):
+            await route.abort()
+        if reply is not None:
+            with contextlib.suppress(Exception):
+                await reply.dispose()
+        return
+    counts["routed"] += 1
+    with contextlib.suppress(Exception):
+        remember(_guid(request), body)
+    try:
         await route.fulfill(response=reply, body=body)
     except Exception:  # noqa: BLE001
         with contextlib.suppress(Exception):
             await route.abort()
+    finally:
+        with contextlib.suppress(Exception):
+            await reply.dispose()
 
 
 async def read(response: Any, original: Any) -> bytes:
     """A response's body: the bytes the route kept for its request, else what Chrome still holds."""
     kept = _bodies.get(_guid(response.request))
     if kept is not None:
+        counts["served"] += 1
         return kept
+    counts["fallen_back"] += 1
     return await original(response)
 
 
@@ -75,7 +108,7 @@ def install() -> None:
 
     async def launch(self: Any, user_data_dir: Any, **kwargs: Any) -> Any:
         context = await original_launch(self, user_data_dir, **kwargs)
-        await context.route(PATTERN, handle)
+        await context.route(covers, handle)
         return context
 
     async def body(self: Any) -> bytes:

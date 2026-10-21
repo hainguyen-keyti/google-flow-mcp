@@ -31,20 +31,25 @@ class _Wrapped:
 
 
 class _Reply:
-    def __init__(self, data, fail=False):
-        self.data, self.fail = data, fail
+    def __init__(self, data, fail=False, log=None):
+        self.data, self.fail, self.log = data, fail, log if log is not None else []
 
     async def body(self):
         if self.fail:
             raise RuntimeError("the reply could not be read")
         return self.data
 
+    async def dispose(self):
+        self.log.append(("dispose", None))
+
 
 class _Route:
-    def __init__(self, guid, reply, fetch_fails=False, fulfill_fails=False):
+    def __init__(self, guid, reply, fetch_fails=False, fulfill_fails=False, method="POST", post=b"f.req=x"):
         self.request = _Wrapped(guid)
+        self.request.method, self.request.post_data_buffer = method, post
         self.reply, self.fetch_fails, self.fulfill_fails = reply, fetch_fails, fulfill_fails
-        self.log = []
+        self.log = reply.log
+        self.cached_at_fulfill = None
 
     async def fetch(self, **kwargs):
         self.log.append(("fetch", kwargs))
@@ -54,6 +59,7 @@ class _Route:
 
     async def fulfill(self, **kwargs):
         self.log.append(("fulfill", kwargs))
+        self.cached_at_fulfill = dict(bodies._bodies)
         if self.fulfill_fails:
             raise RuntimeError("Route is already handled")
 
@@ -87,6 +93,7 @@ def _original(data=b"from chrome", fail=False):
 def fresh(monkeypatch):
     monkeypatch.setattr(bodies, "_installed", False)
     monkeypatch.setattr(bodies, "_bodies", OrderedDict())
+    monkeypatch.setattr(bodies, "counts", {"routed": 0, "served": 0, "fallen_back": 0})
     monkeypatch.delenv(bodies.ENV, raising=False)
 
 
@@ -96,8 +103,9 @@ def test_the_handler_fetches_once_without_retries_keeps_the_body_and_fulfills_wh
     asyncio.run(bodies.handle(route))
 
     assert route.log == [
-        ("fetch", {"max_retries": 0}),
+        ("fetch", {"max_retries": 0, "max_redirects": 0, "timeout": 0}),
         ("fulfill", {"response": route.reply, "body": b'[["wrb.fr","Zzl0ze","[]"]]'}),
+        ("dispose", None),
     ], route.log
     assert bodies._bodies == {"r1": b'[["wrb.fr","Zzl0ze","[]"]]'}
 
@@ -117,7 +125,83 @@ def test_an_unreadable_fetched_reply_aborts_too(fresh):
 
     asyncio.run(bodies.handle(route))
 
-    assert [step for step, _ in route.log] == ["fetch", "abort"] and bodies._bodies == {}
+    assert [step for step, _ in route.log] == ["fetch", "abort", "dispose"] and bodies._bodies == {}
+
+
+def test_the_body_is_kept_before_the_page_gets_it(fresh):
+    # A listener that reads the reply the moment the page gets it must find it in the cache already (R12).
+    route = _Route("r1", _Reply(b"x"))
+
+    asyncio.run(bodies.handle(route))
+
+    assert route.cached_at_fulfill == {"r1": b"x"}
+
+
+def test_a_cache_that_cannot_keep_the_body_still_lets_the_reply_through(fresh, monkeypatch):
+    # Review D2: the cache write sat inside the abort-on-any-failure block, so a cache error withheld a reply Flow
+    # had processed.
+    def broken(guid, body):
+        raise RuntimeError("no room")
+
+    monkeypatch.setattr(bodies, "remember", broken)
+    route = _Route("r1", _Reply(b"x"))
+
+    asyncio.run(bodies.handle(route))
+
+    assert [step for step, _ in route.log] == ["fetch", "fulfill", "dispose"], route.log
+
+
+def test_a_post_whose_body_chrome_withholds_is_sent_by_chrome(fresh):
+    # Review D6: a blob, file or stream body is not shown to the route, so a fetch would POST it empty; Chrome sends
+    # it and nothing is fetched (I3 holds, one request).
+    route = _Route("r1", _Reply(b"x"), post=None)
+
+    asyncio.run(bodies.handle(route))
+
+    assert route.log == [("continue", {})] and bodies._bodies == {}
+
+
+def test_a_get_without_a_body_is_still_routed(fresh):
+    route = _Route("r1", _Reply(b"x"), method="GET", post=None)
+
+    asyncio.run(bodies.handle(route))
+
+    assert [step for step, _ in route.log] == ["fetch", "fulfill", "dispose"]
+
+
+@pytest.mark.parametrize(
+    ("url", "covered"),
+    [
+        (
+            (
+                "https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=Zzl0ze"
+                "&source-path=%2Fproject%2F118aece2-f6f3-4121-8d11-2b36037d9b36&f.sid=-6428967243721632145"
+                "&bl=boq_assistant_20261021.03_p0&hl=en&rt=c"
+            ),
+            True,
+        ),
+        ("https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=UpteDb&a=b/c", True),
+        ("https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute", True),
+        ("https://labs.google/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=Zzl0ze", False),
+        ("https://play.google.com/log?format=json", False),
+        ("https://flow.google.com/project/118aece2-f6f3-4121-8d11-2b36037d9b36", False),
+    ],
+    ids=["a listing call", "a slash in the query", "no query", "another host", "another path", "a page"],
+)
+def test_the_route_covers_flows_batchexecute_calls_and_nothing_else(url, covered):
+    # Review D4: a glob is not host-anchored and `*` stops at a slash; the route is a predicate on Flow's own host
+    # and path (measured 2026-10-21: every call is `/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=...`).
+    assert bodies.covers(url) is covered
+
+
+def test_the_reads_are_counted_so_a_run_can_tell_served_from_fallen_back(fresh):
+    original, _ = _original(b"from chrome")
+    bodies.remember("r1", b"kept")
+
+    asyncio.run(bodies.read(_Response("r1"), original))
+    asyncio.run(bodies.read(_Response("r2"), original))
+
+    assert bodies.counts == {"routed": 0, "served": 1, "fallen_back": 1}
 
 
 def test_the_patched_body_answers_from_the_cache_without_asking_chrome(fresh):
@@ -143,6 +227,12 @@ def test_the_cache_keeps_at_most_its_bound_and_drops_the_oldest(fresh):
 
     assert len(bodies._bodies) == bodies.KEPT
     assert "r0" not in bodies._bodies and f"r{bodies.KEPT}" in bodies._bodies
+
+
+def test_a_routed_request_is_counted(fresh):
+    asyncio.run(bodies.handle(_Route("r1", _Reply(b"x"))))
+
+    assert bodies.counts["routed"] == 1
 
 
 class _Context:
@@ -176,7 +266,7 @@ def test_install_routes_every_context_the_launch_returns_and_patches_the_body_re
     bodies.install()
     context = _launch()
 
-    assert context.routes == [(bodies.PATTERN, bodies.handle)]
+    assert context.routes == [(bodies.covers, bodies.handle)]
     assert Response.body is not before and bodies._installed is True
 
 
@@ -233,8 +323,3 @@ def test_the_repos_own_browser_session_installs_it_before_it_launches(monkeypatc
         asyncio.run(session.__aenter__())
 
     assert order[:3] == ["offscreen", "bodies", "factory"], order
-
-
-def test_the_route_covers_flows_batchexecute_calls():
-    # Every reply this repo and gflow read comes from `/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=...`.
-    assert bodies.PATTERN == "**/batchexecute*"

@@ -753,6 +753,24 @@ def test_a_check_whose_composer_cannot_be_settled_reports_the_project_page_as_a_
     assert report["drift"] is True, report
 
 
+def test_a_check_whose_grid_lacks_the_project_list_reports_it_instead_of_raising(monkeypatch, tmp_path):
+    # Review of plan AT (D8): UpteDb was lost on the default account's grid on 2026-10-21, and `check` raised at
+    # `one(frames, "UpteDb")` before any report.
+    grid = {"nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
+
+    async def fake_grid(session, settle=6.0):
+        return grid
+
+    monkeypatch.setattr(survey.reader, "grid", fake_grid)
+    monkeypatch.setattr(survey.version, "current", None)
+    monkeypatch.setattr(survey, "_baseline_ui", lambda: {"routes": {}, "build": "Zz9.1.O"})
+
+    report = asyncio.run(survey.check(_CheckSession(), None, out_root=tmp_path))
+
+    assert ["rpc not heard", "UpteDb", "expected on the grid view"] in report["wire"], report["wire"]
+    assert report["drift"] is True
+
+
 def test_a_check_whose_listing_was_not_heard_reports_it_as_drift_instead_of_raising(monkeypatch, tmp_path):
     # Measured 2026-10-21: Chrome 155 lost Zzl0ze on a project load and `flow check --project` died with a traceback
     # at `one(more, "Zzl0ze")`, leaving no report at all, while the wire check already knows to say "rpc not heard".

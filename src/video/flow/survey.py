@@ -667,7 +667,8 @@ async def check(
     walker = Walker(session, project_id or "", folder)
     frames = await reader.grid(session)
     live = await version.read(session.page)
-    walker.private |= {str(p.get("title") or "") for p in parsers.projects(one(frames, "UpteDb"))}
+    if "UpteDb" in frames:
+        walker.private |= {str(p.get("title") or "") for p in parsers.projects(one(frames, "UpteDb"))}
     await walker.record("home")
     views: tuple[str, ...] = ("grid",)
     agent_was_on = False

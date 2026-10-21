@@ -87,8 +87,8 @@ def accept_generation_record_null_version() -> None:
 
 
 def run(argv: list[str]) -> None:
-    bodies.install()
     if hides_window(argv[1:]):
+        bodies.install()
         offscreen.install()
     accept_nano_banana_2_1()
     accept_generation_record_null_version()
