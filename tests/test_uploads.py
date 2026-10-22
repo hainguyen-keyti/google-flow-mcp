@@ -31,10 +31,15 @@ class _FakeLocator:
         return self
 
     async def click(self, timeout=None):
-        if self._selector == "mat-list-item" and await self.count() == 0:
+        if self._selector in _SIDEBAR_ROWS and await self.count() == 0:
             raise AssertionError("clicked a nav item that is not on the page")
         if self._has_text == "Uploads":
             self._page.showing_uploads = True
+
+
+# Measured 2026-10-22 on Flow build aZ4BlYOkwqQ (out/at/sidebar_probe.out): the sidebar rows are `<button mat-list-item>`
+# and `<a mat-list-item>` inside `mat-nav-list`; the element `mat-list-item` matches 0 of them, these selectors 10.
+_SIDEBAR_ROWS = {"mat-nav-list .mat-mdc-list-item", "[mat-list-item]"}
 
 
 class _FakePage:
@@ -56,7 +61,7 @@ class _FakePage:
         self.showing_uploads = False
 
     def matches(self, selector, has_text):
-        if self.elapsed_ms < self.sidebar_ready_at_ms or selector != "mat-list-item":
+        if self.elapsed_ms < self.sidebar_ready_at_ms or selector not in _SIDEBAR_ROWS:
             return 0
         if has_text is None:
             return 7 if self.uploads_on_disk else 4

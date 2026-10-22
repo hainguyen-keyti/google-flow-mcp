@@ -19,6 +19,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video.flow import parsers, reader
 from video.flow.reader import capture
+from video.flow.survey import SIDEBAR
 from video.session import PROJECT_READY, FlowSession
 
 # Count the wrapper only. The union `flow-tile-container, flow-image-tile, flow-video-tile` matched the
@@ -144,12 +145,12 @@ async def list_uploads(session: FlowSession, project_id: str) -> dict[str, Any]:
     # 2000ms on a project holding uploads and about 3000ms on an upload-free one. Reading it after a flat
     # 2s sleep answered `count: 0` for a project holding 4 uploads, so wait for the sidebar to exist.
     try:
-        await page.locator("mat-list-item").first.wait_for(state="attached", timeout=30_000)
+        await page.locator(SIDEBAR).first.wait_for(state="attached", timeout=30_000)
     except PlaywrightTimeoutError as exc:
         raise RuntimeError(f"list_uploads: the sidebar of {project_id} never rendered") from exc
     # Only now does absence carry information: a project that has never had an upload grows no "Uploads"
     # item. Asked any earlier, absence just means the page has not painted yet.
-    nav = page.locator("mat-list-item", has_text="Uploads").first
+    nav = page.locator(SIDEBAR, has_text="Uploads").first
     if await nav.count() == 0:
         return {"count": 0}
     await nav.click(timeout=8_000)
