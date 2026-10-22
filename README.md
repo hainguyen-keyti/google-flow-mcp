@@ -189,6 +189,12 @@ These are not suggestions; they are enforced in code and pinned by tests.
   about a minute in all: one new image carrying the file's name is the upload, no new image at all means nothing
   was uploaded and a second try is safe, and anything else (two of that name, a new image under another title, a
   file that is no image) sends you to `flow_media` first. That branch is proven by tests only.
+- Chrome updates itself, and a Chrome update can break how Flow's replies are read: on 2026-10-21 Chrome 155 (with
+  Playwright 1.61) stopped handing some reply bodies to DevTools, so every read tool lost replies at random. The
+  repo now reads replies through a route of its own (`src/video/bodies.py`): Playwright's driver fetches each
+  batchexecute call once, keeps the bytes and gives the page what it fetched, so it is the driver, not Chrome, that
+  sends every call to Flow, paid submits included (measured on one paid clip). `VIDEO_REPLY_BODIES=0` switches it
+  off; `scripts/acceptance/reply_bodies.py` shows whether replies are read whole on this machine.
 - Trimming a clip's head or tail inside a scene is not implemented.
 - Deliberately out of scope: collections, media rename, media trash, project zip export, the Tools gallery,
   Flow's own agent mode beyond an on/off switch, project settings, GIF export, share
@@ -206,7 +212,7 @@ exit code 1 means something changed. See [docs/flow-updates.md](docs/flow-update
 uv run ruff check . && uv run ruff format --check . && uv run pytest
 ```
 
-1875 tests (collected 2026-10-08), none of which call Flow or spend anything: tests use fixtures and fakes, which is a hard rule here.
+1943 tests (collected 2026-10-22), none of which call Flow or spend anything: tests use fixtures and fakes, which is a hard rule here.
 About 25 of them do render and measure real video, so **ffmpeg must be installed**, and two of them draw
 captions, so a unicode font must exist: macOS ships one, on Linux install `fonts-dejavu-core` or point
 `VIDEO_FONT` at a `.ttf` or `.ttc` of your own. The live acceptance scripts under `scripts/acceptance/` do talk to Flow, are

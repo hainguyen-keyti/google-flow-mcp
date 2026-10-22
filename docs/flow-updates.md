@@ -95,3 +95,32 @@ more: it must report no drift and the baseline's build. Commit the baselines wit
 
 Media downloads are not covered: if downloads fail with HTTP 400 or 404, compare the listing's media URL with the
 `src` the page itself uses (`download.asset_base` holds the host rewrite measured on 2026-09-29).
+
+## 5. When Chrome updates: every read says "rpc X not observed"
+
+Chrome on this Mac updates itself. On 2026-10-21 Chrome 155 (updated 2026-10-16 and 2026-10-20), driven by
+Playwright 1.61.0 (gflow-cli's pin), stopped handing some reply bodies to DevTools: `response.text()` on a page
+listener failed at random with `Network.getResponseBody: No data found for resource with given identifier` (11 of 41
+replies of one project load), so the smoke failed seven rows with "rpc X not observed", `flow check --project` could
+not find the listing, and every paid tool read its submit reply and the listing through the same broken mechanism.
+Flow's build had changed too, but its wire had not. The conditions are Flow's `cache-control: no-store` replies read
+by the page as a stream (microsoft/playwright#42742, a Chromium bug no Playwright release fixes).
+
+What the repo does since plan AT (2026-10-22): `src/video/bodies.py` installs, once per process and on the launch gflow
+and this repo share, a route on Flow's batchexecute calls that fetches each one once (no retry, no redirect, no
+timeout), keeps the bytes under the request, gives the page the status, headers and body it fetched, and answers
+Playwright's `Response.body` from those bytes; every listener in this repo and in gflow then reads what Flow sent. It
+means Playwright's driver, not Chrome, sends every call to Flow, paid submits included (the owner's decision, measured
+on one paid clip). A POST whose body Chrome withholds from the route (a blob, a file) is left to Chrome.
+
+How to tell it is this and not Flow:
+
+```bash
+uv run python scripts/acceptance/reply_bodies.py --profile <profile> --project <id>      # 0 unreadable, every rpc heard
+VIDEO_REPLY_BODIES=0 uv run python scripts/acceptance/reply_bodies.py --profile <profile> --project <id>   # the raw read
+```
+
+The second line reads as Chrome hands bodies to DevTools: unreadable replies or missing rpcs there, with the first line
+clean, is the browser, not Flow. `flow check` reports a listing that did not arrive as `rpc not heard` and a
+`route error` on the project page; it never raises for it.
+
