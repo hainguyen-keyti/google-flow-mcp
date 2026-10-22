@@ -49,6 +49,9 @@ UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 EMAIL = re.compile(r"[^\s@]+@[^\s@]+\.[a-z]{2,}", re.IGNORECASE)
 MAX_LABEL = 60
 SIDEBAR = "mat-nav-list .mat-mdc-list-item"
+# Measured 2026-10-22 (out/at/sidebar_probe.out): each sidebar row holds its title in this span, and Library's row also
+# holds the add button of "Create collection", so the last line of the row's text is that button's icon word.
+SIDEBAR_TITLE = "[matlistitemtitle]"
 KNOWN_MODELS = {
     "Omni 1.1 Flash": "omni-flash",
     "Veo 3.1 - Lite": "veo-lite",
@@ -98,6 +101,18 @@ _LENGTH = re.compile(r"^\d+s$")
 _COUNT = re.compile(r"^x\d+$")
 # Sidebar items the walk never clicks: a toggle, or anything that reads like an action rather than a view.
 SIDEBAR_ACTIONS = re.compile(r"collapse|expand|new|create|delete|empty|clear|remove", re.IGNORECASE)
+
+
+async def sidebar_items(page: Any) -> list[str]:
+    """Each sidebar row's name: its title, else the last line of its text."""
+    rows = page.locator(SIDEBAR)
+    names = []
+    for index in range(await rows.count()):
+        row = rows.nth(index)
+        title = row.locator(SIDEBAR_TITLE)
+        text = await (title.first if await title.count() else row).inner_text()
+        names.append((text or "").strip().split("\n").pop().strip())
+    return names
 
 
 def route_name(prefix: str, text: str, private: set[str], index: int) -> str:
@@ -424,7 +439,9 @@ class Walker:
     async def sidebar(self, index: int, route: str) -> None:
         await self.session.goto(self.session.project_url(self.project_id), ready=PROJECT_READY)
         await self.page.wait_for_timeout(2_000)
-        await safe_click(self.page.locator(SIDEBAR).nth(index))
+        row = self.page.locator(SIDEBAR).nth(index)
+        title = row.locator(SIDEBAR_TITLE)
+        await safe_click(title.first if await title.count() else row)
         await self.record(route)
 
     async def open_and_record(self, route: str, path: str, ready: str) -> None:
@@ -573,10 +590,7 @@ class Walker:
         if not await self.settle_mode():
             raise SurveyIncomplete(UNSETTLED)
         await self.record("project")
-        items = await page.evaluate(
-            "(sel) => [...document.querySelectorAll(sel)].map(e => (e.innerText||'').trim().split('\\n').pop().trim())",
-            SIDEBAR,
-        )
+        items = await sidebar_items(page)
         for index, item in enumerate(items):
             # Collapse folds the sidebar away; it is a toggle, not a page.
             if not item or SIDEBAR_ACTIONS.search(item):

@@ -1048,3 +1048,112 @@ def test_the_first_model_is_picked_back_inside_the_first_mode(monkeypatch, tmp_p
         ("model", "Omni 1.1 Flash"),
         ("radio", "x1"),
     ], walker.log
+
+
+class _SidebarTitle:
+    def __init__(self, page, title):
+        self.page, self.title = page, title
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self):
+        return 0 if self.title is None else 1
+
+    async def inner_text(self):
+        return self.title
+
+    async def get_attribute(self, name):
+        return None
+
+    async def click(self, timeout=None):
+        self.page.clicked.append(("title", self.title))
+
+
+class _SidebarRow:
+    def __init__(self, page, title, text):
+        self.page, self.title, self.text = page, title, text
+
+    def locator(self, selector):
+        assert selector == survey.SIDEBAR_TITLE, selector
+        return _SidebarTitle(self.page, self.title)
+
+    async def inner_text(self):
+        return self.text
+
+    async def get_attribute(self, name):
+        return None
+
+    async def click(self, timeout=None):
+        self.page.clicked.append(("row", self.text))
+
+
+class _SidebarRows:
+    def __init__(self, page):
+        self.page = page
+
+    async def count(self):
+        return len(self.page.rows)
+
+    def nth(self, index):
+        return self.page.rows[index]
+
+
+class _SidebarPage:
+    """Flow's project sidebar as measured 2026-10-22 (out/at/sidebar_probe.out): each row holds its title in a
+    [matlistitemtitle] span, and Library's row also holds the add button of "Create collection", so its text ends in
+    that button's icon word."""
+
+    def __init__(self):
+        self.clicked = []
+        self.rows = [
+            _SidebarRow(self, "All media", "dashboard\nAll media"),
+            _SidebarRow(self, "Library", "folder\nLibrary\nadd"),
+            _SidebarRow(self, "Collapse", "left_panel_close\nCollapse"),
+            _SidebarRow(self, None, "drive_folder_upload\nUploads"),
+        ]
+
+    def locator(self, selector, **kwargs):
+        assert selector == survey.SIDEBAR, selector
+        return _SidebarRows(self)
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+
+def test_a_sidebar_row_is_named_by_its_title_not_by_a_control_inside_it():
+    # Survey 2026-10-22: the walk named Library's row "sidebar add", the last line of its text, the icon of the
+    # create-collection button inside the row; a row without a title span keeps the last line of its text.
+    page = _SidebarPage()
+
+    assert asyncio.run(survey.sidebar_items(page)) == ["All media", "Library", "Collapse", "Uploads"]
+
+
+def test_the_walk_names_the_sidebar_rows_through_their_titles():
+    import inspect
+
+    assert "sidebar_items(" in inspect.getsource(survey.Walker._walk)
+
+
+def test_a_sidebar_row_is_opened_by_its_title_never_through_a_control_inside_it(monkeypatch, tmp_path):
+    # Library's row holds the add button that creates a collection: clicking the row as a whole aims at its middle,
+    # which is the title today, but the walk must not depend on where Flow puts that button.
+    page = _SidebarPage()
+    session = type("S", (), {"page": page, "project_url": lambda self, p: f"u/{p}", "goto": _async_none})()
+    recorded = []
+
+    async def record(self, route, scope=None):
+        recorded.append(route)
+
+    monkeypatch.setattr(survey.Walker, "record", record)
+    walker = survey.Walker(session, "P", tmp_path)
+
+    asyncio.run(walker.sidebar(1, "sidebar Library"))
+
+    assert page.clicked == [("title", "Library")], page.clicked
+    assert recorded == ["sidebar Library"]
+
+
+async def _async_none(*args, **kwargs):
+    return None
