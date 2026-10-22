@@ -619,7 +619,9 @@ def test_check_reads_the_build_the_free_replies_and_the_pages_and_reports_no_dri
     monkeypatch, tmp_path
 ):
     grid = {"UpteDb": [_fixture("UpteDb")], "nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
-    project = {name: [_fixture(name)] for name in ("Zzl0ze", "ngNC2", "yBhWQ", "HTrJv", "tRARke")}
+    project = {name: [_fixture(name)] for name in ("ngNC2", "yBhWQ", "HTrJv", "tRARke")}
+    # Plan AU: a listing of the record shape Flow sends since 2026-10-22; Zzl0ze.json is superseded in the baseline.
+    project["Zzl0ze"] = [_fixture("Zzl0ze_20261022_test_project")]
     modes = []
 
     async def fake_grid(session, settle=6.0):

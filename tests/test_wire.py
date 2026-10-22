@@ -117,7 +117,37 @@ def test_later_live_frames_of_one_rpc_are_merged_and_compared():
 
 
 def _listing():
-    return json.loads((FIXTURES / "rpc" / "Zzl0ze_character.json").read_text(encoding="utf-8"))["payload"]
+    # Plan AU (DECISIONS 2026-10-22): a listing of the live shape. Since Flow build aZ4BlYOkwqQ a video record's [7]
+    # holds six parts, and the baseline is built without the listings of the old three-part shape.
+    return json.loads((FIXTURES / "rpc" / "Zzl0ze_20261022_test_project.json").read_text(encoding="utf-8"))[
+        "payload"
+    ]
+
+
+def _clip_url_gone(payload):
+    for record in payload[2]:
+        if len(record) > 7 and isinstance(record[7], list) and record[7] and isinstance(record[7][0], list):
+            record[7][0][8] = None
+    return payload
+
+
+def test_a_clean_listing_of_the_live_shape_is_not_drift_on_the_real_baseline():
+    base = wire.baseline()["rpcs"]["Zzl0ze"]["shape"]
+
+    assert not wire.drifted(wire.compare(base, wire.skeleton(_listing())))
+
+
+def test_a_clip_url_gone_from_its_position_is_drift_there_on_the_real_baseline():
+    # Measured 2026-10-22 (out/au/measure_baseline.py): a baseline that merged the old three-part [7] with the live
+    # six-part one held {"any": ["list", "records"]} there, and a listing whose clips lost their URL at [7][0][8], the
+    # position `parsers._record_fields` reads first, passed the check in silence.
+    base = wire.baseline()["rpcs"]["Zzl0ze"]["shape"]
+    gone = _clip_url_gone(_listing())
+
+    found = wire.compare(base, wire.skeleton(gone))
+
+    assert ("kind emptied", "[2][*][7][0][8]") in [row[:2] for row in found], found
+    assert wire.drifted(found)
 
 
 def _status_moved(payload):
@@ -214,9 +244,22 @@ def test_a_capture_folder_takes_a_raw_reply_and_no_folder_takes_nothing(monkeypa
     assert written.name.startswith("jwpduf+as29s_") and written.read_text() == "raw body"
 
 
+def _wire_baseline():
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "acceptance"))
+    import wire_baseline
+
+    return wire_baseline
+
+
 def _fixture_payloads():
+    """The free-read fixtures the baseline is built from."""
     out = {}
+    superseded = _wire_baseline().SUPERSEDED
     for path in sorted((FIXTURES / "rpc").glob("*.json")):
+        if path.name in superseded:
+            continue
         data = json.loads(path.read_text(encoding="utf-8"))
         out.setdefault(path.stem.split("_")[0], []).append(data["payload"])
     return out
@@ -304,3 +347,18 @@ def test_a_page_with_a_bundle_sets_the_current_build_and_one_without_leaves_it(m
     assert asyncio.run(version.read(_Page(["https://accounts.google.com/a.js"]))) is None
     assert asyncio.run(version.read(_Broken())) is None
     assert version.current == "Ab12.3.O"
+
+
+def test_the_superseded_fixtures_are_the_listings_of_the_old_record_shape():
+    # Read off the files, not typed: a listing is superseded when one of its video records holds fewer than the six
+    # parts at [7] that Flow sends since build aZ4BlYOkwqQ (2026-10-22).
+    def old_shape(path):
+        payload = json.loads(path.read_text(encoding="utf-8"))["payload"]
+        records = payload[2] if len(payload) > 2 and isinstance(payload[2], list) else []
+        return any(len(r) > 7 and isinstance(r[7], list) and len(r[7]) < 6 for r in records)
+
+    listings = sorted((FIXTURES / "rpc").glob("Zzl0ze*.json"))
+    found = {path.name for path in listings if old_shape(path)}
+
+    assert set(_wire_baseline().SUPERSEDED) == found, sorted(found)
+    assert len(found) < len(listings), "the baseline must keep at least one listing"

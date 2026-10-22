@@ -29,11 +29,25 @@ from video.flow import wire
 RPC_FIXTURES = ROOT / "tests" / "fixtures" / "rpc"
 REPLY_FIXTURES = ROOT / "tests" / "fixtures" / "replies"
 
+# Listings of the record shape Flow sent before build aZ4BlYOkwqQ (2026-10-22), when a video record's [7] held three
+# parts. Merged with the six-part shape they leave [7] as {"any": ["list", "records"]}, under which a listing that
+# lost its clips' URLs passes the check (plan AU). Parser tests still read them; the baseline does not.
+_OLD_SEVEN = "a listing whose video records hold the three-part [7] Flow sent before build aZ4BlYOkwqQ"
+SUPERSEDED: dict[str, str] = {
+    "Zzl0ze.json": _OLD_SEVEN,
+    "Zzl0ze_20261012_new_records.json": _OLD_SEVEN,
+    "Zzl0ze_20261012_test_project.json": _OLD_SEVEN,
+    "Zzl0ze_character.json": _OLD_SEVEN,
+}
+
 
 def payloads() -> dict[str, tuple[str, list]]:
-    """Every fixture's payloads by rpcid, with the view it was read on (a reply of a paid run is "paid")."""
+    """Every fixture's payloads by rpcid, with the view it was read on (a reply of a paid run is "paid"), but the
+    superseded ones."""
     found: dict[str, tuple[str, list]] = {}
     for path in sorted(RPC_FIXTURES.glob("*.json")):
+        if path.name in SUPERSEDED:
+            continue
         data = json.loads(path.read_text(encoding="utf-8"))
         rpcid = path.stem.split("_")[0]
         view, items = found.get(rpcid, (data["view"], []))

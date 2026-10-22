@@ -1,5 +1,5 @@
 {
- "measured": "2026-10-12",
+ "measured": "2026-10-22",
  "rpcs": {
   "HTrJv": {
    "view": "project",
@@ -459,6 +459,11 @@
          "absent",
          "uuid"
         ]
+       },
+       {
+        "opt": [
+         "url"
+        ]
        }
       ]
      ]
@@ -528,37 +533,24 @@
       "null",
       "null",
       [
-       {
-        "any": [
-         "null",
-         "str"
-        ]
-       },
+       "str",
        [
         "int",
         "int"
        ],
        "null",
        "null",
+       "uuid",
        {
         "any": [
-         "str",
-         "uuid"
-        ]
-       },
-       {
-        "any": [
-         "absent",
          "null",
          "uuid"
         ]
        },
-       {
-        "opt": [
-         "int",
-         "int"
-        ]
-       }
+       [
+        "int",
+        "int"
+       ]
       ],
       "uuid",
       {
@@ -602,14 +594,7 @@
        "null",
        "url",
        [
-        {
-         "opt": {
-          "*": [
-           "null",
-           "int"
-          ]
-         }
-        },
+        "null",
         {
          "opt": {
           "any": [
@@ -619,8 +604,8 @@
          }
         },
         {
-         "opt": {
-          "*": [
+         "opt": [
+          [
            {
             "any": [
              "absent",
@@ -671,27 +656,12 @@
             ]
            }
           ]
-         }
-        },
-        {
-         "opt": [
-          {
-           "opt": [
-            [
-             "null",
-             "int",
-             "uuid"
-            ]
-           ]
-          }
          ]
         },
         {
-         "any": [
-          "absent",
-          "int"
-         ]
-        }
+         "opt": []
+        },
+        "int"
        ],
        "null",
        {
@@ -710,8 +680,7 @@
        {
         "any": [
          "absent",
-         "null",
-         "str"
+         "null"
         ]
        },
        {
@@ -766,119 +735,39 @@
         [
          "int",
          "int"
+        ],
+        "null",
+        "null",
+        [
+         "url"
         ]
        ]
       },
       {
-       "opt": {
-        "*": [
+       "opt": [
+        [
+         "null",
+         "int",
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
          {
           "any": [
-           "int",
-           "null",
-           "str",
-           "uuid"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "int",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "list",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
            "null",
            "str"
           ]
          },
-         {
-          "any": [
-           "absent",
-           "url"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "str"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "str"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "null"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "bool"
-          ]
-         },
-         {
-          "any": [
-           "absent",
-           "int"
-          ]
-         },
+         "url",
+         "null",
+         "null",
+         "null",
+         "str",
+         "str",
+         "null",
+         "bool",
+         "int",
          {
           "any": [
            "absent",
@@ -890,8 +779,35 @@
            "int"
           ]
          }
+        ],
+        [
+         "null",
+         "null",
+         [
+          {
+           "any": [
+            "absent",
+            "int"
+           ]
+          }
+         ]
+        ],
+        {
+         "opt": [
+          {
+           "any": [
+            "str",
+            "uuid"
+           ]
+          }
+         ]
+        },
+        "null",
+        "null",
+        [
+         "url"
         ]
-       }
+       ]
       }
      ]
     },
