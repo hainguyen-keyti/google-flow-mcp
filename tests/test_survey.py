@@ -671,7 +671,8 @@ async def _no_models():
 def test_check_with_a_project_compares_the_listing_and_a_moved_status_cell_is_drift(monkeypatch, tmp_path):
     # Pins the path from a real wire finding to `drift` (technical review of plan AQ: six mutants in wire.py and
     # survey.check survived with the whole report faked).
-    moved = _fixture("Zzl0ze")
+    # Plan AU review (B1): a listing of the live shape, which is not drift by itself, so the finding is the move.
+    moved = _fixture("Zzl0ze_20261022_test_project")
     for record in moved[2]:
         if record[5][8]:
             record[5][8] = [None, *record[5][8]]
@@ -711,7 +712,8 @@ def test_check_with_a_project_compares_the_listing_and_a_moved_status_cell_is_dr
 
     assert report["drift"] is True, report
     assert any(
-        where.startswith("Zzl0ze") and kind in survey.wire.DRIFT for kind, where, _ in report["wire"]
+        where.startswith("Zzl0ze[2][*][5][8]") and kind in survey.wire.DRIFT
+        for kind, where, _ in report["wire"]
     ), report["wire"]
 
 
@@ -721,7 +723,9 @@ def test_a_check_whose_composer_cannot_be_settled_reports_the_project_page_as_a_
     # Review of plan AS (D2): a project page recorded with an unsettled composer reads as a label change, and a
     # settle that raised would lose the wire report; a route error is drift and keeps the rest of the check.
     grid = {"UpteDb": [_fixture("UpteDb")], "nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
-    project = {name: [_fixture(name)] for name in ("Zzl0ze", "ngNC2", "yBhWQ", "HTrJv", "tRARke")}
+    project = {name: [_fixture(name)] for name in ("ngNC2", "yBhWQ", "HTrJv", "tRARke")}
+    # Plan AU review (B1): a live-shape listing, so the only drift left to find is the route error.
+    project["Zzl0ze"] = [_fixture("Zzl0ze_20261022_test_project")]
     recorded = []
 
     async def fake_grid(session, settle=6.0):
@@ -1155,6 +1159,21 @@ def test_a_sidebar_row_is_opened_by_its_title_never_through_a_control_inside_it(
 
     assert page.clicked == [("title", "Library")], page.clicked
     assert recorded == ["sidebar Library"]
+
+
+def test_a_sidebar_row_without_a_title_is_opened_as_a_whole(monkeypatch, tmp_path):
+    # Review of plan AU (D1): the fallback of a row whose title span is missing.
+    page = _SidebarPage()
+    session = type("S", (), {"page": page, "project_url": lambda self, p: f"u/{p}", "goto": _async_none})()
+
+    async def record(self, route, scope=None):
+        return None
+
+    monkeypatch.setattr(survey.Walker, "record", record)
+
+    asyncio.run(survey.Walker(session, "P", tmp_path).sidebar(3, "sidebar Uploads"))
+
+    assert page.clicked == [("row", "drive_folder_upload\nUploads")], page.clicked
 
 
 async def _async_none(*args, **kwargs):

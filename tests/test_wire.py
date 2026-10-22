@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from video.flow import version, wire
+from video.flow import parsers, version, wire
 
 FIXTURES = Path(__file__).parent / "fixtures"
 U1 = "3f5ce5c7-4a65-4211-b846-8a1db0cb1174"
@@ -174,6 +174,15 @@ def _media_urls_gone(payload):
                 if isinstance(part, list) and len(part) > 8:
                     part[8] = None
     return payload
+
+
+def test_the_media_url_helper_leaves_the_parsers_no_url_in_a_live_shape_listing():
+    # Review of plan AU (D5): "every media URL" means every position the parsers read one from; Flow's other URLs
+    # (an image record's [6], the new [7][5]) are read by nobody here.
+    listing = _listing()
+    assert any(item["url"] for item in parsers.media(listing))
+
+    assert not [item["id"] for item in parsers.media(_media_urls_gone(listing)) if item["url"]]
 
 
 def test_every_media_url_gone_null_is_drift_on_the_real_baseline():
@@ -362,3 +371,17 @@ def test_the_superseded_fixtures_are_the_listings_of_the_old_record_shape():
 
     assert set(_wire_baseline().SUPERSEDED) == found, sorted(found)
     assert len(found) < len(listings), "the baseline must keep at least one listing"
+
+
+def test_the_parsers_read_every_record_of_the_live_shape_listing():
+    # Review of plan AU (D4): measured 2026-10-22 on the live listing, every video record's URL stayed at [7][0][8]
+    # and every record kept its model; a test now reads that shape the way flow_media and the paid path do.
+    listing = _listing()
+    lengths = {record[2]: len(record) for record in listing[2]}
+    # The capture left the custom voices' records out (plan AS's rule), not their grid entries.
+    media = [item for item in parsers.media(listing) if item["id"] in lengths]
+
+    assert len(media) > 50 and all(item["url"] for item in media), [m["id"] for m in media if not m["url"]]
+    assert all(item["kind"] == ("video" if lengths[item["id"]] >= 8 else "image") for item in media)
+    videos = [record for record in parsers.records(listing) if lengths[record["id"]] >= 8]
+    assert videos and all(record["model"] for record in videos)
