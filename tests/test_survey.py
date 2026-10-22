@@ -756,18 +756,27 @@ def test_a_check_whose_composer_cannot_be_settled_reports_the_project_page_as_a_
 def test_a_check_whose_grid_lacks_the_project_list_reports_it_instead_of_raising(monkeypatch, tmp_path):
     # Review of plan AT (D8): UpteDb was lost on the default account's grid on 2026-10-21, and `check` raised at
     # `one(frames, "UpteDb")` before any report.
+    # Re-review: without the project list the titles cannot be filtered from the home page's labels (a title leaked
+    # as "label added"), so the home page is not recorded either and says so as a route error.
     grid = {"nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
+    recorded = []
 
     async def fake_grid(session, settle=6.0):
         return grid
 
+    async def record(self, route, scope=None):
+        recorded.append(route)
+
     monkeypatch.setattr(survey.reader, "grid", fake_grid)
+    monkeypatch.setattr(survey.Walker, "record", record)
     monkeypatch.setattr(survey.version, "current", None)
     monkeypatch.setattr(survey, "_baseline_ui", lambda: {"routes": {}, "build": "Zz9.1.O"})
 
     report = asyncio.run(survey.check(_CheckSession(), None, out_root=tmp_path))
 
+    assert recorded == [], recorded
     assert ["rpc not heard", "UpteDb", "expected on the grid view"] in report["wire"], report["wire"]
+    assert [kind for kind, route, _ in report["ui"] if route == "home"] == ["route error"], report["ui"]
     assert report["drift"] is True
 
 

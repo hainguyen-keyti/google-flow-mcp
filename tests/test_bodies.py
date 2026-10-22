@@ -7,7 +7,11 @@ sent; `Response.body` then answers from those bytes.
 """
 
 import asyncio
+import importlib.util
+import os
+import re
 from collections import OrderedDict
+from pathlib import Path
 
 import pytest
 from playwright._impl._network import Response
@@ -266,7 +270,10 @@ def test_install_routes_every_context_the_launch_returns_and_patches_the_body_re
     bodies.install()
     context = _launch()
 
-    assert context.routes == [(bodies.covers, bodies.handle)]
+    # Re-review of plan AT: a callable makes Playwright route `**/*`, every script and image of the page waiting on
+    # Python's loop (`_helper.py:510-516`); a compiled regex is matched by the driver itself.
+    assert context.routes == [(bodies.ROUTE, bodies.handle)]
+    assert isinstance(bodies.ROUTE, re.Pattern)
     assert Response.body is not before and bodies._installed is True
 
 
@@ -323,3 +330,66 @@ def test_the_repos_own_browser_session_installs_it_before_it_launches(monkeypatc
         asyncio.run(session.__aenter__())
 
     assert order[:3] == ["offscreen", "bodies", "factory"], order
+
+
+@pytest.fixture(scope="module")
+def reply_bodies():
+    """The acceptance script, imported the way tests/test_mcp_smoke.py imports the smoke; the environment defaults it
+    sets on import must not reach the tests after this module."""
+    saved = dict(os.environ)
+    path = Path(__file__).resolve().parents[1] / "scripts" / "acceptance" / "reply_bodies.py"
+    spec = importlib.util.spec_from_file_location("reply_bodies", path)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    return module
+
+
+class _Seen:
+    def __init__(self, url):
+        self.request = type("R", (), {"url": url})()
+
+    async def text(self):
+        return "x"
+
+
+def test_the_acceptance_listener_reads_only_the_calls_the_route_covers(reply_bodies, fresh):
+    # Re-review of plan AT (D9): the listener counted batchexecute replies of any host while the route covers Flow's
+    # only, so a call to another Google host read by Chrome would fail a read for the wrong reason.
+    page = type("P", (), {"on": lambda self, event, fn: None})()
+
+    async def flow():
+        reads = reply_bodies.Reads(page)
+        reads.on_response(_Seen("https://play.google.com/log?batchexecute=1"))
+        reads.on_response(
+            _Seen("https://flow.google.com/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=nzlxg")
+        )
+        return await reads.settle()
+
+    assert asyncio.run(flow()) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    ("switch", "fallen", "status"), [("1", 1, "FAIL"), ("1", 0, "PASS"), ("0", 1, "PASS")]
+)
+def test_a_read_the_route_did_not_serve_fails_only_with_the_route_on(
+    reply_bodies, fresh, monkeypatch, switch, fallen, status
+):
+    monkeypatch.setenv("VIDEO_REPLY_BODIES", switch)
+    bodies.counts.update(served=3, fallen_back=fallen)
+    reads = reply_bodies.Reads(type("P", (), {"on": lambda self, event, fn: None})())
+
+    row = asyncio.run(
+        reply_bodies.judge(
+            "project",
+            1,
+            {rpc: [None] for rpc in reply_bodies.expected("project")},
+            reads,
+            "b",
+        )
+    )
+
+    assert row["status"] == status, row

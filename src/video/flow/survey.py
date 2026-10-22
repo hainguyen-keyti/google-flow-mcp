@@ -86,6 +86,7 @@ class SurveyIncomplete(Exception):
 
 UNSETTLED = "the composer could not be put on the Video tab at x1, so no page can be recorded the way the baseline was"
 UNHEARD = "the listing (Zzl0ze) was not heard, so the project page was not recorded: without it the titles cannot be filtered from the labels"
+UNHEARD_GRID = "the project list (UpteDb) was not heard, so the home page was not recorded: without it the project titles cannot be filtered from the labels"
 
 
 class OptionLayoutChanged(Exception):
@@ -667,12 +668,14 @@ async def check(
     walker = Walker(session, project_id or "", folder)
     frames = await reader.grid(session)
     live = await version.read(session.page)
-    if "UpteDb" in frames:
-        walker.private |= {str(p.get("title") or "") for p in parsers.projects(one(frames, "UpteDb"))}
-    await walker.record("home")
     views: tuple[str, ...] = ("grid",)
     agent_was_on = False
     unsettled: list[tuple[str, str, str]] = []
+    if "UpteDb" in frames:
+        walker.private |= {str(p.get("title") or "") for p in parsers.projects(one(frames, "UpteDb"))}
+        await walker.record("home")
+    else:
+        unsettled.append(("route error", "home", UNHEARD_GRID))
     if project_id:
         opening = functools.partial(session.goto, session.project_url(project_id), ready=PROJECT_READY)
         more = await capture(session, opening, settle=8.0)

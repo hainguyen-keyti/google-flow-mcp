@@ -23,17 +23,17 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 from collections import OrderedDict
 from typing import Any
-from urllib.parse import urlsplit
 
 from playwright._impl._network import Response
 from playwright.async_api import BrowserType
 
 ENV = "VIDEO_REPLY_BODIES"
-# Measured 2026-10-21: every reply the parsers read answers a POST to this host and path.
-HOST = "flow.google.com"
-PATH_END = "/batchexecute"
+# Measured 2026-10-21: every reply the parsers read answers a POST to this host and path. A compiled pattern is
+# matched by Playwright's driver itself; a callable would make it pause every request of the page for Python.
+ROUTE = re.compile(r"^https://flow\.google\.com/[^?#]*/batchexecute(?:[?#]|$)")
 # Bodies kept: the largest reply measured is a 366 KB listing, so the bound caps the cache well under 200 MB.
 KEPT = 512
 _installed = False
@@ -42,8 +42,7 @@ counts = {"routed": 0, "served": 0, "fallen_back": 0}
 
 
 def covers(url: str) -> bool:
-    parts = urlsplit(url)
-    return parts.netloc == HOST and parts.path.endswith(PATH_END)
+    return ROUTE.match(url) is not None
 
 
 def _guid(request: Any) -> str:
@@ -108,7 +107,7 @@ def install() -> None:
 
     async def launch(self: Any, user_data_dir: Any, **kwargs: Any) -> Any:
         context = await original_launch(self, user_data_dir, **kwargs)
-        await context.route(covers, handle)
+        await context.route(ROUTE, handle)
         return context
 
     async def body(self: Any) -> bytes:

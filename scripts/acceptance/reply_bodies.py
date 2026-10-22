@@ -41,7 +41,7 @@ class Reads:
         page.on("response", self.on_response)
 
     def on_response(self, response):
-        if "batchexecute" in response.request.url:
+        if bodies.covers(response.request.url):
             self.pending.append(asyncio.ensure_future(self.read(response)))
 
     async def read(self, response):
