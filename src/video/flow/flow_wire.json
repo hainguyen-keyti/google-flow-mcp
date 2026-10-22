@@ -533,24 +533,37 @@
       "null",
       "null",
       [
-       "str",
+       {
+        "any": [
+         "null",
+         "str"
+        ]
+       },
        [
         "int",
         "int"
        ],
        "null",
        "null",
-       "uuid",
        {
         "any": [
+         "str",
+         "uuid"
+        ]
+       },
+       {
+        "any": [
+         "absent",
          "null",
          "uuid"
         ]
        },
-       [
-        "int",
-        "int"
-       ]
+       {
+        "opt": [
+         "int",
+         "int"
+        ]
+       }
       ],
       "uuid",
       {
@@ -594,7 +607,14 @@
        "null",
        "url",
        [
-        "null",
+        {
+         "opt": {
+          "*": [
+           "null",
+           "int"
+          ]
+         }
+        },
         {
          "opt": {
           "any": [
@@ -604,8 +624,8 @@
          }
         },
         {
-         "opt": [
-          [
+         "opt": {
+          "*": [
            {
             "any": [
              "absent",
@@ -656,12 +676,21 @@
             ]
            }
           ]
+         }
+        },
+        {
+         "any": [
+          "absent",
+          "list",
+          "null"
          ]
         },
         {
-         "opt": []
-        },
-        "int"
+         "any": [
+          "absent",
+          "int"
+         ]
+        }
        ],
        "null",
        {
@@ -680,7 +709,8 @@
        {
         "any": [
          "absent",
-         "null"
+         "null",
+         "str"
         ]
        },
        {
@@ -780,18 +810,32 @@
           ]
          }
         ],
-        [
-         "null",
-         "null",
-         [
+        {
+         "opt": [
           {
            "any": [
-            "absent",
-            "int"
+            "int",
+            "null"
+           ]
+          },
+          {
+           "any": [
+            "int",
+            "null"
+           ]
+          },
+          {
+           "opt": [
+            {
+             "any": [
+              "absent",
+              "int"
+             ]
+            }
            ]
           }
          ]
-        ],
+        },
         {
          "opt": [
           {

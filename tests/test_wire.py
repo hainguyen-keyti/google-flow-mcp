@@ -385,3 +385,17 @@ def test_the_parsers_read_every_record_of_the_live_shape_listing():
     assert all(item["kind"] == ("video" if lengths[item["id"]] >= 8 else "image") for item in media)
     videos = [record for record in parsers.records(listing) if lengths[record["id"]] >= 8]
     assert videos and all(record["model"] for record in videos)
+
+
+def test_a_superseded_listing_differs_from_the_baseline_only_where_flow_changed_the_records():
+    # Review of plan AU (B2): left out whole, the old listings took with them the grid entries of media made before
+    # 2026-09-12, and eight of the owner's older projects reported drift the old baseline never had (the sweep of
+    # 2026-10-22, out/au/sweep_*.log). Listings of those projects read on the new build keep that coverage: an old
+    # listing may now differ only where Flow changed the records (the six-part [7], the new image URL at [6][5]).
+    base = wire.baseline()["rpcs"]["Zzl0ze"]["shape"]
+    changed = {"[2][*][6][5]", "[2][*][7]"}
+
+    for name in sorted(_wire_baseline().SUPERSEDED):
+        payload = json.loads((FIXTURES / "rpc" / name).read_text(encoding="utf-8"))["payload"]
+        drift = {where for kind, where, _ in wire.compare(base, wire.skeleton(payload)) if kind in wire.DRIFT}
+        assert drift <= changed, (name, sorted(drift - changed))
