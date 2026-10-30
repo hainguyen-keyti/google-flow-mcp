@@ -18,7 +18,7 @@ from gflow_cli import auth as _auth
 from gflow_cli.api.client import FlowApiClient
 
 import video  # noqa: F401
-from video import bodies, gen, offscreen
+from video import bodies, extensions, gen, offscreen
 from video.flow import overlays, version
 
 _GUARD = threading.Lock()
@@ -73,6 +73,7 @@ class FlowSession:
         try:
             offscreen.install()
             bodies.install()
+            extensions.install()
             self.client = self._factory(self.profile_dir, headless=self.headless)
             await self.client.__aenter__()
             self._entered = True

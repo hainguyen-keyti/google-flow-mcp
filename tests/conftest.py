@@ -2,7 +2,7 @@ import pytest
 from playwright._impl._network import Response
 from playwright.async_api import BrowserType
 
-from video import bodies, mcp_server, offscreen
+from video import bodies, extensions, mcp_server, offscreen
 
 
 @pytest.fixture(autouse=True)
@@ -11,6 +11,7 @@ def _playwrights_own_launch(monkeypatch):
     its Response.body patched, for every later test."""
     monkeypatch.setattr(BrowserType, "launch_persistent_context", BrowserType.launch_persistent_context)
     monkeypatch.setattr(offscreen, "_installed", offscreen._installed)
+    monkeypatch.setattr(extensions, "_installed", extensions._installed)
     monkeypatch.setattr(Response, "body", Response.body)
     monkeypatch.setattr(bodies, "_installed", bodies._installed)
     monkeypatch.setattr(bodies, "_bodies", bodies._bodies.__class__())
