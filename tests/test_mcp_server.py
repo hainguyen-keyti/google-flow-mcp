@@ -3112,11 +3112,12 @@ def test_clip_download_says_4k_is_greyed_out_on_this_account_and_refused_before_
     assert "may spend" not in download, download
 
 
-def test_clip_extend_tells_the_agent_to_fetch_the_new_clip_through_its_scene():
-    # Plan Z, measured 2026-09-29: the extension lives in a new scene; flow_download got HTTP 400 on both renditions,
-    # clip_download waited 60 s for an editor that never opened, and scene_download fetched the film.
+def test_clip_extend_tells_the_agent_where_the_extended_clip_is():
+    # Plan Z, measured 2026-09-29: Veo Extend's extension lived in a new scene, fetched with scene_download. Plan AV,
+    # measured 2026-11-09: Omni 1.2's extension is a new version of the clip itself, which the call downloads.
     extend = served_tool_objects()["clip_extend"].description
-    assert "scene_download" in extend and "HTTP 400" in extend, extend
+    assert "new version" in extend and "downloads" in extend, extend
+    assert "scene_download" in extend, extend
 
 
 REAL_AGENT = {
@@ -3369,14 +3370,14 @@ def test_gen_video_forwards_the_voices_beside_the_ingredients(monkeypatch, tmp_p
 
 def test_the_tools_say_what_flow_does_with_an_input_it_would_drop_or_ignore():
     # Plan AL, G4, each measured on 2026-10-01: a character beside frames is dropped from the request (ak-a3); an Omni
-    # edit keeps the clip's audio and burns new words in as a subtitle (ak-n1-edit-line); an extension is a 7 s clip,
-    # so the film runs 8 + 7 = 15.0 s (ak-x1).
+    # edit keeps the clip's audio and burns new words in as a subtitle (ak-n1-edit-line). Plan AV, 2026-11-09: an Omni
+    # 1.2 extension of a 4 s clip came back as one 8.0 s file.
     served = served_tool_objects()
     assert "without the character" in served["gen_video"].description
     edit = served["clip_edit"].description
     assert "cannot change what is said" in edit and "subtitle" in edit
     extend = served["clip_extend"].description
-    assert "8 + 7" in extend and "overlapping" not in extend
+    assert "8.0 s file" in extend and "overlapping" not in extend
 
 
 def test_gen_video_tells_where_voices_come_from_and_what_each_model_takes():

@@ -352,12 +352,13 @@ def ck_save_frame(a, ctx):
 
 
 def ck_extend(a, ctx):
+    # Veo Extend made a new scene; Omni 1.2's extend (measured 2026-11-09) makes a new version of the clip itself.
     sid = a.get("scene_id")
     code = (a.get("outcome") or {}).get("code")
-    if not sid:
-        return [f"no scene_id, outcome {code!r}"]
-    ctx["S_ext"] = sid
-    return []
+    made = [o for o in a.get("outputs") or [] if o.get("role") == "generated" and o.get("path")]
+    if sid:
+        ctx["S_ext"] = sid
+    return [] if code == "DONE" and (sid or made) else [f"outcome {code!r}, scene {sid!r}, files {len(made)}"]
 
 
 def ck_edit(a, ctx):
@@ -465,7 +466,6 @@ step(
         "prompt": "A friendly young woman with short black hair and round glasses, plain white t-shirt, neutral studio portrait, looking at the camera",
         "name": "Verify Bot",
         "personality": "calm and curious",
-        "wait": True,
     },
     ck_character_create,
     needs=("P",),
@@ -829,10 +829,10 @@ step(
     needs=("P", "S", "V7"),
 )
 step(
-    "S03 scene_clips 2",
+    "S03 scene_clips 3",
     "scene_clips",
     lambda c: {"project_id": c["P"], "scene_id": c["S"]},
-    ck_scene_clips(2),
+    ck_scene_clips(3),
     needs=("P", "S", "V1", "V5"),
 )
 step(
@@ -878,10 +878,10 @@ step(
     needs=("P", "S", "C2"),
 )
 step(
-    "S10 scene_clips 1",
+    "S10 scene_clips 2",
     "scene_clips",
     lambda c: {"project_id": c["P"], "scene_id": c["S"]},
-    ck_scene_clips(1, "D"),
+    ck_scene_clips(2, "D"),
     needs=("P", "S", "C2"),
 )
 step(

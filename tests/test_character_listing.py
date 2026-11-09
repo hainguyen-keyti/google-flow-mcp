@@ -43,3 +43,10 @@ def test_voices_from_listing_reads_the_preset_voices():
     names = {v["name"] for v in voices}
     assert {"Achernar", "Achird"} <= names
     assert all(v["id"] and v["name"] for v in voices)
+
+
+def test_a_character_in_the_trash_is_not_listed():
+    """Measured 2026-11-09 on build YyfdEJNu4Zk (out/av/trash_probe.json): "Move to trash" on a character leaves its
+    entry in Zzl0ze[5] with a fifth field true in [3]; a live character's [3] stops at its third field."""
+    rows = parsers.characters_from_listing(payload("Zzl0ze_20261109_trashed_character"))
+    assert [row["entity_id"] for row in rows] == ["00000000-0000-4000-8000-000000000023"]

@@ -789,3 +789,84 @@ def test_the_row_script_check_rejects_the_script_the_live_bug_produced(monkeypat
 
     with pytest.raises(AssertionError):
         test_the_row_script_reads_the_rows_own_elements_and_never_its_run_on_text()
+
+
+# Move to trash (plan AV): measured 2026-11-09 (out/av/trash_probe.json), the character editor's trash button reads
+# "Move to trash", opens no dialog and returns to the project page; the listing then marks the entry as trashed.
+
+
+class _TrashButton:
+    def __init__(self, page, name):
+        self.page, self.name = page, name
+
+    @property
+    def first(self):
+        return self
+
+    @property
+    def last(self):
+        return self
+
+    async def count(self):
+        return 1 if self.name.search(self.page.label_text) else 0
+
+    async def click(self, timeout=None):
+        if not await self.count():
+            raise AssertionError(f"clicked a button nobody shows: {self.name.pattern}")
+        self.page.clicked.append(self.page.label_text)
+        self.page.trashed = True
+
+
+class _NoDialog:
+    @property
+    def last(self):
+        return self
+
+    async def wait_for(self, state=None, timeout=None):
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        raise PlaywrightTimeoutError("no dialog")
+
+
+class _TrashPage:
+    def __init__(self, label_text="Move to trash"):
+        self.label_text = label_text
+        self.clicked = []
+        self.trashed = False
+        self.keyboard = self
+
+    async def press(self, key):
+        return None
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    def get_by_role(self, role, name=None):
+        return _TrashButton(self, name)
+
+    def locator(self, selector):
+        return _NoDialog()
+
+
+def test_a_character_is_moved_to_the_trash_with_no_dialog_and_checked_off_the_listing(monkeypatch):
+    page = _TrashPage()
+    session = type("S", (), {"page": page})()
+
+    async def opened(session, project_id, entity_id):
+        return None
+
+    async def listed(session, project_id):
+        return [] if page.trashed else [{"entity_id": "E"}]
+
+    async def heard(session, action, settle=0.0):
+        await action()
+        return {"rpcids": []}
+
+    monkeypatch.setattr(characters, "_open_editor", opened)
+    monkeypatch.setattr(characters, "list_characters", listed)
+    monkeypatch.setattr(characters, "capture", heard)
+
+    answer = asyncio.run(characters.delete(session, "P", "E"))
+
+    assert page.clicked == ["Move to trash"]
+    assert answer["entity_id"] == "E" and answer["remaining"] == 0

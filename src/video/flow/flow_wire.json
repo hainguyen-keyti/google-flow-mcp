@@ -1,5 +1,5 @@
 {
- "measured": "2026-10-22",
+ "measured": "2026-11-09",
  "rpcs": {
   "HTrJv": {
    "view": "project",
@@ -1010,6 +1010,18 @@
           "list",
           "records"
          ]
+        },
+        {
+         "any": [
+          "absent",
+          "null"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "bool"
+         ]
         }
        ],
        "uuid",
@@ -1078,13 +1090,15 @@
      "null",
      "null",
      {
-      "*": [
-       "null",
-       "int",
-       "int",
-       "null",
-       "str"
-      ]
+      "opt": {
+       "*": [
+        "null",
+        "int",
+        "int",
+        "null",
+        "str"
+       ]
+      }
      },
      "null",
      "int"

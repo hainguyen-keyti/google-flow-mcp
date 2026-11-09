@@ -99,7 +99,8 @@ def characters_from_listing(payload: Any) -> list[dict[str, Any]]:
     out = []
     for entry in entries:
         entity_id = _at(entry, 1)
-        if not _uuid(entity_id):
+        # Measured 2026-11-09: a character moved to the trash keeps its entry, with true at [3][4].
+        if not _uuid(entity_id) or _at(entry, 3, 4) is True:
             continue
         portrait = _str(_at(entry, 4))
         out.append(

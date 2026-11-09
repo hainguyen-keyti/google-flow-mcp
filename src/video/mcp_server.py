@@ -1996,11 +1996,10 @@ async def clip_recipe(project_id: str, media_id: str, workflow_id: str | None = 
         "Extend a clip with Omni 1.2 Flash, picked in the editor's model picker and read back before the click when "
         "the editor shows one (Google retired Veo Extend on 2026-11-05). It spends credits and is ledgered: Flow bills "
         "an Omni 1.2 extend by the second like a generation (changelog 2026-11-05); the Veo 3.1 Lite extend measured "
-        "here cost 10 credits. When Flow greys Extend out, the call is refused before the click, at no cost. The extension is a new clip inside a new "
-        "scene (the source is copied in first): its own file answered HTTP 400 and clip_download could not open it "
-        "(measured 2026-09-29), so fetch it with scene_download on the scene_id this tool returns; that film's video "
-        "stream ran 15.0 s for an 8 s source, 8 + 7: the extension is a 7.0 s clip, though the listing calls it 8 "
-        "(measured on the file, 2026-10-01). "
+        "here cost 10 credits. When Flow greys Extend out, the call is refused before the click, at no cost. "
+        "Measured 2026-11-09 on an Omni 1.2 360p 4 s clip: 4 credits, and the extension came back as a new version "
+        "of the same clip holding the whole of it (an 8.0 s file), which this call downloads; Veo Extend used to "
+        "make a new scene instead, and when Flow still does that, scene_id names it for scene_download. "
         "Takes about 2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out "
         "folder. " + _BALANCE_MOVED + _JOB_ID_RULE
     ),
