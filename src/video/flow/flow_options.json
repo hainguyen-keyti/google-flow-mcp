@@ -1,94 +1,116 @@
 {
-  "measured": "2026-11-09",
-  "source": "a $0 walk of flow.google.com's composer settings: every option clicked, the live price line read, Start never clicked",
-  "video": {
+ "measured": "2026-11-09",
+ "source": "a $0 walk of flow.google.com's composer settings: every option clicked, the live price line read, Start never clicked",
+ "video": {
+  "modes": [
+   "Frames",
+   "Ingredients"
+  ],
+  "aspects": [
+   "16:9",
+   "9:16"
+  ],
+  "counts": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "models": {
+   "omni-1.2-flash": {
+    "label": "Omni 1.2 Flash",
+    "resolutions": [
+     "360p",
+     "720p"
+    ],
+    "durations": [
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15
+    ],
+    "price_x1": {
+     "360p 3s": 3,
+     "360p 4s": 4,
+     "360p 5s": 5,
+     "360p 6s": 6,
+     "360p 7s": 7,
+     "360p 8s": 8,
+     "360p 9s": 9,
+     "360p 10s": 10,
+     "360p 11s": 12,
+     "360p 12s": 14,
+     "360p 13s": 16,
+     "360p 14s": 18,
+     "360p 15s": 20,
+     "720p 3s": 9,
+     "720p 4s": 12,
+     "720p 5s": 15,
+     "720p 6s": 18,
+     "720p 7s": 21,
+     "720p 8s": 24,
+     "720p 9s": 27,
+     "720p 10s": 30,
+     "720p 11s": 36,
+     "720p 12s": 42,
+     "720p 13s": 48,
+     "720p 14s": 54,
+     "720p 15s": 60
+    },
     "modes": [
-      "Frames",
-      "Ingredients"
-    ],
-    "aspects": [
-      "16:9",
-      "9:16"
-    ],
-    "counts": [
-      1,
-      2,
-      3,
-      4
-    ],
-    "models": {
-      "omni-1.2-flash": {
-        "label": "Omni 1.2 Flash",
-        "resolutions": [
-          "360p",
-          "720p"
-        ],
-        "durations": [
-          3,
-          4,
-          5,
-          6,
-          7,
-          8,
-          9,
-          10
-        ],
-        "price_x1": {
-          "360p 3s": 3,
-          "360p 4s": 4,
-          "360p 5s": 5,
-          "360p 6s": 6,
-          "360p 7s": 7,
-          "360p 8s": 8,
-          "360p 9s": 9,
-          "360p 10s": 10,
-          "720p 3s": 9,
-          "720p 4s": 12,
-          "720p 5s": 15,
-          "720p 6s": 18,
-          "720p 7s": 21,
-          "720p 8s": 24,
-          "720p 9s": 27,
-          "720p 10s": 30
-        },
-        "modes": [
-          "Frames",
-          "Ingredients"
-        ]
-      },
-      "veo-lite": {
-        "label": "Veo 3.1 - Lite",
-        "resolutions": [],
-        "durations": [],
-        "price_x1": {
-          "": 10
-        },
-        "modes": [
-          "Frames",
-          "Ingredients"
-        ]
-      }
-    }
-  },
-  "image": {
-    "models": [
-      "Nano Banana Pro",
-      "Nano Banana 2 Lite",
-      "Nano Banana 2.1"
-    ],
-    "aspects": [
-      "16:9",
-      "4:3",
-      "1:1",
-      "3:4",
-      "9:16"
-    ],
-    "counts": [
-      1,
-      2,
-      3,
-      4
-    ],
-    "price_x1": 0
+     "Frames",
+     "Ingredients"
+    ]
+   },
+   "veo-lite": {
+    "label": "Veo 3.1 - Lite",
+    "resolutions": [],
+    "durations": [],
+    "price_x1": {
+     "": 10
+    },
+    "modes": [
+     "Frames",
+     "Ingredients"
+    ]
+   }
   }
+ },
+ "image": {
+  "models": [
+   "Nano Banana Pro",
+   "Nano Banana 2 Lite",
+   "Nano Banana 2.1"
+  ],
+  "aspects": [
+   "16:9",
+   "4:3",
+   "1:1",
+   "3:4",
+   "9:16"
+  ],
+  "counts": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "price_x1": 0,
+  "rows": [
+   [
+    "Low",
+    "Medium",
+    "High"
+   ]
+  ]
+ }
 }

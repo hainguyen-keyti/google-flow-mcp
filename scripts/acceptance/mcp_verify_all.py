@@ -103,7 +103,9 @@ def ck_projects(a, ctx):
 
 def ck_caps(a, ctx):
     models = (a.get("video") or {}).get("models") or {}
-    return [] if "omni-flash" in models else [f"video models {list(models)}"]
+    # Plan AV: Omni 1.2 Flash and Veo 3.1 Lite only; the three models Flow retires on 2026-12-05 are gone.
+    wanted = {"omni-1.2-flash", "veo-lite"}
+    return [] if set(models) == wanted else [f"video models {list(models)}"]
 
 
 def ck_project_create(a, ctx):
@@ -553,7 +555,7 @@ step(
     lambda c: {
         "project": c["P"],
         "prompt": PROMPT_CLIP,
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "resolution": "360p",
         "duration": 4,
         "aspect": "9:16",
@@ -569,7 +571,7 @@ step(
     lambda c: {
         "project": c["P"],
         "prompt": PROMPT_CLIP,
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "resolution": "360p",
         "duration": 4,
         "aspect": "9:16",
@@ -589,12 +591,48 @@ step(
     needs=("P", "V1"),
 )
 step(
+    "P03b gen_video Frames start and end",
+    "gen_video",
+    lambda c: {
+        "project": c["P"],
+        "prompt": "The duck turns slowly to face the camera, static camera",
+        "model": "omni-1.2-flash",
+        "resolution": "360p",
+        "duration": 4,
+        "aspect": "9:16",
+        "start_frame": c["U"],
+        "end_frame": c["U"],
+        "job_id": f"v8-frames-end-{RUN}",
+        "max_credits": 4,
+    },
+    ck_video_done("V1b"),
+    price=4,
+    needs=("P", "U"),
+)
+step(
+    "P03c gen_video Frames 720p 3s",
+    "gen_video",
+    lambda c: {
+        "project": c["P"],
+        "prompt": "A slow push in on a cup of tea on a wooden table, soft window light, no people",
+        "model": "omni-1.2-flash",
+        "resolution": "720p",
+        "duration": 3,
+        "aspect": "9:16",
+        "job_id": f"v8-720-{RUN}",
+        "max_credits": 9,
+    },
+    ck_video_done("V1c"),
+    price=9,
+    needs=("P",),
+)
+step(
     "P04 gen_video dry Ingredients",
     "gen_video",
     lambda c: {
         "project": c["P"],
         "prompt": "The duck from the reference image floats in a bathtub of foam, static camera",
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "resolution": "360p",
         "duration": 4,
         "aspect": "9:16",
@@ -610,7 +648,7 @@ step(
     lambda c: {
         "project": c["P"],
         "prompt": "The duck from the reference image floats in a bathtub of foam, static camera",
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "resolution": "360p",
         "duration": 4,
         "aspect": "9:16",
@@ -623,12 +661,31 @@ step(
     needs=("P", "U", "q_ingr"),
 )
 step(
+    "P05b gen_video Ingredients with a voice",
+    "gen_video",
+    lambda c: {
+        "project": c["P"],
+        "prompt": "A woman beside the duck says: what a calm morning. Static camera",
+        "model": "omni-1.2-flash",
+        "resolution": "360p",
+        "duration": 4,
+        "aspect": "9:16",
+        "media_ids": [c["U"]],
+        "voices": ["Achird"],
+        "job_id": f"v8-voice-{RUN}",
+        "max_credits": 4,
+    },
+    ck_video_done("V2b"),
+    price=4,
+    needs=("P", "U"),
+)
+step(
     "P06 job_submit",
     "job_submit",
     lambda c: {
         "project": c["P"],
         "prompt": "A paper boat drifting on a calm pond at sunrise, static camera, no people",
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "resolution": "360p",
         "duration": 4,
         "aspect": "9:16",
@@ -661,11 +718,12 @@ step(
         "project": c["P"],
         "prompt": "She smiles and waves at the camera in a bright room",
         "characters": [c["E"]],
-        "model": "veo-lite",
+        "model": "omni-1.2-flash",
+        "duration": 3,
         "aspect": "9:16",
         "dry_run": True,
     },
-    ck_quote("q_char", 10),
+    ck_quote("q_char", 9),
     needs=("P", "E"),
 )
 step(
@@ -675,13 +733,14 @@ step(
         "project": c["P"],
         "prompt": "She smiles and waves at the camera in a bright room",
         "characters": [c["E"]],
-        "model": "veo-lite",
+        "model": "omni-1.2-flash",
+        "duration": 3,
         "aspect": "9:16",
         "job_id": f"v8-char-{RUN}",
         "out_dir": str(OUT / "dl"),
     },
     ck_video_done("V4"),
-    price=10,
+    price=9,
     needs=("P", "E", "q_char"),
 )
 step(
@@ -699,19 +758,37 @@ step(
     needs=("P",),
 )
 step(
+    "P11b gen_t2v omni 360p 3s",
+    "gen_t2v",
+    lambda c: {
+        "project": c["P"],
+        "prompt": "A paper lantern glowing on a dark river, static camera, no people",
+        "model": "omni-1.2-flash",
+        "resolution": "360p",
+        "duration": 3,
+        "aspect": "9:16",
+        "job_id": f"v8-t2v-omni-{RUN}",
+    },
+    ck_video_done("V5b"),
+    price=3,
+    needs=("P",),
+)
+step(
     "P12 gen_i2v omni 4s",
     "gen_i2v",
     lambda c: {
         "project": c["P"],
         "initial_frame": c["U_file"],
-        "prompt": "The kite drifts slowly to the right, static camera",
-        "model": "omni-flash",
+        "end_frame": c["U_file"],
+        "prompt": "The subject turns slowly and comes back to rest, static camera",
+        "model": "omni-1.2-flash",
+        "resolution": "360p",
         "duration": 4,
         "aspect": "9:16",
         "job_id": f"v8-i2v-{RUN}",
     },
     ck_video_done("V6"),
-    price=7,
+    price=4,
     needs=("P", "U_file"),
 )
 step(
@@ -865,18 +942,18 @@ step(
     needs=("P", "V5"),
 )
 step(
-    "C05 clip_extend V5",
+    "C05 clip_extend V1",
     "clip_extend",
     lambda c: {
         "project_id": c["P"],
-        "media_id": c["V5"],
-        "prompt": "The kite keeps flying, the camera holds still",
+        "media_id": c["V1"],
+        "prompt": "The duck keeps floating, the camera holds still",
         "job_id": f"v8-ext-{RUN}",
         "out_dir": str(OUT / "dl"),
     },
     ck_extend,
     price=10,
-    needs=("P", "V5"),
+    needs=("P", "V1"),
 )
 step(
     "C06 scene_download extended",
@@ -896,7 +973,7 @@ step(
         "out_dir": str(OUT / "dl"),
     },
     ck_edit,
-    price=20,
+    price=4,
     needs=("P", "V1"),
 )
 step(

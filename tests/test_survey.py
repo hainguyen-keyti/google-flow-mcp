@@ -107,7 +107,13 @@ def test_the_option_walk_becomes_the_options_file_gen_video_reads():
     "Leaving Dec 5" left out of the file gen_video reads (decided 2026-11-09)."""
 
     def per_second(lengths, per_s):
-        prices = {f"{r} {d}s x{c}": per_s[r] * d * c for r in per_s for d in lengths for c in (1, 2, 3, 4)}
+        # Past 10 s each second costs twice the base rate (survey of 2026-11-09 on the default account).
+        prices = {
+            f"{r} {d}s x{c}": per_s[r] * (min(d, 10) + 2 * max(d - 10, 0)) * c
+            for r in per_s
+            for d in lengths
+            for c in (1, 2, 3, 4)
+        }
         return {
             "rows": [list(per_s), [f"{d}s" for d in lengths], ["x1", "x2", "x3", "x4"]],
             "prices": prices,
@@ -121,7 +127,7 @@ def test_the_option_walk_becomes_the_options_file_gen_video_reads():
         "prices": {"360p 4s x1": 4, "720p 10s x1": 15},
     }
     per_mode = {
-        "Omni 1.2 Flash": per_second(range(3, 11), {"360p": 1, "720p": 3}),
+        "Omni 1.2 Flash": per_second(range(3, 16), {"360p": 1, "720p": 3}),
         "Omni 1.1 Flash Leaving Dec 5": old_omni,
         "Veo 3.1 - Lite": veo(10),
         "Veo 3.1 - Fast Leaving Dec 5": veo(20),
@@ -135,6 +141,8 @@ def test_the_option_walk_becomes_the_options_file_gen_video_reads():
             "aspects": ["16:9", "4:3", "1:1", "3:4", "9:16"],
             "counts": [1, 2, 3, 4],
             "price_x1": 0,
+            # The default account's Image tab, 2026-11-09.
+            "rows": [["Low", "Medium", "High"]],
         },
     }
 
@@ -1019,6 +1027,9 @@ class _SettingsWalker(survey.Walker):
         self.log.append(("model", name))
         self.model = name
 
+    async def slider_lengths(self):
+        return []
+
 
 def _walk_settings(monkeypatch, tmp_path):
     async def opened(page, label="settings"):
@@ -1196,3 +1207,102 @@ def test_a_sidebar_row_without_a_title_is_opened_as_a_whole(monkeypatch, tmp_pat
 
 async def _async_none(*args, **kwargs):
     return None
+
+
+class _SliderWalker(_SettingsWalker):
+    """Omni 1.2 Flash's pane as measured on 2026-11-09: a resolution row and a count row, its length on a slider."""
+
+    def __init__(self, tmp_path):
+        super().__init__(tmp_path)
+        self.model, self.resolution, self.length = "Omni 1.2 Flash", "720p", 10
+
+    async def radio(self, text):
+        if text in ("360p", "720p"):
+            self.resolution = text
+        return await super().radio(text)
+
+    async def pane(self):
+        state = await super().pane()
+        if self.tab == "Image":
+            return state
+        tabs, modes, aspects, counts = state["groups"]
+        resolutions = [{"t": f"{r}info", "on": r == self.resolution} for r in ("360p", "720p")]
+        per_second = {"360p": 1, "720p": 3}[self.resolution]
+        return {"groups": [tabs, modes, aspects, resolutions, counts], "price": per_second * self.length}
+
+    async def model_names(self):
+        return None, (["Nano Banana 2"] if self.tab == "Image" else ["Omni 1.2 Flash"])
+
+    async def slider_lengths(self):
+        return [3, 4, 5] if self.tab == "Video" else []
+
+    async def set_length(self, seconds):
+        self.log.append(("length", seconds))
+        self.length = seconds
+
+
+def test_the_walk_reads_the_length_slider_into_a_length_row_priced_at_every_second(monkeypatch, tmp_path):
+    """Plan AV: Omni 1.2 Flash's length is a slider, so the survey walks it a second at a time and files each price
+    under its own length, the row options_from_walk already maps."""
+
+    async def opened(page, label="settings"):
+        return ""
+
+    monkeypatch.setattr(survey.composer, "_open_settings", opened)
+    walker = _SliderWalker(tmp_path)
+    walk = asyncio.run(walker.walk_settings())
+
+    cell = walk["video"]["modes"]["Frames"]["Omni 1.2 Flash"]
+    assert cell["rows"] == [["360p", "720p"], ["3s", "4s", "5s"], ["x1", "x4"]]
+    assert {key: cell["prices"][key] for key in ("360p 3s x1", "360p 5s x1", "720p 4s x1")} == {
+        "360p 3s x1": 3,
+        "360p 5s x1": 5,
+        "720p 4s x1": 12,
+    }
+    assert ("length", 3) in walker.log and ("length", 5) in walker.log
+
+
+def test_the_image_tab_is_read_by_what_each_row_holds_not_by_its_place():
+    """Survey of 2026-11-09 on the default account: the Image tab grew a Low/Medium/High row between the aspects and
+    the counts, and the walk read 'Low' as a count. Each row is told by its own labels, and an unknown one is kept."""
+    groups = [
+        [{"t": "imageImage", "on": True}, {"t": "videocamVideo", "on": False}],
+        [{"t": "crop_16_916:9", "on": False}, {"t": "crop_9_169:16", "on": True}],
+        [{"t": "Low", "on": False}, {"t": "Medium", "on": False}, {"t": "High", "on": True}],
+        [{"t": "x1", "on": True}, {"t": "x2", "on": False}],
+    ]
+
+    image = survey.image_options(groups, ["Nano Banana Pro"], 0)
+
+    assert image == {
+        "models": ["Nano Banana Pro"],
+        "aspects": ["16:9", "9:16"],
+        "counts": [1, 2],
+        "price_x1": 0,
+        "rows": [["Low", "Medium", "High"]],
+    }
+
+
+def test_an_image_tab_without_extra_rows_reads_as_before():
+    groups = [
+        [{"t": "imageImage", "on": True}],
+        [{"t": "crop_square1:1", "on": True}],
+        [{"t": "x1", "on": True}, {"t": "x4", "on": False}],
+    ]
+    assert survey.image_options(groups, ["Nano Banana 2.1"], 0) == {
+        "models": ["Nano Banana 2.1"],
+        "aspects": ["1:1"],
+        "counts": [1, 4],
+        "price_x1": 0,
+    }
+
+
+def test_a_new_image_row_is_named_in_the_comparison():
+    base = json.loads(json.dumps(video.OPTIONS))
+    base["image"].pop("rows", None)
+    current = json.loads(json.dumps(base))
+    current["image"]["rows"] = [["Low", "Medium", "High"]]
+
+    found = survey.compare_options(base, current)
+
+    assert ("image option changed", "rows", "added [['Low', 'Medium', 'High']]") in found

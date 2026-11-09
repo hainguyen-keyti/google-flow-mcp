@@ -1226,7 +1226,7 @@ server = TellingServer(
         "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
         "recorded in the ledger (out/ledger.jsonl by default): gen_video, job_submit, gen_t2v, gen_i2v, gen_r2v, "
         "gen_character, clip_extend, clip_edit, and agent_send (may spend). gen_video covers every video option "
-        "Flow's composer offers (Omni 1.2 Flash at 360p or 720p and 3-10 s, Veo 3.1 Lite, x1-x4, first and last "
+        "Flow's composer offers (Omni 1.2 Flash at 360p or 720p and 3-15 s, Veo 3.1 Lite, x1-x4, first and last "
         "frame, ingredients) and needs max_credits for a real run. Omni 1.1 Flash, Veo 3.1 Fast and Veo 3.1 Quality "
         "leave Flow on 2026-12-05 and every tool here refuses them already. clip_download at 4k is a Flow upscale its price "
         "table offers only from the Ultra plan, at 50 credits; on this Pro account Flow greys it out, so it is "
@@ -1249,7 +1249,8 @@ server = TellingServer(
         "retryable=yes: call again with the same project and prompt, a new job_id and retry_of set to the refused "
         "job_id. "
         "When model is omitted gen_t2v, gen_i2v and gen_r2v "
-        "use omni-1.2-flash at 720p for 8 s (24 credits; Omni 1.2 bills by the second, 1 a second at 360p, 3 at 720p). "
+        "use omni-1.2-flash at 720p for 8 s (24 credits; Omni 1.2 bills by the second, 1 a second at 360p and 3 at 720p up "
+        "to 10 s, twice that for each second past 10; past 10 s needs an account whose Length slider reaches it). "
         "When aspect is omitted, all three run 9:16: that is gflow's own default, not the shape of the image you "
         "passed, and Flow crops a start frame of another shape to fit. Name the aspect you want. "
         "If a tool reports that Google flagged unusual activity (WAF), stop: do not retry and "
@@ -2058,7 +2059,8 @@ async def _gen(kind: str, **kwargs: Any) -> str:
     name="gen_t2v",
     description=(
         "Text to video via gflow. It spends credits and is ledgered, on the PRO plan: omni-1.2-flash bills by the "
-        "second, 3-10 s, 1 credit a second at 360p and 3 at 720p (720p 8 s = 24, the default when model, resolution "
+        "second, 3-15 s, 1 credit a second at 360p and 3 at 720p up to 10 s, twice that past 10 s (720p 8 s = 24, the "
+        "default when model, resolution "
         "and duration are omitted; surveyed 2026-11-09), veo-lite 8 s x1 = 10 credits (measured); flow_capabilities "
         "answers every cell. Allow 2-5 min: a gflow job took 74-85 s, plus a balance read before and after."
         + _GFLOW_CAP_NOTE
@@ -2318,7 +2320,7 @@ def _video_options(*, count: bool = True) -> str:
         "and is no error), and once the clip is fetched its recipe is read back: a voice, image or character Flow "
         "dropped is an error even though it was paid. "
         + _video_options()
-        + " resolution and duration apply to omni-1.2-flash only (defaults 720p and 8 s; 3-10 s on this account, set "
+        + " resolution and duration apply to omni-1.2-flash only (defaults 720p and 8 s; 3-15 s where the account's slider reaches 15, else 3-10 s, set "
         "on the composer's Length slider and read back before the click). The money guard is Flow's own "
         "price line, read right before the single click: a real run needs max_credits and is refused when the live "
         "price is over it; dry_run=true reads that price and the settings for free, clicks nothing and needs no job_id "

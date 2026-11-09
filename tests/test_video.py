@@ -24,13 +24,15 @@ def test_the_options_file_holds_what_the_composer_showed_on_2026_11_09():
 
 @pytest.mark.parametrize("count", [1, 2, 3, 4])
 @pytest.mark.parametrize(("resolution", "per_second"), [("360p", 1), ("720p", 3)])
-@pytest.mark.parametrize("seconds", range(3, 11))
+@pytest.mark.parametrize("seconds", range(3, 16))
 def test_every_omni_1_2_cell_is_priced_by_the_second(seconds, resolution, per_second, count):
-    """I1: Flow prices Omni 1.2 per second (changelog 2026-11-05), measured at every length its slider offers here."""
-    assert video.price("omni-1.2-flash", resolution, seconds, count) == per_second * seconds * count
+    """I1: Flow prices Omni 1.2 per second (changelog 2026-11-05), measured at every length its slider offers on the
+    default account (survey 2026-11-09): the base rate up to 10 s, twice it for each second past 10."""
+    expected = per_second * min(seconds, 10) + 2 * per_second * max(seconds - 10, 0)
+    assert video.price("omni-1.2-flash", resolution, seconds, count) == expected * count
 
 
-@pytest.mark.parametrize("seconds", [2, 11, 15])
+@pytest.mark.parametrize("seconds", [2, 16])
 def test_a_length_the_slider_does_not_offer_here_is_refused(seconds):
     with pytest.raises(ValueError, match="duration must be one of"):
         video.check_settings(
@@ -51,7 +53,10 @@ def test_a_model_flow_retires_on_2026_12_05_is_refused_before_any_browser(model)
         ({"model": "veo-ultra"}, "model must be one of"),
         ({"model": "veo-lite", "duration": 10}, "veo-lite offers no length choice"),
         ({"model": "veo-lite", "resolution": "360p"}, "veo-lite offers no resolution choice"),
-        ({"model": "omni-1.2-flash", "duration": 12}, "duration must be one of [3, 4, 5, 6, 7, 8, 9, 10]"),
+        (
+            {"model": "omni-1.2-flash", "duration": 16},
+            "duration must be one of [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]",
+        ),
         ({"model": "omni-1.2-flash", "resolution": "1080p"}, "resolution must be one of ['360p', '720p']"),
         ({"count": 5}, "count must be one of [1, 2, 3, 4]"),
         ({"aspect": "1:1"}, "aspect must be one of ['16:9', '9:16']"),

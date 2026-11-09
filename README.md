@@ -86,24 +86,23 @@ than typed by hand.
 
 ## What a call costs
 
-Measured on a Google AI Pro account in September 2026. A price marked *unmeasured* is one this repo refuses to
-guess about; the tool says so too.
+Flow's lineup since 2026-11-05 is two video models, Omni 1.2 Flash and Veo 3.1 Lite. Omni 1.1 Flash, Veo 3.1 Fast
+and Veo 3.1 Quality leave Flow on 2026-12-05, and every tool here refuses them already (the owner's decision of
+2026-11-09). Prices below were read off Flow's price line on a Google AI Pro account on 2026-11-09, and a price marked
+*unmeasured* is one no paid run here has landed on yet; the tool says so too.
 
 | Action | Credits |
 |---|---|
-| `gen_video`: any option Flow's composer offers, guarded by Flow's live price line and your `max_credits` | Omni 1.1 Flash 720p 4/6/8/10 s: 7/10/12/15; 360p: 4/5/6/7; Veo 3.1 Lite 10, Fast 20, Quality 100 (8 s); x2-x4 multiply (Flow's price line, 2026-09-29) |
-| `gen_video` with `voices` (a preset or a voice of your own, beside an image or a character) | the same price: Veo 3.1 Lite with one image and one voice 10, Omni 1.1 Flash 8 s with one image and two voices 12 (paid 2026-10-01) |
-| `job_submit`: `gen_video` that does not wait for the render (one clip per call, no dry run) | the same price as `gen_video`; omni-flash 360p 4 s paid twice at 4 (2026-10-03) |
+| `gen_video`: any option Flow's composer offers, guarded by Flow's live price line and your `max_credits` | Omni 1.2 Flash, billed by the second on a 3-15 s slider (3-10 s on an account whose slider stops at 10): 1 a second at 360p, 3 at 720p up to 10 s, twice that past 10 (720p 8 s = 24, the default; 15 s = 60); Veo 3.1 Lite 10 (8 s); x2-x4 multiply |
+| `gen_video` with `voices` (a preset or a voice of your own, beside an image or a character) | the same price as without; Omni 1.2 takes 7 images and 5 voices, Veo 3.1 Lite 3 and 1 (read off the composer 2026-11-09) |
+| `job_submit`: `gen_video` that does not wait for the render (one clip per call, no dry run) | the same price as `gen_video` |
 | `job_status`, `job_collect`: where a submitted job stands, and fetching its clip | 0 |
 | `gen_t2v` / `gen_r2v`, veo-lite, 8 s | 10 |
-| `gen_t2v` / `gen_i2v`, omni-flash, 10 s | 15 |
-| `gen_r2v`, omni-flash, 8 s (the only length gflow offers it) | 12 |
-| `gen_character` (video starring a project character), omni-flash | 12 |
+| `gen_t2v` / `gen_i2v` / `gen_r2v`, omni-1.2-flash (the default, 720p 8 s; `gen_i2v` takes an end frame up to 10 s) | by the second as above: 24 by default |
+| `gen_character` (video starring a project character, or project images alone), omni-1.2-flash at 720p, 3-15 s | 3 a second up to 10 s, 6 past it: 24 at 8 s, *unmeasured* |
 | `gen_character`, veo-lite | 10 |
-| `gen_character`, veo-fast | 20, from Flow's own price table, *unmeasured* |
-| `gen_character`, omni-flash, 10 s, with characters or from project images alone (the only 10 s reference video; `gen_r2v` runs 8 s) | 15 |
-| `clip_extend` (Veo clips only) | 10 |
-| `clip_edit` (Omni 1.1 Flash) | 20 measured, Flow's table says 40 |
+| `clip_extend` (Omni 1.2 Flash; Google retired Veo Extend on 2026-11-05) | by the second, like a generation (Flow's changelog) |
+| `clip_edit` (Omni 1.2 Flash, set in the editor's model picker) | by the second, like a generation (Flow's changelog); Omni 1.1 edits measured 20 |
 | `gen_t2i` / `gen_i2i` (Nano Banana 2.1, the model Flow offers in place of 2 since 2026-10-07) | 0 credits, but a daily image quota |
 | `clip_download` at 1080p, or at 720p on a 360p clip (its upscale, measured 2026-10-03; a 360p clip has no 1080p and is refused with what its menu offers) | 0 |
 | `clip_download` at 4k (a Flow upscale) | not offered on Pro: greyed out, refused before any click (Flow's table: Ultra, 50) |
@@ -112,7 +111,7 @@ guess about; the tool says so too.
 Timing, so a slow call is not mistaken for a broken one: a read takes 15 to 50 s, a change about 50 s, a
 generation 2 to 5 min, `clip_extend` and `clip_edit` up to 7 min. `job_submit` answered in 153 s with the balance
 already charged, `job_status` and `job_collect` in about 47 s each, and two clips submitted back to back were both
-ready within about 4 min of their submits (measured 2026-10-03, omni-flash 360p 4 s, 4 credits each).
+ready within about 4 min of their submits (measured 2026-10-03, Omni 1.1 Flash 360p 4 s, 4 credits each).
 
 ## How the money is guarded
 

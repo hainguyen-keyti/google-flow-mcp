@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from video.flow import agent, clips, composer, parsers, reader, scenes, version, wire
+from video.flow import agent, clips, composer, ingredients, parsers, reader, scenes, version, wire
 from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
@@ -247,8 +247,8 @@ def compare_options(base: dict[str, Any], current: dict[str, Any]) -> list[tuple
                 found.append(
                     ("price changed", name, f"{cell}: {a['price_x1'].get(cell)} -> {b['price_x1'].get(cell)}")
                 )
-    for key in ("models", "aspects", "counts", "price_x1"):
-        a, b = base["image"][key], current["image"][key]
+    for key in ("models", "aspects", "counts", "price_x1", "rows"):
+        a, b = base["image"].get(key, []), current["image"].get(key, [])
         if a == b:
             continue
         if isinstance(a, list):
@@ -319,6 +319,23 @@ def options_from_walk(walk: dict[str, Any]) -> dict[str, Any]:
         },
         "image": walk["image"],
     }
+
+
+def image_options(groups: list[list[dict[str, Any]]], models: list[str], price: int | None) -> dict[str, Any]:
+    """The Image tab's settings, each row told by its own labels: the aspects follow the tabs, the counts are the row
+    of x<n>, and any other row (Low/Medium/High since 2026-11-09 on one account) is kept as it reads."""
+    rows = [[_plain(o["t"]) for o in group] for group in groups[2:]]
+    counts = next((row for row in rows if row and all(_COUNT.match(c) for c in row)), [])
+    other = [row for row in rows if row is not counts]
+    image: dict[str, Any] = {
+        "models": models,
+        "aspects": [_plain(o["t"]) for o in groups[1]],
+        "counts": [int(c[1:]) for c in counts],
+        "price_x1": price,
+    }
+    if other:
+        image["rows"] = other
+    return image
 
 
 # The walk. Everything below drives a real page; the functions above are what the tests hold.
@@ -512,6 +529,23 @@ class Walker:
         await safe_click(self.page.locator("[role=option], [role=menuitem]").filter(has_text=name).first)
         await self.page.wait_for_timeout(1_500)
 
+    async def slider_lengths(self) -> list[int]:
+        """The seconds the open pane's Length slider offers, or none when the model shows no slider."""
+        slider = self.page.locator(ingredients.SLIDER)
+        if await slider.count() != 1:
+            return []
+        low = int(await slider.get_attribute("min")) + ingredients.SLIDER_FIRST_SECOND
+        high = int(await slider.get_attribute("max")) + ingredients.SLIDER_FIRST_SECOND
+        return list(range(low, high + 1))
+
+    async def set_length(self, seconds: int) -> bool:
+        """Move the open pane's Length slider to `seconds` and read it back; False when it did not stay."""
+        try:
+            await ingredients._pin_slider(self.page, seconds)
+        except LookupError:
+            return False
+        return True
+
     async def walk_settings(self) -> dict[str, Any]:
         await composer._open_settings(self.page, "survey")
         # The panel opens on the tab, the model and the count the last run left: Image after gen_i2i hides Frames and
@@ -534,14 +568,23 @@ class Walker:
                 state = await self.pane()
                 video["aspects"] = [_plain(o["t"]) for o in state["groups"][2]]
                 rows = [[_plain(o["t"]) for o in g] for g in state["groups"][3:]]
+                # Omni 1.2 Flash sets its length on a slider (2026-11-09): walked a second at a time, as a length row.
+                lengths = [f"{seconds}s" for seconds in await self.slider_lengths()]
+                if lengths:
+                    rows.insert(len(rows) - 1, lengths)
                 prices: dict[str, int | None] = {}
                 for combo in itertools.product(*rows):
+                    radios = [text for text in combo if text not in lengths]
                     for text in combo:
-                        await self.radio(text)
+                        if text in lengths:
+                            set_ok = await self.set_length(int(text[:-1])) is not False
+                        else:
+                            await self.radio(text)
                     state = await self.pane()
                     checked = {_plain(o["t"]) for g in state["groups"] for o in g if o["on"]}
+                    taken = set(radios) <= checked and (not lengths or set_ok)
                     # A radio that did not take would file the previous cell's price under this one: no price instead.
-                    prices[" ".join(combo)] = state["price"] if set(combo) <= checked else None
+                    prices[" ".join(combo)] = state["price"] if taken else None
                 video["modes"][mode][name] = {"rows": rows, "prices": prices}
         await self.radio("Image")
         state = await self.pane()
@@ -549,12 +592,7 @@ class Walker:
         await self.page.keyboard.press("Escape")
         await self.page.wait_for_timeout(600)
         state = await self.pane()
-        image = {
-            "models": image_models,
-            "aspects": [_plain(o["t"]) for o in state["groups"][1]],
-            "counts": [int(_plain(o["t"])[1:]) for o in state["groups"][2]],
-            "price_x1": state["price"],
-        }
+        image = image_options(state["groups"], image_models, state["price"])
         # The last cell priced (x4 of the dearest model) can outrun the balance and put Flow's insufficient-credits
         # warning where Start generation stands in the composer pages recorded next (survey 2026-09-30).
         if not await self.settle():
