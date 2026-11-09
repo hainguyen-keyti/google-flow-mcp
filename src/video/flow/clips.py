@@ -340,7 +340,10 @@ async def _download_upsampled(
 # when the agent generated nothing. Flow's own table says Omni Flash Edit costs 40, and the editor publishes no
 # price the driver can read before the click (probe 2026-09-28: the line appears only while hovering Start, and
 # it read 12 on a clip whose edit charged 20), so the balance on both sides is all there is.
-MEASURED_PRICE = {"extend": 10, "edit": 20, "agent": 0}
+# On Omni 1.2 (paid run 2026-11-09) an edit and an extend of a 360p 4 s clip each cost 4; an edit is judged against
+# its own clip's cell (editor_expected_price), and an extend, whose price per cell nobody has measured, against none.
+MEASURED_PRICE = {"extend": 4, "edit": 4, "agent": 0}
+_FROM_TABLE = object()
 _WHY = {
     "agent": (
         "0 was measured only on sends where the agent generated nothing; a send that makes it generate pays that "
@@ -353,7 +356,29 @@ _WHY_DEFAULT = (
 )
 
 
-def price_notice(kind: str, spent: int, produced: bool = True) -> dict[str, Any] | None:
+def editor_expected_price(kind: str, rows: list[dict[str, Any]], media_id: str) -> int | None:
+    """An edit's price is the surveyed price of its source clip's cell (Omni 1.2 bills an edit like a generation, by
+    the second), read off the length and resolution its model key names; None when the key names no length or the
+    cell has no price, and for an extend, whose price per cell was never measured."""
+    from video.flow import video as video_mod  # composer imports this module, and video imports composer
+
+    if kind != "edit":
+        return None
+    # It runs after the money is gone, so it never raises: an error here cost an outcome row on 2026-09-13.
+    try:
+        key = next((row.get("model") for row in rows if row.get("id") == media_id and row.get("model")), None)
+        length = video_mod.KEY_LENGTH.search(key or "")
+        if not key or length is None:
+            return None
+        resolution = "360p" if key.endswith("_360p") else "720p"
+        return video_mod.price(video_mod.EDIT_MODEL, resolution, int(length.group(1)), 1)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def price_notice(
+    kind: str, spent: int, produced: bool = True, expected: Any = _FROM_TABLE
+) -> dict[str, Any] | None:
     """What to say when the balance moved by something other than the price measured for this call.
 
     A statement, not a verdict, and the payload says why in `note`, so an agent reading only the JSON sees it too.
@@ -363,7 +388,7 @@ def price_notice(kind: str, spent: int, produced: bool = True) -> dict[str, Any]
     cost the outcome row (2026-09-13, 20 credits with an empty ledger).
     """
     try:
-        measured = MEASURED_PRICE.get(kind)
+        measured = MEASURED_PRICE.get(kind) if expected is _FROM_TABLE else expected
         if measured is None or spent == measured or (spent == 0 and not produced):
             return None
         return {"kind": kind, "measured": measured, "moved": spent, "note": _WHY.get(kind, _WHY_DEFAULT)}
@@ -509,7 +534,9 @@ async def _generate_from_editor(
         "done" if generated and all(o["path"] for o in generated) else "pending" if generated else "failed"
     )
     spent = credits_before - credits_after
-    surprise = price_notice(kind, spent, bool(generated))
+    surprise = price_notice(
+        kind, spent, bool(generated), expected=editor_expected_price(kind, rows, media_id)
+    )
     said = {"balance_moved": surprise} if surprise else {}
     ledger.append(
         job_id,

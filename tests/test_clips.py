@@ -2384,7 +2384,16 @@ def _spending_and_producing(monkeypatch, tmp_path, *, before, after, produces=Tr
             "created": 1,
             "kind": "video",
         }
-        return ([] if len(seen) == 1 else [row], set())
+        # The source clip itself, an Omni 1.2 720p 8 s clip: plan AW judges an edit against its cell, 24 credits.
+        source = {
+            "workflow_id": "wf-src",
+            "id": "src",
+            "status": clips.DONE_STATUS,
+            "kind": "video",
+            "created": 0,
+        }
+        source["model"] = "macaron_cookie_t2v_8s"
+        return ([source] if len(seen) == 1 else [source, row], set())
 
     async def fake_credits(session):
         return {"balance": balances.pop(0) if balances else after}
@@ -2426,43 +2435,43 @@ def _run_editor_job(tmp_path, kind="edit"):
 
 
 def test_an_editor_job_says_so_when_the_bill_is_not_the_price_this_repo_measured(monkeypatch, tmp_path):
-    """Flow's own table prices Omni Flash Edit at 40 while all eight edits measured on this account cost exactly
-    20, and the editor publishes no price the driver can read before the click (probe 2026-09-28: the line only
-    appears while hovering Start, and it read 12 on a clip whose edit charged 20). So the balance moving by
-    something else is the only signal there is, and today it passes in silence as another number in the row."""
-    _spending_and_producing(monkeypatch, tmp_path, before=300, after=275)
+    """The editor publishes no price the driver can read before the click (probe 2026-09-28: the line only appears
+    while hovering Start). So the balance moving by something other than the source clip's cell (plan AW: an Omni 1.2
+    edit is billed like a generation of that cell, 24 for 720p 8 s) is the only signal there is."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=270)
 
     answer = _run_editor_job(tmp_path)
 
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
     assert last["status"] == "done", last
     said = last["balance_moved"]
-    assert (said["kind"], said["measured"], said["moved"]) == ("edit", 20, 25), last
+    assert (said["kind"], said["measured"], said["moved"]) == ("edit", 24, 30), last
     assert "not proof that Flow changed its price" in said["note"], said
     assert answer["balance_moved"] == said, answer
 
 
 def test_an_editor_job_at_the_measured_price_says_nothing_about_it(monkeypatch, tmp_path):
     """The alarm has to stay quiet on the ordinary case, or nobody reads it on the day it matters."""
-    _spending_and_producing(monkeypatch, tmp_path, before=300, after=280)
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=276)
 
     answer = _run_editor_job(tmp_path)
 
     last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
     assert "balance_moved" not in last, last
     assert "balance_moved" not in answer, answer
-    assert last["spent"] == 20, last
+    assert last["spent"] == 24, last
 
 
-def test_the_price_a_job_is_judged_against_is_the_price_of_its_own_kind(monkeypatch, tmp_path):
-    """20 credits is the measured price of an edit and twice the measured price of an extend, so one table for
-    both kinds would let a doubled extend bill pass as normal."""
-    _spending_and_producing(monkeypatch, tmp_path, before=300, after=280)
+def test_an_extend_is_judged_against_no_price_until_its_cell_is_measured(monkeypatch, tmp_path):
+    """Plan AW: one Omni 1.2 extend was paid (4 for a 360p 4 s clip), so no price per cell is known; an extend's bill
+    is recorded as spent and said nowhere as a price change, where the old flat 10 flagged every correct bill."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=276)
 
     answer = _run_editor_job(tmp_path, kind="extend")
 
-    said = answer["balance_moved"]
-    assert (said["kind"], said["measured"], said["moved"]) == ("extend", 10, 20), answer
+    assert "balance_moved" not in answer, answer
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
+    assert last["spent"] == 24 and "balance_moved" not in last, last
 
 
 def test_a_job_flow_dropped_for_free_is_not_a_balance_moved(monkeypatch, tmp_path):
@@ -2497,12 +2506,14 @@ def test_a_broken_price_table_never_costs_the_outcome_row(monkeypatch, tmp_path)
     """The notice runs after the money is gone. On 2026-09-13 an exception in that window cost the outcome row of a
     20-credit job, so whatever goes wrong inside it has to leave the row written and the notice simply absent."""
 
-    class _Broken(dict):
-        def get(self, *args):
-            raise RuntimeError("table unreadable")
+    from video.flow import video as video_mod
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("table unreadable")
 
     _spending_and_producing(monkeypatch, tmp_path, before=300, after=275)
-    monkeypatch.setattr(clips, "MEASURED_PRICE", _Broken())
+    # Plan AW: the edit's price is read off the surveyed table now, the table that breaks here.
+    monkeypatch.setattr(video_mod, "price", broken)
 
     answer = _run_editor_job(tmp_path)
 
@@ -3080,3 +3091,38 @@ def test_save_frame_stays_on_the_editor_until_the_frames_upload_has_answered(mon
     assert result["media_id"] == "frame-1"
     assert page.log.index("upload answered") < page.log.index("listing read"), page.log
     assert page.handlers == [], "the listener goes once the upload has answered"
+
+
+# Plan AW, D2: an Omni 1.2 edit is billed like a generation of the clip's own cell (360p 4 s = 4, paid 2026-11-09),
+# so the bill is judged against that cell's surveyed price, not one figure for every clip.
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("macaron_cookie_t2v_4s_360p", 4),
+        ("macaron_cookie_t2v_8s", 24),
+        ("macaron_cookie_i2v_10s_360p", 10),
+        ("abra_t2v_6s", 18),
+        ("veo_3_1_t2v_lite", None),
+        (None, None),
+    ],
+)
+def test_an_edit_is_expected_to_cost_its_source_clips_cell(key, expected):
+    rows = [
+        {"id": "src", "kind": "video", "model": key},
+        {"id": "other", "kind": "video", "model": "x_t2v_3s"},
+    ]
+    assert clips.editor_expected_price("edit", rows, "src") == expected
+
+
+def test_an_extend_has_no_expected_price_until_one_is_measured_for_its_cell():
+    rows = [{"id": "src", "kind": "video", "model": "macaron_cookie_t2v_4s_360p"}]
+    assert clips.editor_expected_price("extend", rows, "src") is None
+
+
+def test_a_bill_at_the_cells_price_raises_no_notice_and_another_does():
+    assert clips.price_notice("edit", 24, expected=24) is None
+    said = clips.price_notice("edit", 30, expected=24)
+    assert said and said["measured"] == 24 and said["moved"] == 30
+    assert clips.price_notice("extend", 9, expected=None) is None

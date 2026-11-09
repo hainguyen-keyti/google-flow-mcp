@@ -32,6 +32,8 @@ VIDEO = OPTIONS["video"]
 # A model whose pane shows no length or resolution row still makes one: every Veo clip measured here was 8 s at
 # 1280x720 (2026-09-13 to 2026-09-29), so naming that default is accepted and anything else is refused.
 FIXED = {"duration": 8, "resolution": "720p"}
+# The model the clip editor runs every edit on since plan AV (clips.EDITOR_MODEL), priced by the second.
+EDIT_MODEL = "omni-1.2-flash"
 # When mode_for's two refusals were read off the composer (job ak-a3 and out/al/t5.json).
 MODE_MEASURED = "2026-10-01"
 
