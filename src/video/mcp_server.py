@@ -41,11 +41,15 @@ from video.flow import video as video_mod
 from video.session import FlowSession
 
 # Left empty, gflow lets Flow reuse the composer's last model (cli_video.py:185-196), so the price was unknowable.
-VIDEO_DEFAULT_MODEL = "omni-flash"
-OMNI_FLASH_SECONDS = 10
-# The one cell an end frame has been paid for: 15 credits, 119 s, measured 2026-09-18 (job plan-i-endframe-1).
-END_FRAME_MODEL = "omni-flash"
-END_FRAME_SECONDS = 10
+VIDEO_DEFAULT_MODEL = "omni-1.2-flash"
+OMNI_FLASH_SECONDS = 8
+# Flow retires these on 2026-12-05 (picker "Leaving Dec 5", changelog 2026-11-05); the owner dropped them on
+# 2026-11-09, so every video tool refuses them before the ledger is touched.
+RETIRED_MODELS = ("omni-flash", "veo-fast", "veo-quality")
+# Omni 1.2 bills a start and end frame at the start-frame price; above 10 s Flow drops the end frame and still bills
+# (gflow 0.96.1 changelog, #1178), and this account's slider stops at 10 s anyway.
+END_FRAME_MODEL = "omni-1.2-flash"
+END_FRAME_MAX_SECONDS = 10
 
 
 MEDIA_KINDS = ("image", "video")
@@ -157,9 +161,9 @@ def media_filters(
 # only); gflow reads no price line and takes no max_credits, so this table is their only guard: on review
 # 2026-10-08 veo-quality x4 (400 credits) reached gflow unrefused.
 PAID_GFLOW_MODELS = {
-    "t2v": ("omni-flash", "veo-lite"),
-    "i2v": ("omni-flash",),
-    "r2v": ("omni-flash", "veo-lite"),
+    "t2v": ("omni-1.2-flash", "veo-lite"),
+    "i2v": ("omni-1.2-flash",),
+    "r2v": ("omni-1.2-flash", "veo-lite"),
 }
 # The resolution the omni cells are priced at unless the caller names one: gflow pins none, so the composer's
 # leftover radio decided the bill (gen_i2v charged 4 for a 360p leftover on 2026-10-08).
@@ -182,6 +186,8 @@ def _video_settings(
     every cell this repo has not paid for; answer the model, the length to send, the resolution to pin and the
     table's price of that cell."""
     model = model or VIDEO_DEFAULT_MODEL
+    if model in RETIRED_MODELS:
+        raise ValueError(_retired(model))
     params = {p.name: p.type for p in cli_video.video.commands[kind].params}
     if model not in params["model"].choices:
         raise ValueError(f"model must be one of {list(params['model'].choices)}, got {model!r}")
@@ -190,22 +196,11 @@ def _video_settings(
     # build_argv sends no --count below 2, so 0 would quietly pay for one clip.
     if not params["count"].min <= count <= params["count"].max:
         raise ValueError(f"count must be {params['count'].min}-{params['count'].max}, got {count}")
-    # One run priced one end-frame cell. gflow gates --end-frame on nothing and picks its interpolation model by
-    # cohort, so any other model, length or resolution is a submit nobody here has paid for once (review 2026-09-18;
-    # shared by the tool and the CLI since the review of plan AQ, findings 3 and 4). Said first: it names the one
-    # cell that is paid for, where the model guard below only names the models.
-    priced_end = (
-        model == END_FRAME_MODEL
-        and duration in (None, END_FRAME_SECONDS)
-        and resolution in (None, GFLOW_RESOLUTION)
-    )
-    if end_frame and not priced_end:
+    if end_frame and model != END_FRAME_MODEL:
         raise ValueError(
-            f"end_frame is measured only for {END_FRAME_MODEL} at {END_FRAME_SECONDS} s and {GFLOW_RESOLUTION} "
-            f"(15 credits, 2026-09-18); asked for {model} at {duration or 'the default'} s, "
-            f"{resolution or GFLOW_RESOLUTION}. Flow picks a different interpolation model per cohort, so that "
-            "run's price is unknown: leave model, duration and resolution out, or ask the owner to price the one "
-            "you want. Nothing was run and nothing was spent."
+            f"end_frame runs on {END_FRAME_MODEL} only, up to {END_FRAME_MAX_SECONDS} s: above that Flow drops the "
+            f"end frame and still bills a start-only clip (gflow 0.96.1, #1178); asked for {model}. Nothing was run "
+            "and nothing was spent."
         )
     if model not in PAID_GFLOW_MODELS[kind]:
         raise ValueError(
@@ -219,7 +214,7 @@ def _video_settings(
             f"the count, while Flow bills every clip (count {count}); for several clips use gen_video. Nothing was "
             "run and nothing was spent."
         )
-    is_omni = VideoModel.from_cli(model) is VideoModel.OMNI_FLASH
+    is_omni = VideoModel.from_cli(model) is VideoModel.OMNI_1_2_FLASH
     cells = video_mod.VIDEO["models"][model]
     if is_omni:
         resolution = resolution or GFLOW_RESOLUTION
@@ -244,10 +239,17 @@ def _video_settings(
     if duration is None:
         seconds = OMNI_FLASH_SECONDS if is_omni else None
     else:
-        validate_duration_for_model(VideoModel.from_cli(model), duration)
+        validate_duration_for_model(VideoModel.from_cli(model), duration, end_frame=end_frame)
         seconds = duration
     priced = video_mod.price(model, resolution, seconds if is_omni else None, 1)
     return model, seconds, resolution, _priced(model, resolution, seconds, priced)
+
+
+def _retired(model: str) -> str:
+    return (
+        f"{model} is one of the models Flow retires on 2026-12-05 ({', '.join(RETIRED_MODELS)}); this MCP runs "
+        f"{VIDEO_DEFAULT_MODEL} and veo-lite only (owner's decision 2026-11-09). Nothing was run and nothing was spent."
+    )
 
 
 def _priced(model: str, resolution: str | None, seconds: int | None, price: int | None) -> int:
@@ -1224,8 +1226,9 @@ server = TellingServer(
         "Google Flow (flow.google.com) control for this account. These tools spend Flow credits and are "
         "recorded in the ledger (out/ledger.jsonl by default): gen_video, job_submit, gen_t2v, gen_i2v, gen_r2v, "
         "gen_character, clip_extend, clip_edit, and agent_send (may spend). gen_video covers every video option "
-        "Flow's composer offers (every model, 360p/720p, 4-10 s, x1-x4, first and last frame, ingredients) and "
-        "needs max_credits for a real run. clip_download at 4k is a Flow upscale its price "
+        "Flow's composer offers (Omni 1.2 Flash at 360p or 720p and 3-10 s, Veo 3.1 Lite, x1-x4, first and last "
+        "frame, ingredients) and needs max_credits for a real run. Omni 1.1 Flash, Veo 3.1 Fast and Veo 3.1 Quality "
+        "leave Flow on 2026-12-05 and every tool here refuses them already. clip_download at 4k is a Flow upscale its price "
         "table offers only from the Ultra plan, at 50 credits; on this Pro account Flow greys it out, so it is "
         "refused before any click. gen_t2i and gen_i2i are credit-free but draw on a daily image quota. Check a tool's description "
         "for its cost before calling it: each carries what was MEASURED here and, where Flow's published table "
@@ -1245,8 +1248,8 @@ server = TellingServer(
         "else. The one retry under a new job_id the server vouches for is when gen_video or gen_character says "
         "retryable=yes: call again with the same project and prompt, a new job_id and retry_of set to the refused "
         "job_id. "
-        "When model is omitted gen_t2v and gen_i2v "
-        "use omni-flash for 10 s, and gen_r2v uses omni-flash at 8 s, the only length this host offers it. "
+        "When model is omitted gen_t2v, gen_i2v and gen_r2v "
+        "use omni-1.2-flash at 720p for 8 s (24 credits; Omni 1.2 bills by the second, 1 a second at 360p, 3 at 720p). "
         "When aspect is omitted, all three run 9:16: that is gflow's own default, not the shape of the image you "
         "passed, and Flow crops a start frame of another shape to fit. Name the aspect you want. "
         "If a tool reports that Google flagged unusual activity (WAF), stop: do not retry and "
@@ -1266,10 +1269,10 @@ _AGENT_NOTE = (
     "was on."
 )
 _GFLOW_CAP_NOTE = (
-    " It runs only the cells paid here (gen_t2v and gen_r2v: omni-flash and veo-lite; gen_i2v: omni-flash), one "
+    " It runs only the cells paid here (gen_t2v and gen_r2v: omni-1.2-flash and veo-lite; gen_i2v: omni-1.2-flash), one "
     "clip at a time: gflow reads no price line and takes no max_credits, so any other model, a count above 1 or a "
     "resolution the model lacks is refused before anything is spent (use "
-    "gen_video for those, which holds Flow's live price to max_credits). resolution is 360p or 720p for omni-flash, "
+    "gen_video for those, which holds Flow's live price to max_credits). resolution is 360p or 720p for omni-1.2-flash, "
     "720p when omitted, and is pinned in the composer before gflow clicks, since gflow pins none and the composer's "
     "leftover radio decided the bill on 2026-10-08 (gen_i2v at omni-flash 4 s was billed the 360p price, 4, after a "
     "360p gen_video run); the answer names expected_credits and resolution, and the ledger's spent is the bill."
@@ -1344,6 +1347,8 @@ def _video_request(
     voices: list[str] | None,
 ) -> None:
     """What gen_video and job_submit refuse before a browser opens, in one place so the two cannot drift."""
+    if model in RETIRED_MODELS:
+        raise ValueError(_retired(model))
     wanted = [
         *(characters or []),
         *(media_ids or []),
@@ -2049,11 +2054,13 @@ async def _gen(kind: str, **kwargs: Any) -> str:
 @server.tool(
     name="gen_t2v",
     description=(
-        "Text to video via gflow. It spends credits and is ledgered, paid on the PRO plan: omni-flash 720p 10 s "
-        "x1 = 15 credits (the default when model, resolution and duration are omitted, measured), veo-lite 8 s "
-        "x1 = 10 credits (measured); the other omni-flash cells carry Flow's table price as flow_capabilities "
-        "answers it (360p 4 s = 4, measured 2026-10-08 through gen_video). Allow 2-5 min: the gflow job took "
-        "74-85 s, plus a balance read before and after." + _GFLOW_CAP_NOTE + _JOB_ID_RULE + _AGENT_NOTE
+        "Text to video via gflow. It spends credits and is ledgered, on the PRO plan: omni-1.2-flash bills by the "
+        "second, 3-10 s, 1 credit a second at 360p and 3 at 720p (720p 8 s = 24, the default when model, resolution "
+        "and duration are omitted; surveyed 2026-11-09), veo-lite 8 s x1 = 10 credits (measured); flow_capabilities "
+        "answers every cell. Allow 2-5 min: a gflow job took 74-85 s, plus a balance read before and after."
+        + _GFLOW_CAP_NOTE
+        + _JOB_ID_RULE
+        + _AGENT_NOTE
     ),
 )
 async def gen_t2v(
@@ -2082,17 +2089,14 @@ async def gen_t2v(
 @server.tool(
     name="gen_i2v",
     description=(
-        "Image (first frame, optionally a last frame too) to video via gflow. It spends credits and is ledgered, "
-        "both forms measured once each on 2026-09-18 at omni-flash 10 s x1, the default when model is omitted: a "
-        "start frame alone = 15 credits in 105 s, and start + end_frame = 15 credits in 119 s. Those two runs used "
-        "different images and prompts, so read each time on its own, not the gap between them. Pass end_frame to interpolate "
-        "between two local images, at omni-flash 10 s only, which is the cell that was priced: any other model or "
-        "length is refused, because Flow picks its interpolation model by cohort and that run has never been "
-        "paid for here. The measured clip did begin and end on the frames given: over its 240 frames the one "
+        "Image (first frame, optionally a last frame too) to video via gflow. It spends credits and is ledgered, on "
+        "omni-1.2-flash only, billed by the second like gen_t2v (720p 8 s = 24 credits, the default; 360p 4 s = 4). Pass "
+        "end_frame to interpolate between two local images: Omni 1.2 bills it at the start-frame price and keeps the "
+        "end frame up to 10 s only (above that Flow drops it and still bills, gflow 0.96.1). On Omni 1.1 Flash "
+        "(2026-09-18, retired since) the measured clip did begin and end on the frames given: over its 240 frames the one "
         "closest to the end image IS the last (1.9 of 255, converging 10.0, 9.1, 8.0, 6.2, 3.9, 1.9 over the "
         "final six), the one closest to the start image is frame 1 (2.1), and either image against the other "
-        "end of the clip reads about 50. Both runs that finished did so on gflow "
-        "0.78.0; every attempt before it died in Flow's frame picker and spent nothing. PASS aspect, and match it "
+        "end of the clip reads about 50. PASS aspect, and match it "
         "to your images: leaving it out means 9:16, gflow's own default, and Flow CROPS a frame of another shape "
         "to fit, which pushed the subject of a 16:9 photo half out of the left edge. Allow 2-5 min."
         + _GFLOW_CAP_NOTE
@@ -2130,12 +2134,12 @@ async def gen_i2v(
 @server.tool(
     name="gen_r2v",
     description=(
-        "Reference images (ingredients) to video via gflow. It spends credits and is ledgered: omni-flash x1 = 12 "
-        "credits (the default when model is omitted, measured 2026-09-15) and veo-lite x1 = 10 credits "
-        "(measured). It always runs 8 s through gflow, so leave duration out; for 10 s, put the images in the project "
-        "with flow_upload and pass their media ids to gen_character. "
-        "omni-flash takes up to 7 reference images and veo-lite up to 3; more is refused before anything is spent. "
-        "Allow 2-5 min: that omni-flash run took 292 s end to end."
+        "Reference images (ingredients) to video via gflow. It spends credits and is ledgered: omni-1.2-flash 8 s, "
+        "billed by the second (720p = 24, 360p = 8; the default when model is omitted) and veo-lite x1 = 10 credits "
+        "(measured). It always runs 8 s through gflow, so leave duration out; for another length, put the images in "
+        "the project with flow_upload and pass their media ids to gen_character or gen_video. "
+        "omni-1.2-flash takes up to 7 reference images and veo-lite up to 3 (read off the composer 2026-11-09); more "
+        "is refused before anything is spent. Allow 2-5 min: an Omni 1.1 run took 292 s end to end."
         + _GFLOW_CAP_NOTE
         + _JOB_ID_RULE
         + _AGENT_NOTE
@@ -2166,12 +2170,25 @@ async def gen_r2v(
     )
 
 
-def _longer_lengths() -> str:
+def _character_prices() -> str:
     # Written from the price table the driver charges against, so the two cannot drift apart.
-    return " ".join(
-        f"duration={seconds} is offered on {model} at {price} credits (the composer's own quote)."
-        for (model, seconds), price in sorted(ingredients_mod.LONGER_PRICES.items())
-    )
+    parts = []
+    for model, lengths in ingredients_mod.LENGTHS.items():
+        prices = {seconds: ingredients_mod.price_for(model, seconds) for seconds in lengths}
+        if len(lengths) == 1:
+            parts.append(f"{model} {lengths[0]} s only, {prices[lengths[0]]} credits")
+        else:
+            at = ingredients_mod.resolution_for(model, None)
+            parts.append(
+                f"{model} at {at}, {lengths[0]}-{lengths[-1]} s, "
+                + ", ".join(f"{seconds} s {price} credits" for seconds, price in prices.items())
+            )
+        if model in capabilities_mod.CHARACTER_UNMEASURED:
+            parts.append(
+                f"{model} {ingredients_mod.PRICES[model]} credits by Flow's own price table, unmeasured: no paid "
+                "run has landed on it yet"
+            )
+    return "; ".join(parts)
 
 
 @server.tool(
@@ -2184,11 +2201,9 @@ def _longer_lengths() -> str:
         "spent; a chip Flow refuses (an image over the model's cap, a character taking one of its image slots) stops "
         "the run before the click, in Flow's own words. Once a paid clip is fetched its recipe is read back off the "
         "listing, and a clip that dropped or gained a reference is an error even though it was paid. It spends "
-        "credits and is ledgered, at x1: "
-        "8 s by default, omni-flash (the default) 12 credits and veo-lite 10 credits, both measured; veo-fast 20 "
-        "credits by Flow's own price table, unmeasured (flow_capabilities answers these as data). "
-        + _longer_lengths()
-        + " Veo 3.1 Lite showed no length choice here (measured); veo-fast stays at 8 s, unmeasured. The live price line is read first and a different price is refused "
+        "credits and is ledgered, at x1, 8 s by default, on the surveyed table (flow_capabilities answers it as data): "
+        + _character_prices()
+        + ". The live price line is read first and a different price is refused "
         "before the click. dry_run=true returns the quote and the chips, clicks nothing, writes no ledger row, leaves "
         "the composer empty and needs no job_id (each chip's id is the character's entity id or the image's workflow "
         "id). out_dir puts the clip and its ledger in a folder of your own, which keeps one film's takes together; "
@@ -2231,6 +2246,8 @@ async def gen_character(
         raise ValueError("character and media ids must not be blank")
     if len(set(wanted)) != len(wanted):
         raise ValueError(f"each character and image may be named once, got {wanted}")
+    if model in RETIRED_MODELS:
+        raise ValueError(_retired(model))
     if model not in ingredients_mod.PRICES:
         raise ValueError(f"model must be one of {sorted(ingredients_mod.PRICES)}, got {model!r}")
     if aspect not in ingredients_mod.ASPECTS:
@@ -2298,7 +2315,8 @@ def _video_options(*, count: bool = True) -> str:
         "and is no error), and once the clip is fetched its recipe is read back: a voice, image or character Flow "
         "dropped is an error even though it was paid. "
         + _video_options()
-        + " resolution and duration apply to omni-flash only (defaults 720p and 8 s). The money guard is Flow's own "
+        + " resolution and duration apply to omni-1.2-flash only (defaults 720p and 8 s; 3-10 s on this account, set "
+        "on the composer's Length slider and read back before the click). The money guard is Flow's own "
         "price line, read right before the single click: a real run needs max_credits and is refused when the live "
         "price is over it; dry_run=true reads that price and the settings for free, clicks nothing and needs no job_id "
         "or max_credits. Every setting is read back before the click, and the submit request is checked afterwards "

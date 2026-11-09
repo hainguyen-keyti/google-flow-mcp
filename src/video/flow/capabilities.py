@@ -30,8 +30,9 @@ CAPS_NOTE = (
     "image_ingredients counts characters and images together: a character takes one of the image places, and a "
     "character that has a voice takes one of the voice places as well."
 )
-# gen_character's models whose price was never paid on this account; the tool's own description says the same.
-CHARACTER_UNMEASURED = ("veo-fast",)
+# gen_character's models whose price was never paid on this account: Omni 1.2 Flash's cells are its surveyed price
+# line (2026-11-09) until a paid run lands on one.
+CHARACTER_UNMEASURED = ("omni-1.2-flash",)
 
 
 def _video_model(name: str, entry: dict[str, Any]) -> dict[str, Any]:

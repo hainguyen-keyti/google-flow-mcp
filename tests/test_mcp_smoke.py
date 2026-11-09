@@ -476,12 +476,12 @@ def _real_map():
 def _a_cell_at_another_price(replies):
     # The table an agent budgets from: one cell a credit off the surveyed file is a wrong budget.
     replies["capabilities"] = _real_map()
-    replies["capabilities"]["video"]["models"]["omni-flash"]["credits_x1"][0]["credits"] += 1
+    replies["capabilities"]["video"]["models"]["omni-1.2-flash"]["credits_x1"][0]["credits"] += 1
 
 
 def _a_model_the_survey_holds_left_out(replies):
     replies["capabilities"] = _real_map()
-    del replies["capabilities"]["video"]["models"]["veo-fast"]
+    del replies["capabilities"]["video"]["models"]["veo-lite"]
 
 
 def _a_map_dated_another_day(replies):
@@ -497,7 +497,7 @@ def _a_model_with_no_cap(replies):
 def _two_cells_with_their_prices_swapped(replies):
     # Found in review: the row compared the sorted prices, so the dearest cell could carry the cheapest price.
     replies["capabilities"] = _real_map()
-    cells = replies["capabilities"]["video"]["models"]["omni-flash"]["credits_x1"]
+    cells = replies["capabilities"]["video"]["models"]["omni-1.2-flash"]["credits_x1"]
     cells[0]["credits"], cells[-1]["credits"] = cells[-1]["credits"], cells[0]["credits"]
     assert cells[0]["credits"] != cells[-1]["credits"]
 
@@ -529,12 +529,12 @@ def _aspects_the_survey_does_not_hold(replies):
 
 def _a_length_the_survey_does_not_hold(replies):
     replies["capabilities"] = _real_map()
-    replies["capabilities"]["video"]["models"]["omni-flash"]["seconds"] = [99]
+    replies["capabilities"]["video"]["models"]["omni-1.2-flash"]["seconds"] = [99]
 
 
 def _a_mode_the_survey_does_not_hold(replies):
     replies["capabilities"] = _real_map()
-    replies["capabilities"]["video"]["models"]["veo-quality"]["modes"] = ["Frames"]
+    replies["capabilities"]["video"]["models"]["veo-lite"]["modes"] = ["Frames"]
 
 
 def _modes_the_survey_does_not_hold(replies):
@@ -544,7 +544,7 @@ def _modes_the_survey_does_not_hold(replies):
 
 def _a_resolution_the_survey_does_not_hold(replies):
     replies["capabilities"] = _real_map()
-    replies["capabilities"]["video"]["models"]["omni-flash"]["resolutions"] = ["720p"]
+    replies["capabilities"]["video"]["models"]["omni-1.2-flash"]["resolutions"] = ["720p"]
 
 
 def _an_image_composer_of_another_survey(replies):

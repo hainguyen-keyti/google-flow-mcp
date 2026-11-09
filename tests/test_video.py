@@ -13,13 +13,36 @@ from video import gen
 from video.flow import composer, ingredients, video
 
 
-def test_the_options_file_holds_what_the_composer_showed_on_2026_09_29():
-    # The owner's screenshot and the $0 walk agree: Omni 1.1 Flash 720p 10 s x1 is 15 credits.
-    assert set(video.OPTIONS["video"]["models"]) == {"omni-flash", "veo-lite", "veo-fast", "veo-quality"}
-    assert video.price("omni-flash", "720p", 10, 1) == 15
-    assert video.price("omni-flash", "360p", 4, 4) == 16
-    assert video.price("veo-quality", None, None, 1) == 100
+def test_the_options_file_holds_what_the_composer_showed_on_2026_11_09():
+    # The owner's screenshot (Omni 1.2 Flash 360p 8 s x2 = 16) and the $0 walk of 2026-11-09 agree.
+    assert set(video.OPTIONS["video"]["models"]) == {"omni-1.2-flash", "veo-lite"}
+    assert video.price("omni-1.2-flash", "360p", 8, 2) == 16
+    assert video.price("omni-1.2-flash", "720p", 10, 1) == 30
+    assert video.price("veo-lite", None, None, 1) == 10
     assert video.OPTIONS["video"]["aspects"] == ["16:9", "9:16"]
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 4])
+@pytest.mark.parametrize(("resolution", "per_second"), [("360p", 1), ("720p", 3)])
+@pytest.mark.parametrize("seconds", range(3, 11))
+def test_every_omni_1_2_cell_is_priced_by_the_second(seconds, resolution, per_second, count):
+    """I1: Flow prices Omni 1.2 per second (changelog 2026-11-05), measured at every length its slider offers here."""
+    assert video.price("omni-1.2-flash", resolution, seconds, count) == per_second * seconds * count
+
+
+@pytest.mark.parametrize("seconds", [2, 11, 15])
+def test_a_length_the_slider_does_not_offer_here_is_refused(seconds):
+    with pytest.raises(ValueError, match="duration must be one of"):
+        video.check_settings(
+            model="omni-1.2-flash", resolution="360p", duration=seconds, count=1, aspect="9:16"
+        )
+
+
+@pytest.mark.parametrize("model", ["omni-flash", "veo-fast", "veo-quality"])
+def test_a_model_flow_retires_on_2026_12_05_is_refused_before_any_browser(model):
+    """I3: the owner dropped them on 2026-11-09, before Flow does."""
+    with pytest.raises(ValueError, match="model must be one of"):
+        video.check_settings(model=model, resolution=None, duration=None, count=1, aspect="9:16")
 
 
 @pytest.mark.parametrize(
@@ -28,22 +51,22 @@ def test_the_options_file_holds_what_the_composer_showed_on_2026_09_29():
         ({"model": "veo-ultra"}, "model must be one of"),
         ({"model": "veo-lite", "duration": 10}, "veo-lite offers no length choice"),
         ({"model": "veo-lite", "resolution": "360p"}, "veo-lite offers no resolution choice"),
-        ({"model": "omni-flash", "duration": 5}, "duration must be one of [4, 6, 8, 10]"),
-        ({"model": "omni-flash", "resolution": "1080p"}, "resolution must be one of ['360p', '720p']"),
+        ({"model": "omni-1.2-flash", "duration": 12}, "duration must be one of [3, 4, 5, 6, 7, 8, 9, 10]"),
+        ({"model": "omni-1.2-flash", "resolution": "1080p"}, "resolution must be one of ['360p', '720p']"),
         ({"count": 5}, "count must be one of [1, 2, 3, 4]"),
         ({"aspect": "1:1"}, "aspect must be one of ['16:9', '9:16']"),
     ],
 )
 def test_a_setting_the_composer_does_not_offer_is_refused(settings, message):
-    base = {"model": "omni-flash", "resolution": "720p", "duration": 8, "count": 1, "aspect": "9:16"}
+    base = {"model": "omni-1.2-flash", "resolution": "720p", "duration": 8, "count": 1, "aspect": "9:16"}
     with pytest.raises(ValueError) as refused:
         video.check_settings(**(base | settings))
     assert message in str(refused.value)
 
 
 def test_omni_takes_every_offered_cell_and_veo_takes_its_defaults():
-    video.check_settings(model="omni-flash", resolution="360p", duration=4, count=4, aspect="16:9")
-    video.check_settings(model="veo-fast", resolution=None, duration=None, count=2, aspect="9:16")
+    video.check_settings(model="omni-1.2-flash", resolution="360p", duration=3, count=4, aspect="16:9")
+    video.check_settings(model="veo-lite", resolution=None, duration=None, count=2, aspect="9:16")
 
 
 @pytest.mark.parametrize(
@@ -367,7 +390,7 @@ def test_the_video_driver_hands_the_retry_link_to_whichever_mode_runs(monkeypatc
 def test_text_to_video_goes_through_frames_with_every_setting_and_the_cap(monkeypatch):
     calls = _driver_world(monkeypatch)
 
-    _run(model="omni-flash", resolution="360p", duration=4, count=3, aspect="16:9")
+    _run(model="omni-1.2-flash", resolution="360p", duration=4, count=3, aspect="16:9")
 
     submit = calls["submit"]
     assert submit["mode"] == "Frames" and submit["count"] == 3 and submit["max_credits"] == 20
@@ -391,7 +414,7 @@ def test_a_start_and_end_frame_make_an_i2v_run_whose_body_must_carry_both_images
 def test_ingredients_go_through_the_proven_ingredients_driver_with_the_new_settings(monkeypatch):
     calls = _driver_world(monkeypatch)
 
-    _run(model="omni-flash", resolution="360p", duration=6, count=2, media_ids=["m-teapot"])
+    _run(model="omni-1.2-flash", resolution="360p", duration=6, count=2, media_ids=["m-teapot"])
 
     got = calls["ingredients"]
     assert got["media_ids"] == ["m-teapot"] and got["characters"] == []
@@ -559,7 +582,7 @@ def test_a_submit_that_carried_the_wrong_mode_or_length_is_an_error_after_the_ru
 
     monkeypatch.setattr(video.composer, "_submit", submit_seen_wrong)
     with pytest.raises(RuntimeError, match="15 credits were spent.*abra_t2v_10s"):
-        _run(model="omni-flash", resolution="720p", duration=4)
+        _run(model="omni-1.2-flash", resolution="720p", duration=4)
 
 
 def test_the_ingredients_driver_builds_the_body_check_from_the_references_it_resolved(monkeypatch, tmp_path):
@@ -574,7 +597,7 @@ def test_the_ingredients_driver_builds_the_body_check_from_the_references_it_res
             prompt=PROMPT,
             characters=[],
             media_ids=[MEDIA],
-            model="omni-flash",
+            model="omni-1.2-flash",
             duration=6,
             job_id="job-1",
             out_dir=tmp_path,
@@ -602,7 +625,7 @@ def test_the_ingredients_driver_holds_the_live_price_to_the_surveyed_one_under_a
             prompt=PROMPT,
             characters=[],
             media_ids=[MEDIA],
-            model="omni-flash",
+            model="omni-1.2-flash",
             job_id="job-1",
             out_dir=tmp_path,
             max_credits=20,
@@ -655,9 +678,9 @@ def test_a_cell_with_no_surveyed_price_runs_on_the_cap_alone(monkeypatch, tmp_pa
 def test_ingredients_holds_its_run_to_the_surveyed_price_gen_video_passes(monkeypatch):
     calls = _driver_world(monkeypatch)
 
-    _run(model="omni-flash", resolution="360p", duration=8, media_ids=["m-teapot"])
+    _run(model="omni-1.2-flash", resolution="360p", duration=8, media_ids=["m-teapot"])
 
-    assert calls["ingredients"]["table_credits"] == 6
+    assert calls["ingredients"]["table_credits"] == 8
 
 
 def test_x2_keeps_waiting_while_only_one_clip_is_listed(monkeypatch, tmp_path):
@@ -726,7 +749,7 @@ def test_the_body_check_holds_the_submit_to_the_resolution_asked(key, resolution
 def test_the_driver_asks_the_body_check_for_the_resolution_it_pinned(monkeypatch):
     calls = _driver_world(monkeypatch)
 
-    _run(model="omni-flash", resolution="360p", duration=4)
+    _run(model="omni-1.2-flash", resolution="360p", duration=4)
     assert calls["submit"]["watch"].resolution == "360p"
 
     _run(model="veo-lite")

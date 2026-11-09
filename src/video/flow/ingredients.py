@@ -53,18 +53,30 @@ from video.flow.reader import capture, one
 from video.session import PROJECT_READY, FlowSession
 
 SECONDS = 8
-PRICES = {"omni-flash": 12, "veo-lite": 10, "veo-fast": 20}
-# Lengths the Ingredients composer offers per model (measured 2026-09-28: 4s 6s 8s 10s under Omni 1.1 Flash, no length
-# group at all under Veo 3.1 Lite), limited to the ones this tool takes.
-LENGTHS = {"omni-flash": (8, 10), "veo-lite": (8,), "veo-fast": (8,)}
-# A longer length's price, entered only once measured: until then dry_run quotes it and a real run is refused.
-# omni-flash 10 s: quoted 15 by the composer's price line on a dry run (2026-09-28, plan U), the same 15 the owner's
-# own abra_r2v_10s cost that day.
-LONGER_PRICES: dict[tuple[str, int], int] = {("omni-flash", 10): 15}
+# gen_character's own table is the surveyed one (flow_options.json, read here since video.py imports this module) at
+# the resolution it pins on a model that has one: Omni 1.2 Flash 720p, 3 credits a second (measured 2026-11-09).
+_MODELS: dict[str, Any] = json.loads(
+    Path(__file__).with_name("flow_options.json").read_text(encoding="utf-8")
+)["video"]["models"]
+RESOLUTION = "720p"
 
 
 def price_for(model: str, seconds: int) -> int | None:
-    return PRICES.get(model) if seconds == SECONDS else LONGER_PRICES.get((model, seconds))
+    entry = _MODELS.get(model)
+    if entry is None:
+        return None
+    if entry["durations"]:
+        return entry["price_x1"].get(f"{RESOLUTION} {seconds}s")
+    return entry["price_x1"].get("") if seconds == SECONDS else None
+
+
+def resolution_for(model: str, resolution: str | None) -> str | None:
+    """The resolution a run pins: the one asked, else 720p on a model that has a resolution row, else none."""
+    return resolution or (RESOLUTION if _MODELS.get(model, {}).get("resolutions") else None)
+
+
+PRICES = {model: price_for(model, SECONDS) for model in _MODELS}
+LENGTHS = {model: tuple(entry["durations"]) or (SECONDS,) for model, entry in _MODELS.items()}
 
 
 ASPECTS = {"9:16": Aspect.PORTRAIT, "16:9": Aspect.LANDSCAPE}
@@ -98,13 +110,13 @@ ROWS_WINDOW = 15
 # The icon a bar chip carries, by the ingredient it stands for; an image chip carries a thumbnail instead.
 ICON_KINDS = {"voice_selection": "voice", "accessibility_new": "character"}
 # Flow's own refusal of an image over a model's cap, read off the composer's hover cards on 2026-10-01
-# (out/flow_research/log_caps2.txt): Omni 1.1 Flash 7, Veo 3.1 Lite and Fast 3, Veo 3.1 Quality none.
+# (out/flow_research/log_caps2.txt), and again for Omni 1.2 Flash on 2026-11-09 (out/av/probe.json): Omni 7, Veo 3.1 Lite 3.
 CAP_WORDS = "Maximum image ingredients reached ({cap} allowed)"
 NO_IMAGES_WORDS = "You cannot use image ingredients with this model."
-CAPS_MEASURED = "2026-10-01"
+CAPS_MEASURED = "2026-11-09"
 # The voices each model takes as audio ingredients, and Flow's own refusals, read off the composer on 2026-10-01
 # (log_caps2.txt; a voice alone out/al/t5.json). A character that has a voice takes one of them (t1b.json).
-VOICE_CAPS = {"omni-flash": 5, "veo-lite": 1, "veo-fast": 1, "veo-quality": 0}
+VOICE_CAPS = {"omni-1.2-flash": 5, "veo-lite": 1}
 AUDIO_CAP_WORDS = "Maximum audio ingredients reached ({cap} allowed)"
 NO_AUDIO_WORDS = "You cannot use audio ingredients with this model."
 ALONE_WORDS = "An audio ingredient requires other ingredients to function."
@@ -990,7 +1002,7 @@ async def generate(
     prompt: str,
     characters: list[str],
     media_ids: list[str] | tuple[str, ...] = (),
-    model: str = "omni-flash",
+    model: str = "omni-1.2-flash",
     aspect: str = "9:16",
     job_id: str | None = None,
     out_dir: Path = Path("out"),
@@ -1011,6 +1023,8 @@ async def generate(
     With max_credits (gen_video, plan AB) the caller has checked the settings against the surveyed options, and the
     live price line is held against that cap instead of this module's own table. A paid clip's recipe is read back
     off the listing, and a clip that dropped or gained a reference is an error though it was paid (plan AL, I4)."""
+    if max_credits is None:
+        resolution = resolution_for(model, resolution)
     if max_credits is not None:
         expected = table_credits
     elif model not in PRICES:

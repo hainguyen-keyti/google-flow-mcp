@@ -167,7 +167,7 @@ def test_a_detached_frames_job_whose_request_went_out_wrong_says_so_at_once(monk
     monkeypatch.setattr(video.composer, "_submit", _started(wrong))
 
     with pytest.raises(RuntimeError, match=WENT_OUT_WRONG) as said:
-        _run(model="omni-flash", resolution="720p", duration=4, detach=True)
+        _run(model="omni-1.2-flash", resolution="720p", duration=4, detach=True)
 
     assert "credits were spent" not in str(said.value) and "job_collect" in str(said.value)
 

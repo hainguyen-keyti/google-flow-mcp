@@ -81,7 +81,7 @@ def test_no_change_means_no_findings():
 def test_the_option_comparison_names_models_cells_and_prices_that_changed():
     base = video.OPTIONS
     current = json.loads(json.dumps(base))
-    current["video"]["models"]["omni-flash"]["price_x1"]["720p 10s"] = 16
+    current["video"]["models"]["omni-1.2-flash"]["price_x1"]["720p 10s"] = 16
     current["video"]["models"]["veo-ultra"] = {
         "label": "Veo 3.1 - Ultra",
         "resolutions": [],
@@ -89,46 +89,48 @@ def test_the_option_comparison_names_models_cells_and_prices_that_changed():
         "price_x1": {"": 200},
         "modes": ["Frames"],
     }
-    del current["video"]["models"]["veo-quality"]
+    del current["video"]["models"]["veo-lite"]
     current["image"]["aspects"].append("21:9")
 
     found = survey.compare_options(base, current)
 
-    assert ("price changed", "omni-flash", "720p 10s: 15 -> 16") in found
+    assert ("price changed", "omni-1.2-flash", "720p 10s: 30 -> 16") in found
     assert ("model added", "veo-ultra", "Veo 3.1 - Ultra") in found
-    assert ("model removed", "veo-quality", "Veo 3.1 - Quality") in found
+    assert ("model removed", "veo-lite", "Veo 3.1 - Lite") in found
     assert ("image option changed", "aspects", "added ['21:9']") in found
     assert survey.compare_options(base, json.loads(json.dumps(base))) == []
 
 
 def test_the_option_walk_becomes_the_options_file_gen_video_reads():
-    """The walk's raw shape (as /tmp/option_matrix.py measured it on 2026-09-29) turns into flow_options.json."""
+    """The walk's raw shape as the survey of 2026-11-09 measured it on build YyfdEJNu4Zk: Omni 1.2 Flash's Length
+    slider walked into a length row (3-10 s, 1 credit a second at 360p and 3 at 720p), and the three models Flow marks
+    "Leaving Dec 5" left out of the file gen_video reads (decided 2026-11-09)."""
 
-    def omni(price720, price360):
-        prices = {}
-        for d, p7, p3 in zip((4, 6, 8, 10), price720, price360):
-            for c in (1, 2, 3, 4):
-                prices[f"720p {d}s x{c}"] = p7 * c
-                prices[f"360p {d}s x{c}"] = p3 * c
+    def per_second(lengths, per_s):
+        prices = {f"{r} {d}s x{c}": per_s[r] * d * c for r in per_s for d in lengths for c in (1, 2, 3, 4)}
         return {
-            "rows": [["360p", "720p"], ["4s", "6s", "8s", "10s"], ["x1", "x2", "x3", "x4"]],
+            "rows": [list(per_s), [f"{d}s" for d in lengths], ["x1", "x2", "x3", "x4"]],
             "prices": prices,
         }
 
     def veo(x1):
         return {"rows": [["x1", "x2", "x3", "x4"]], "prices": {f"x{c}": x1 * c for c in (1, 2, 3, 4)}}
 
+    old_omni = {
+        "rows": [["360p", "720p"], ["4s", "6s", "8s", "10s"], ["x1", "x2", "x3", "x4"]],
+        "prices": {"360p 4s x1": 4, "720p 10s x1": 15},
+    }
     per_mode = {
-        "Omni 1.1 Flash": omni((7, 10, 12, 15), (4, 5, 6, 7)),
+        "Omni 1.2 Flash": per_second(range(3, 11), {"360p": 1, "720p": 3}),
+        "Omni 1.1 Flash Leaving Dec 5": old_omni,
         "Veo 3.1 - Lite": veo(10),
-        "Veo 3.1 - Fast": veo(20),
-        "Veo 3.1 - Quality": veo(100),
+        "Veo 3.1 - Fast Leaving Dec 5": veo(20),
+        "Veo 3.1 - Quality Leaving Dec 5": veo(100),
     }
     walk = {
         "measured": video.OPTIONS["measured"],
         "video": {"aspects": ["16:9", "9:16"], "modes": {"Frames": per_mode, "Ingredients": per_mode}},
         "image": {
-            # Measured 2026-10-08 by the survey that rewrote the file: Flow offers Nano Banana 2.1 in place of 2.
             "models": ["Nano Banana Pro", "Nano Banana 2 Lite", "Nano Banana 2.1"],
             "aspects": ["16:9", "4:3", "1:1", "3:4", "9:16"],
             "counts": [1, 2, 3, 4],
@@ -138,13 +140,29 @@ def test_the_option_walk_becomes_the_options_file_gen_video_reads():
 
     options = survey.options_from_walk(walk)
 
+    assert sorted(options["video"]["models"]) == ["omni-1.2-flash", "veo-lite"]
     assert options["video"] == video.OPTIONS["video"]
     assert options["image"] == video.OPTIONS["image"]
 
 
+def test_a_model_flow_marks_as_leaving_is_left_out_whatever_its_name():
+    walk = _walk_with(
+        video={
+            "aspects": ["16:9"],
+            "modes": {
+                "Frames": {
+                    "Veo 3.1 - Lite": {"rows": [["x1"]], "prices": {"x1": 10}},
+                    "Veo 4 - Preview Leaving Jan 9": {"rows": [["x1"]], "prices": {"x1": 50}},
+                }
+            },
+        }
+    )
+    assert list(survey.options_from_walk(walk)["video"]["models"]) == ["veo-lite"]
+
+
 def test_a_model_nobody_has_named_yet_gets_a_name_from_its_label():
     assert survey.slug("Veo 3.2 - Ultra") == "veo-3-2-ultra"
-    assert survey.slug("Omni 1.1 Flash") == "omni-flash"
+    assert survey.slug("Omni 1.2 Flash") == "omni-1.2-flash"
 
 
 def test_every_click_of_the_survey_goes_through_the_one_guarded_click():

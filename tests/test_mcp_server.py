@@ -379,41 +379,29 @@ def test_flow_media_can_ask_for_every_version(monkeypatch):
     assert [row["workflow_id"] for row in payload["versions"]] == ["w1", "w2"]
 
 
-def test_gen_i2v_prices_the_end_frame_run_separately_from_the_start_frame_one():
-    """Plan I T3. The end frame goes out on Flow's interpolation submit, a different wire model from the plain
-    start-frame run the 15 credits were measured on, so the description has to carry BOTH numbers and say which
-    is which. Anything else lets an agent budget one run at the other's price."""
+def test_gen_i2v_says_how_an_end_frame_is_billed_and_where_it_stops():
+    """Plan I T3, then plan AV: Omni 1.2 bills a start and end frame at the start-frame price, and above 10 s Flow
+    drops the end frame and still bills (gflow 0.96.1, #1178), so the description has to say both."""
     description = served_tool_objects()["gen_i2v"].description
-    assert "15" in description, description
-    assert "end_frame" in description and "interpolation" in description.lower(), description
-    # Only the end frame's own refusal is lifted; the shared job_id rule still says a used id is refused.
-    assert "end_frame is refused" not in description, (
-        "the refusal is lifted once the run has a measured price"
-    )
-    # Never merged into one figure: each form carries its own measurement, which is also how a reader can tell
-    # the two were priced separately rather than assumed equal (they happen to match today, at 15 each).
-    assert "105 s" in description and "119 s" in description, description
-    assert re.search(r"start frame[^.]*?15 credits in 105 s", description), description
-    assert re.search(r"end_frame = 15 credits in 119 s", description), description
+    assert "end_frame" in description and "start-frame price" in description, description
+    assert re.search(r"end frame up to 10 s only", description), description
+    assert "end_frame is refused" not in description
 
 
 @pytest.mark.parametrize(
-    "settings",
+    ("settings", "says"),
     [
-        {"model": "veo-lite"},
-        {"model": "veo-fast"},
-        {"model": "omni-flash", "duration": 8},
-        {"duration": 4},
-        {"resolution": "360p"},
+        ({"model": "veo-lite"}, "end_frame runs on omni-1.2-flash only"),
+        ({"model": "veo-fast"}, "retires"),
+        ({"duration": 12}, "keeps an end frame only up to 10s"),
     ],
+    ids=["Veo Lite", "Veo Fast", "12 s, where Flow drops the end frame"],
 )
-def test_gen_i2v_takes_an_end_frame_only_where_that_run_was_priced(monkeypatch, tmp_path, settings):
-    """Review 2026-09-18 (Plan I). One run priced ONE cell: omni-flash at 10 s. gflow puts no model gate on
-    --end-frame and picks a different interpolation model per cohort (veo_3_1_interpolation_lite against
-    omni_flash_i2v_8s_first_last), so any other model or length submits something nobody has paid for once,
-    while the sibling tools quote veo-lite at 10 and invite the agent to assume the same here."""
-    # Through the real Backend.generate, where the guard now lives (shared with the CLI since the review of plan
-    # AQ); a stubbed generate would bypass the very check under test.
+def test_gen_i2v_takes_an_end_frame_only_where_flow_keeps_it(monkeypatch, tmp_path, settings, says):
+    """Review 2026-09-18 (Plan I), then plan AV: an end frame runs on Omni 1.2 Flash only, and up to 10 s, where Flow
+    keeps it; anything else is refused before the ledger is touched."""
+    # Through the real Backend.generate, where the guard lives (shared with the CLI since the review of plan AQ); a
+    # stubbed generate would bypass the very check under test.
     text = _refused_before_the_ledger(
         monkeypatch,
         tmp_path,
@@ -427,7 +415,7 @@ def test_gen_i2v_takes_an_end_frame_only_where_that_run_was_priced(monkeypatch, 
             **settings,
         },
     )
-    assert "end_frame" in text and "omni-flash" in text, text
+    assert says in text, text
 
 
 def test_gen_i2v_hands_the_end_frame_all_the_way_into_the_argv(monkeypatch, tmp_path):
@@ -672,16 +660,17 @@ def _argv_sent_by(monkeypatch, tmp_path, tool, arguments):
     return mcp_server.gen_mod.build_argv(jobs[0], Path("out"))
 
 
-def test_t2v_and_i2v_without_a_model_go_out_as_omni_flash_for_ten_seconds(monkeypatch, tmp_path):
+def test_t2v_and_i2v_without_a_model_go_out_as_omni_1_2_for_eight_seconds(monkeypatch, tmp_path):
     # Left empty, gflow lets Flow reuse whatever model the composer used last (cli_video.py:185-196), so what
-    # a call costs could not be known before paying. The owner chose omni-flash for 10 s (2026-09-15).
+    # a call costs could not be known before paying. The owner chose omni-flash for 10 s (2026-09-15), then Omni 1.2
+    # Flash at 720p 8 s when Flow retired Omni 1.1 (plan AV, 2026-11-09).
     calls = {
         "gen_t2v": {"prompt": "a boat", "project": "P", "job_id": "job-t2v"},
         "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P", "job_id": "job-i2v"},
     }
     for tool, arguments in calls.items():
         argv = _argv_sent_by(monkeypatch, tmp_path, tool, arguments)
-        assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "10"), (tool, argv)
+        assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-1.2-flash", "8"), (tool, argv)
 
 
 def test_r2v_without_a_model_goes_out_as_omni_flash_and_leaves_its_only_length_to_gflow(
@@ -691,7 +680,7 @@ def test_r2v_without_a_model_goes_out_as_omni_flash_and_leaves_its_only_length_t
     # that length itself when none is sent, even on a cohort with no duration row (DECISIONS 2026-09-15).
     r2v = {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"}
     argv = _argv_sent_by(monkeypatch, tmp_path, "gen_r2v", r2v)
-    assert _flag(argv, "--model") == "omni-flash"
+    assert _flag(argv, "--model") == "omni-1.2-flash"
     assert "--duration" not in argv
     # Sent explicitly, the length goes through gflow's duration click, which raises exit 11 on a cohort with no
     # duration row (migrated_composer.py:1171-1173) after the ledger holds `submitted`: an 8 from the agent is dropped.
@@ -699,7 +688,7 @@ def test_r2v_without_a_model_goes_out_as_omni_flash_and_leaves_its_only_length_t
     assert "--duration" not in argv
 
 
-@pytest.mark.parametrize(("model", "refs"), [("omni-flash", 8), (None, 8), ("veo-lite", 4)])
+@pytest.mark.parametrize(("model", "refs"), [("omni-1.2-flash", 8), (None, 8), ("veo-lite", 4)])
 def test_r2v_with_more_references_than_the_model_takes_is_refused_before_the_ledger(
     monkeypatch, tmp_path, model, refs
 ):
@@ -744,8 +733,8 @@ def test_a_model_or_length_gflow_would_refuse_is_refused_before_the_ledger_is_to
     assert "model must be one of" in _refused_before_the_ledger(
         monkeypatch, tmp_path, "gen_t2v", t2v | {"model": "omni"}
     )
-    # gflow 0.96.1 words it "one of [4, 6, 8, 10] seconds"; 0.78.0 wrote "4/6/8/10".
-    assert "[4, 6, 8, 10]" in _refused_before_the_ledger(
+    # gflow 0.96.1 names Omni 1.2's slider lengths, 3 to 15 s; 0.78.0 wrote "4/6/8/10" for Omni 1.1.
+    assert "[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]" in _refused_before_the_ledger(
         monkeypatch, tmp_path, "gen_t2v", t2v | {"duration": 0}
     )
     veo_ten = t2v | {"model": "veo-lite", "duration": 10}
@@ -781,10 +770,13 @@ IMAGE_CALLS = {
 @pytest.mark.parametrize(
     ("tool", "change", "says"),
     [
-        ("gen_t2v", {"model": "veo-quality"}, "never paid"),
-        ("gen_t2v", {"model": "veo-fast"}, "never paid"),
+        ("gen_t2v", {"model": "veo-quality"}, "retires"),
+        ("gen_t2v", {"model": "veo-fast"}, "retires"),
+        ("gen_t2v", {"model": "omni-flash"}, "retires"),
+        ("gen_i2v", {"model": "omni-flash"}, "retires"),
+        ("gen_r2v", {"model": "veo-fast"}, "retires"),
         ("gen_i2v", {"model": "veo-lite"}, "never paid"),
-        ("gen_r2v", {"model": "veo-fast"}, "never paid"),
+        ("gen_t2v", {"duration": 12}, "no price"),
         ("gen_t2v", {"count": 2}, "one clip"),
         ("gen_t2v", {"model": "veo-lite", "count": 2}, "one clip"),
         ("gen_t2v", {"resolution": "1080p"}, "resolution must be one of"),
@@ -794,8 +786,11 @@ IMAGE_CALLS = {
     ids=[
         "t2v on Veo Quality",
         "t2v on Veo Fast",
-        "i2v on Veo Lite",
+        "t2v on Omni 1.1",
+        "i2v on Omni 1.1",
         "r2v on Veo Fast",
+        "i2v on Veo Lite",
+        "t2v at 12 s, past the slider here",
         "t2v two clips",
         "t2v two clips on Veo Lite",
         "t2v at a resolution the table lacks",
@@ -814,15 +809,15 @@ def test_the_gflow_tools_refuse_a_cell_nobody_paid_for_before_the_ledger(
 @pytest.mark.parametrize(
     ("tool", "change", "expected"),
     [
-        ("gen_t2v", {}, 15),
-        ("gen_t2v", {"duration": 4}, 7),
-        ("gen_t2v", {"resolution": "360p", "duration": 4}, 4),
+        ("gen_t2v", {}, 24),
+        ("gen_t2v", {"duration": 4}, 12),
+        ("gen_t2v", {"resolution": "360p", "duration": 3}, 3),
         ("gen_t2v", {"model": "veo-lite"}, 10),
-        ("gen_i2v", {}, 15),
-        ("gen_r2v", {}, 12),
+        ("gen_i2v", {}, 24),
+        ("gen_r2v", {}, 24),
         ("gen_r2v", {"model": "veo-lite"}, 10),
     ],
-    ids=["omni 10 s", "omni 4 s", "omni 360p 4 s", "veo-lite", "i2v omni", "r2v omni", "r2v veo-lite"],
+    ids=["omni 8 s", "omni 4 s", "omni 360p 3 s", "veo-lite", "i2v omni", "r2v omni", "r2v veo-lite"],
 )
 def test_a_paid_cell_goes_out_with_its_table_price_in_the_answer(
     monkeypatch, tmp_path, tool, change, expected
@@ -837,8 +832,8 @@ def test_a_paid_cell_goes_out_with_its_table_price_in_the_answer(
 
     assert answer["expected_credits"] == expected, answer
     # Omni's price depends on the resolution radio the composer was left on; the run pins it first. Veo has no row.
-    model = change.get("model", "omni-flash")
-    assert pinned == ([change.get("resolution", "720p")] if model == "omni-flash" else []), pinned
+    model = change.get("model", "omni-1.2-flash")
+    assert pinned == ([change.get("resolution", "720p")] if model == "omni-1.2-flash" else []), pinned
 
 
 def test_a_paid_answer_carries_the_flow_build_the_process_read(monkeypatch, tmp_path):
@@ -920,14 +915,14 @@ def test_the_video_tools_show_the_agent_that_the_model_defaults_to_omni_flash():
         name: tools[name].input_schema["properties"]["model"].get("default")
         for name in ("gen_t2v", "gen_r2v", "gen_i2v")
     }
-    assert defaults == {"gen_t2v": "omni-flash", "gen_r2v": "omni-flash", "gen_i2v": "omni-flash"}
+    assert defaults == {"gen_t2v": "omni-1.2-flash", "gen_r2v": "omni-1.2-flash", "gen_i2v": "omni-1.2-flash"}
 
 
 def test_a_null_model_is_treated_as_an_omitted_one(monkeypatch, tmp_path):
     argv = _argv_sent_by(
         monkeypatch, tmp_path, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "model": None}
     )
-    assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "10")
+    assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-1.2-flash", "8")
 
 
 def test_a_veo_model_keeps_flows_own_length_because_veo_stops_at_eight_seconds(monkeypatch, tmp_path):
@@ -941,7 +936,7 @@ def test_an_explicit_duration_is_sent_as_given(monkeypatch, tmp_path):
     argv = _argv_sent_by(
         monkeypatch, tmp_path, "gen_t2v", {"prompt": "a boat", "project": "P", "job_id": "j", "duration": 8}
     )
-    assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-flash", "8")
+    assert (_flag(argv, "--model"), _flag(argv, "--duration")) == ("omni-1.2-flash", "8")
 
 
 # Every served tool that takes an out_dir must appear in one of these two sets, and the test below reads the
@@ -1621,7 +1616,7 @@ def test_gen_character_dry_run_quotes_without_a_job_id_while_a_real_run_still_ch
         ({"media_ids": ["E"]}, "named once"),
         ({"characters": [" "]}, "must not be blank"),
         ({"media_ids": [""]}, "must not be blank"),
-        ({"model": "veo-quality"}, "model must be one of"),
+        ({"model": "veo-quality"}, "retires"),
         ({"aspect": "1:1"}, "aspect must be one of"),
         ({"prompt": "   "}, "prompt is required"),
         ({"project": ""}, "project is required"),
@@ -1647,7 +1642,7 @@ def test_gen_character_forwards_every_option_to_the_driver(monkeypatch, tmp_path
     # A non-default length on the one model that has one: a backend passing a constant 8 must not look correct.
     arguments = SPEND_CALLS["gen_character"] | {
         "media_ids": ["M"],
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "aspect": "16:9",
         "duration": 10,
     }
@@ -1662,7 +1657,7 @@ def test_gen_character_forwards_every_option_to_the_driver(monkeypatch, tmp_path
         "prompt": "a boat",
         "characters": ["E"],
         "media_ids": ["M"],
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "aspect": "16:9",
         "job_id": "job-character",
         "out_dir": str(tmp_path),
@@ -1673,7 +1668,7 @@ def test_gen_character_forwards_every_option_to_the_driver(monkeypatch, tmp_path
 
 def test_gen_character_shows_the_agent_its_defaults():
     schema = served_tool_objects()["gen_character"].input_schema["properties"]
-    assert schema["model"].get("default") == "omni-flash"
+    assert schema["model"].get("default") == "omni-1.2-flash"
     assert schema["aspect"].get("default") == "9:16"
     assert schema["dry_run"].get("default") is False
 
@@ -2623,7 +2618,7 @@ def test_the_instructions_say_calls_are_slow_and_a_retry_must_keep_its_job_id():
     text = mcp_server.server.instructions
     assert re.search(r"\b\d+\s*(?:s|seconds|min|minutes)\b", text), text
     assert "job_id" in text
-    assert "omni-flash" in text
+    assert "omni-1.2-flash" in text
 
 
 def _smoke_module():
@@ -3200,7 +3195,7 @@ def test_agent_mode_that_was_off_is_left_off(monkeypatch, tmp_path):
     # the model (a Veo leftover shows no resolution row; review of plan AQ finding 6).
     assert log == [
         ("set_mode", False, False, False),
-        ("model", "omni-flash", "9:16"),
+        ("model", "omni-1.2-flash", "9:16"),
         ("pin", "720p"),
         ("run_job", "t2v"),
     ], log
@@ -3334,7 +3329,7 @@ def test_gen_video_dry_run_needs_neither_a_job_id_nor_a_cap(monkeypatch, tmp_pat
 def test_gen_video_forwards_every_option_to_the_driver(monkeypatch, tmp_path):
     _spending_backend(monkeypatch, tmp_path)
     arguments = SPEND_CALLS["gen_video"] | {
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "aspect": "16:9",
         "resolution": "360p",
         "duration": 6,
@@ -3350,7 +3345,7 @@ def test_gen_video_forwards_every_option_to_the_driver(monkeypatch, tmp_path):
     assert {
         k: got[k] for k in ("model", "aspect", "resolution", "duration", "count", "start_frame", "end_frame")
     } == {
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "aspect": "16:9",
         "resolution": "360p",
         "duration": 6,
@@ -4262,7 +4257,7 @@ def test_job_submit_hands_the_driver_what_gen_video_hands_it(monkeypatch, tmp_pa
     # default that drifts shows), and the driver must get the same call but for the job id and the detach.
     _spending_backend(monkeypatch, tmp_path)
     option_sets = [
-        {"model": "omni-flash", "aspect": "16:9", "resolution": "360p", "duration": 6, "start_frame": "S"}
+        {"model": "omni-1.2-flash", "aspect": "16:9", "resolution": "360p", "duration": 6, "start_frame": "S"}
         | {"end_frame": "E"},
         {"model": "veo-lite", "media_ids": ["M"], "characters": ["E"], "voices": ["Achird"]},
         {"out_dir": str(tmp_path / "films")},
@@ -4809,11 +4804,11 @@ def test_flow_capabilities_answers_the_measured_table_with_no_browser(monkeypatc
 
     assert answer == json.loads(json.dumps(capabilities.capabilities())) and opened == []
     # The cells an agent budgets from are the ones gen_video charges by.
-    cells = answer["video"]["models"]["omni-flash"]["credits_x1"]
+    cells = answer["video"]["models"]["omni-1.2-flash"]["credits_x1"]
     assert {(c["resolution"], c["seconds"]): c["credits"] for c in cells} == {
-        (resolution, seconds): mcp_server.video_mod.price("omni-flash", resolution, seconds, 1)
-        for resolution in mcp_server.video_mod.VIDEO["models"]["omni-flash"]["resolutions"]
-        for seconds in mcp_server.video_mod.VIDEO["models"]["omni-flash"]["durations"]
+        (resolution, seconds): mcp_server.video_mod.price("omni-1.2-flash", resolution, seconds, 1)
+        for resolution in mcp_server.video_mod.VIDEO["models"]["omni-1.2-flash"]["resolutions"]
+        for seconds in mcp_server.video_mod.VIDEO["models"]["omni-1.2-flash"]["durations"]
     }
 
 

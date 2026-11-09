@@ -22,7 +22,7 @@ from gflow_cli.api.transports import migrated_composer as mc
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video.flow import agent, composer, ingredients, parsers
-from video.flow.ingredients import ALONE_WORDS, CAPS_MEASURED
+from video.flow.ingredients import ALONE_WORDS
 from video.session import FlowSession
 
 OPTIONS: dict[str, Any] = json.loads(
@@ -32,6 +32,8 @@ VIDEO = OPTIONS["video"]
 # A model whose pane shows no length or resolution row still makes one: every Veo clip measured here was 8 s at
 # 1280x720 (2026-09-13 to 2026-09-29), so naming that default is accepted and anything else is refused.
 FIXED = {"duration": 8, "resolution": "720p"}
+# When mode_for's two refusals were read off the composer (job ak-a3 and out/al/t5.json).
+MODE_MEASURED = "2026-10-01"
 
 
 def _model(model: str) -> dict[str, Any]:
@@ -102,7 +104,7 @@ def mode_for(
         # the request and the clip's recipe then carry the frame image only.
         dropped = (
             f" Flow would take a character beside a frame and then send the request without the character, at full "
-            f"price (measured {CAPS_MEASURED}): use Ingredients, or a start frame alone."
+            f"price (measured {MODE_MEASURED}): use Ingredients, or a start frame alone."
             if characters
             else ""
         )
@@ -115,7 +117,7 @@ def mode_for(
     if voices and not (characters or media_ids):
         raise ValueError(
             f"a voice needs an image or a character beside it: Flow greys a voice alone out with {ALONE_WORDS!r} "
-            f"(read off the composer on {CAPS_MEASURED})"
+            f"(read off the composer on {MODE_MEASURED})"
         )
     return "Ingredients" if ingredients else "Frames"
 
@@ -355,7 +357,7 @@ async def generate(
     project_id: str,
     *,
     prompt: str,
-    model: str = "omni-flash",
+    model: str = "omni-1.2-flash",
     aspect: str = "9:16",
     resolution: str | None = None,
     duration: int | None = None,

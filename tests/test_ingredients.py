@@ -65,7 +65,12 @@ def _record(media=MEDIA, workflow=WORKFLOW, url=URL):
 
 def test_resolve_names_each_character_then_each_image_with_the_ids_their_chips_carry():
     references = ingredients.resolve(
-        [_character()], [_image()], [_record(), _record(workflow="w-older")], [ENTITY], [MEDIA], "omni-flash"
+        [_character()],
+        [_image()],
+        [_record(), _record(workflow="w-older")],
+        [ENTITY],
+        [MEDIA],
+        "omni-1.2-flash",
     )
     assert [(r.kind, r.id, r.title) for r in references] == [
         ("entity", ENTITY, "Thu"),
@@ -82,25 +87,25 @@ def test_resolve_names_an_image_by_its_own_workflows_only():
     second = _image(media=OTHER, title="other.png")
     records = [_record(), _record(media=OTHER, workflow="w-other")]
     references = ingredients.resolve(
-        [_character()], [_image(), second], records, [ENTITY], [MEDIA], "omni-flash"
+        [_character()], [_image(), second], records, [ENTITY], [MEDIA], "omni-1.2-flash"
     )
     assert references[1].mention_ids == {WORKFLOW}
 
 
 def test_resolve_refuses_an_entity_that_is_not_a_character_of_the_project():
     with pytest.raises(LookupError, match=OTHER):
-        ingredients.resolve([_character()], [], [], [OTHER], [], "omni-flash")
+        ingredients.resolve([_character()], [], [], [OTHER], [], "omni-1.2-flash")
 
 
 def test_resolve_refuses_a_character_whose_name_another_character_carries():
     twins = [_character(), _character(entity=OTHER, name=" THU ")]
     with pytest.raises(LookupError, match="2 characters are named"):
-        ingredients.resolve(twins, [], [], [ENTITY], [], "omni-flash")
+        ingredients.resolve(twins, [], [], [ENTITY], [], "omni-1.2-flash")
 
 
 def test_resolve_refuses_a_character_with_no_name_to_type():
     with pytest.raises(LookupError, match="no name"):
-        ingredients.resolve([_character(name="  ")], [], [], [ENTITY], [], "omni-flash")
+        ingredients.resolve([_character(name="  ")], [], [], [ENTITY], [], "omni-1.2-flash")
 
 
 @pytest.mark.parametrize(
@@ -128,7 +133,7 @@ def test_resolve_refuses_an_image_the_dialog_could_not_single_out(media, records
     # Plan AL (2026-10-01): an image is attached through the "+" dialog and told by its url, so two images sharing a
     # title are refused only when their urls end alike; until then any shared title was refused.
     with pytest.raises(error, match=message):
-        ingredients.resolve([_character()], media, records, [ENTITY], [MEDIA], "omni-flash")
+        ingredients.resolve([_character()], media, records, [ENTITY], [MEDIA], "omni-1.2-flash")
 
 
 def test_resolve_takes_images_sharing_a_title_when_their_urls_end_differently():
@@ -137,13 +142,13 @@ def test_resolve_takes_images_sharing_a_title_when_their_urls_end_differently():
         _record(),
         _record(media=OTHER, workflow="w-twin", url=f"https://lh3.googleusercontent.com/asb/{TWIN_TOKEN}"),
     ]
-    references = ingredients.resolve([], [_image(), twin], records, [], [MEDIA, OTHER], "omni-flash")
+    references = ingredients.resolve([], [_image(), twin], records, [], [MEDIA, OTHER], "omni-1.2-flash")
     assert [(r.id, r.tail) for r in references] == [(MEDIA, TAIL), (OTHER, TWIN_TOKEN[-24:])]
 
 
 def test_resolve_takes_an_image_whose_title_would_leave_nothing_to_type_after_an_at_sign():
     # The title is the dialog's search text now, typed whole; only a character's name is still typed after '@'.
-    references = ingredients.resolve([], [_image(title=" .png")], [_record()], [], [MEDIA], "omni-flash")
+    references = ingredients.resolve([], [_image(title=" .png")], [_record()], [], [MEDIA], "omni-1.2-flash")
     assert references[0].title == " .png"
 
 
@@ -152,24 +157,23 @@ def test_resolve_refuses_more_references_than_the_model_takes():
     ids = [c["entity_id"] for c in characters]
     with pytest.raises(ValueError, match="at most 3"):
         ingredients.resolve(characters, [_image()], [_record()], ids, [MEDIA], "veo-lite")
-    assert len(ingredients.resolve(characters, [_image()], [_record()], ids, [MEDIA], "omni-flash")) == 4
+    assert len(ingredients.resolve(characters, [_image()], [_record()], ids, [MEDIA], "omni-1.2-flash")) == 4
 
 
 @pytest.mark.parametrize(
     ("model", "images", "flow_says"),
     [
         ("veo-lite", 4, "Maximum image ingredients reached (3 allowed)"),
-        ("omni-flash", 8, "Maximum image ingredients reached (7 allowed)"),
-        ("veo-quality", 1, "You cannot use image ingredients with this model."),
+        ("omni-1.2-flash", 8, "Maximum image ingredients reached (7 allowed)"),
     ],
 )
 def test_resolve_refuses_more_images_than_the_model_takes_in_the_words_flow_shows(model, images, flow_says):
-    # Read off the composer's own refusal cards on 2026-10-01 (out/flow_research/log_caps2.txt).
+    # Read off the composer's own refusal cards on 2026-10-01 (log_caps2.txt), again on 2026-11-09 (out/av/probe.json).
     listed = [_image(media=f"m{index}", title=f"i{index}.png") for index in range(images)]
     records = [_record(media=f"m{index}", workflow=f"w{index}") for index in range(images)]
     with pytest.raises(ValueError, match=re.escape(flow_says)) as refused:
         ingredients.resolve([], listed, records, [], [each["id"] for each in listed], model)
-    assert "2026-10-01" in str(refused.value)
+    assert "2026-11-09" in str(refused.value)
 
 
 def test_resolve_counts_a_character_against_the_image_slots_in_the_words_flow_shows():
@@ -194,7 +198,7 @@ def test_resolve_never_puts_flows_image_refusal_in_the_mouth_of_a_character_over
     assert "image ingredients" not in str(refused.value)
 
 
-def _voices(*names, model="omni-flash", presets=PRESETS, customs=CUSTOMS):
+def _voices(*names, model="omni-1.2-flash", presets=PRESETS, customs=CUSTOMS):
     return ingredients.resolve(
         [_character()],
         [_image()],
@@ -240,7 +244,7 @@ def test_resolve_takes_a_voice_by_its_whole_name_only():
 def test_resolve_tells_an_image_by_its_first_listed_record_as_the_frame_picker_does():
     # None of the 67 images measured holds two records; the rule only keeps the two pickers telling one image alike.
     older = _record(workflow="w-older", url=f"https://lh3.googleusercontent.com/asb/{TWIN_TOKEN}")
-    references = ingredients.resolve([], [_image()], [_record(), older], [], [MEDIA], "omni-flash")
+    references = ingredients.resolve([], [_image()], [_record(), older], [], [MEDIA], "omni-1.2-flash")
     assert references[0].tail == TAIL
 
 
@@ -267,16 +271,15 @@ def test_resolve_refuses_a_voice_named_twice():
     ("model", "count", "flow_says"),
     [
         ("veo-lite", 2, "Maximum audio ingredients reached (1 allowed)"),
-        ("veo-fast", 2, "Maximum audio ingredients reached (1 allowed)"),
-        ("omni-flash", 6, "Maximum audio ingredients reached (5 allowed)"),
+        ("omni-1.2-flash", 6, "Maximum audio ingredients reached (5 allowed)"),
     ],
 )
 def test_resolve_refuses_more_voices_than_the_model_takes_in_the_words_flow_shows(model, count, flow_says):
-    # Read off the composer's refusal cards on 2026-10-01 (out/flow_research/log_caps2.txt).
+    # Read off the composer's refusal cards on 2026-10-01 (log_caps2.txt), again on 2026-11-09 (out/av/probe.json).
     presets = [{"id": f"v{index}", "name": f"V{index}"} for index in range(count)]
     with pytest.raises(ValueError, match=re.escape(flow_says)) as refused:
         _voices(*[each["name"] for each in presets], model=model, presets=presets, customs=[])
-    assert "2026-10-01" in str(refused.value)
+    assert "2026-11-09" in str(refused.value)
     assert (
         len(_voices(*[each["name"] for each in presets[:-1]], model=model, presets=presets, customs=[]))
         == count
@@ -285,9 +288,9 @@ def test_resolve_refuses_more_voices_than_the_model_takes_in_the_words_flow_show
 
 def test_resolve_refuses_no_reference_at_all_and_a_repeated_id():
     with pytest.raises(ValueError, match="at least one character or image"):
-        ingredients.resolve([_character()], [_image()], [_record()], [], [], "omni-flash")
+        ingredients.resolve([_character()], [_image()], [_record()], [], [], "omni-1.2-flash")
     with pytest.raises(ValueError, match="named once"):
-        ingredients.resolve([_character()], [], [], [ENTITY, ENTITY], [], "omni-flash")
+        ingredients.resolve([_character()], [], [], [ENTITY, ENTITY], [], "omni-1.2-flash")
 
 
 def test_query_is_the_title_up_to_its_first_space_without_an_image_extension():
@@ -1637,7 +1640,7 @@ def test_apply_settings_opens_the_pane_a_second_time_when_the_first_open_showed_
     # open of the pane showed no option groups while a second open worked. Opening the pane spends nothing.
     fake = _Composer([_drift(EMPTY_PANE)])
     monkeypatch.setattr(ingredients.mc, "MigratedComposer", lambda: fake)
-    asyncio.run(ingredients.apply_settings(object(), "omni-flash", "9:16", [THU]))
+    asyncio.run(ingredients.apply_settings(object(), "omni-1.2-flash", "9:16", [THU]))
     assert fake.calls == 2
 
 
@@ -1645,7 +1648,7 @@ def test_apply_settings_retries_that_one_failure_only_once(monkeypatch):
     fake = _Composer([_drift(EMPTY_PANE), _drift(EMPTY_PANE)])
     monkeypatch.setattr(ingredients.mc, "MigratedComposer", lambda: fake)
     with pytest.raises(UiSelectorDriftError, match="no option groups"):
-        asyncio.run(ingredients.apply_settings(object(), "omni-flash", "9:16", [THU]))
+        asyncio.run(ingredients.apply_settings(object(), "omni-1.2-flash", "9:16", [THU]))
     assert fake.calls == 2
 
 
@@ -1653,7 +1656,7 @@ def test_apply_settings_never_retries_another_settings_failure(monkeypatch):
     fake = _Composer([_drift("migrated host: no 'aspect' radio offering 'crop_9_16' in the settings pane")])
     monkeypatch.setattr(ingredients.mc, "MigratedComposer", lambda: fake)
     with pytest.raises(UiSelectorDriftError, match="aspect"):
-        asyncio.run(ingredients.apply_settings(object(), "omni-flash", "9:16", [THU]))
+        asyncio.run(ingredients.apply_settings(object(), "omni-1.2-flash", "9:16", [THU]))
     assert fake.calls == 1
 
 
@@ -3296,10 +3299,10 @@ def test_submit_watch_hears_the_click_window_only_and_its_report_lands_in_the_ou
 def test_submit_merges_what_setup_returns_into_the_intent_row_and_the_result(monkeypatch, tmp_path):
     log = []
     _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", PROMPT)])
-    extra = {"model": "omni-flash", "chips": [{"kind": "entity", "id": ENTITY, "text": "Thu"}]}
+    extra = {"model": "omni-1.2-flash", "chips": [{"kind": "entity", "id": ENTITY, "text": "Thu"}]}
     result = _submit(_SubmitSession(log), tmp_path, log, setup=_setup(log, extra), strict_output=True)
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows()
-    assert rows[0]["chips"] == extra["chips"] and rows[0]["model"] == "omni-flash"
+    assert rows[0]["chips"] == extra["chips"] and rows[0]["model"] == "omni-1.2-flash"
     assert result["chips"] == extra["chips"]
 
 
@@ -3347,6 +3350,12 @@ def _generate_world(monkeypatch, log, *, was=False, chips_on_page=None):
 
     monkeypatch.setattr(ingredients.parsers, "voices_from_listing", lambda payload: PRESETS)
     monkeypatch.setattr(ingredients.parsers, "custom_voices", lambda payload: CUSTOMS)
+
+    async def pin_resolution(page, resolution):
+        log.append(f"resolution {resolution}")
+
+    # Plan AV: gen_character pins Omni 1.2's 720p, the resolution its own table prices.
+    monkeypatch.setattr(ingredients, "pin_resolution", pin_resolution)
 
     resolved = []
     shown = []
@@ -3543,18 +3552,20 @@ def test_generate_setup_sets_the_model_pins_8s_and_attaches_every_reference_in_o
     # The character is mentioned first: the '@' picker is the "+" dialog and keeps the category that dialog last
     # showed, under which it offers no character (measured 2026-10-01, twice). The image goes in through the dialog.
     assert log[3:] == [
-        f"settings omni-flash 9:16 {[ENTITY, MEDIA]}",
+        f"settings omni-1.2-flash 9:16 {[ENTITY, MEDIA]}",
         "pin",
+        "resolution 720p",
         f"click {ingredients.BOX}",
         f"attach {ENTITY}",
         f"attach_image {MEDIA}",
         "caret end",
     ]
     assert extra == {
-        "model": "omni-flash",
+        "model": "omni-1.2-flash",
         "aspect": "9:16",
         "seconds": 8,
         "duration_row": "pinned",
+        "resolution": "720p",
         "chips": [
             {"kind": "entity", "id": ENTITY, "text": "Thu"},
             {"kind": "media", "id": WORKFLOW, "text": "peobj1.png"},
@@ -3984,7 +3995,7 @@ def test_resolve_says_so_when_it_is_given_a_character_name_instead_of_its_entity
     """Measured 2026-09-28 in the price batch: `characters=["Mia"]` got "Mia is not a character of this project" while
     Mia was one; the parameter takes entity ids. The refusal has to say what went wrong and hand over the id."""
     with pytest.raises(LookupError) as caught:
-        ingredients.resolve([_character()], [], [], ["Thu"], [], "omni-flash")
+        ingredients.resolve([_character()], [], [], ["Thu"], [], "omni-1.2-flash")
 
     said = str(caught.value)
     assert "name" in said and ENTITY in said, said
@@ -3997,7 +4008,7 @@ def test_a_name_two_characters_share_is_not_answered_with_ids_that_would_be_refu
     twins = [_character(), _character(entity=OTHER, name=" THU ")]
 
     with pytest.raises(LookupError, match="rename one"):
-        ingredients.resolve(twins, [], [], ["Thu"], [], "omni-flash")
+        ingredients.resolve(twins, [], [], ["Thu"], [], "omni-1.2-flash")
 
 
 OTHER_MEDIA = "7c3b2a19-5d4e-4f60-8a71-b2c3d4e5f6a7"
@@ -4273,7 +4284,7 @@ def test_ten_seconds_on_a_model_that_offers_no_length_is_refused_before_a_browse
 def test_a_length_whose_price_was_never_measured_is_quoted_but_never_run(monkeypatch):
     """The repo refuses rather than guesses a price: an unmeasured length may be read with dry_run, which clicks
     nothing, and is refused for a real run before any browser opens."""
-    monkeypatch.setattr(ingredients, "LONGER_PRICES", {})
+    _without_the_ten_second_cell(monkeypatch)
 
     with pytest.raises(ValueError, match="no measured price"):
         asyncio.run(
@@ -4282,11 +4293,18 @@ def test_a_length_whose_price_was_never_measured_is_quoted_but_never_run(monkeyp
                 "P",
                 prompt="p",
                 characters=[ENTITY],
-                model="omni-flash",
+                model="omni-1.2-flash",
                 duration=10,
                 job_id="j",
             )
         )
+
+
+def _without_the_ten_second_cell(monkeypatch):
+    """The surveyed table with Omni 1.2's 720p 10 s cell gone: a length the slider offers whose price nobody read."""
+    models = json.loads(json.dumps(ingredients._MODELS))
+    del models["omni-1.2-flash"]["price_x1"]["720p 10s"]
+    monkeypatch.setattr(ingredients, "_MODELS", models)
 
 
 def test_every_gen_character_price_is_the_one_the_tool_promises():
@@ -4298,14 +4316,13 @@ def test_every_gen_character_price_is_the_one_the_tool_promises():
 
     tools = asyncio.run(mcp_server.server.list_tools())
     description = next(tool.description for tool in tools if tool.name == "gen_character")
-    for model, price in ingredients.PRICES.items():
-        assert _re.search(rf"{_re.escape(model)}\b[^;.]*?(?<!\d){price} credits", description), (model, price)
-    for (model, seconds), price in ingredients.LONGER_PRICES.items():
-        assert f"duration={seconds} is offered on {model} at {price} credits" in description, (
-            model,
-            seconds,
-            price,
-        )
+    for model, lengths in ingredients.LENGTHS.items():
+        for seconds in lengths:
+            price = ingredients.price_for(model, seconds)
+            assert price is not None, (model, seconds)
+            assert _re.search(
+                rf"{_re.escape(model)}\b[^;]*?(?<!\d){seconds} s(?: only,)? {price} credits", description
+            ), (model, seconds, price)
 
 
 def _ten_second_setup_world(monkeypatch, log, pinned="pinned"):
@@ -4351,7 +4368,7 @@ def test_a_ten_second_run_is_priced_pinned_and_recorded_at_ten_seconds(monkeypat
     )
     extra = asyncio.run(captured["setup"](type("Session", (), {"page": _GeneratePage(log)})()))
 
-    assert captured["expected_credits"] == ingredients.LONGER_PRICES[("omni-flash", 10)]
+    assert captured["expected_credits"] == ingredients.price_for("omni-1.2-flash", 10) == 30
     assert asked == [10], asked
     assert extra["seconds"] == 10, extra
 
@@ -4383,7 +4400,7 @@ def test_an_unmeasured_length_is_still_quoted_by_a_dry_run(monkeypatch, tmp_path
     price, so the dry run can never report a guessed price as matching."""
     log = []
     captured = _generate_world(monkeypatch, log)
-    monkeypatch.setattr(ingredients, "LONGER_PRICES", {})
+    _without_the_ten_second_cell(monkeypatch)
 
     asyncio.run(
         ingredients.generate(
@@ -4459,7 +4476,7 @@ def test_a_dry_run_is_never_failed_by_the_body_check(monkeypatch, tmp_path):
 
 def test_resolve_takes_images_alone():
     """Plan X: a reference run from project images only, the one way to a 10 s reference video on this host."""
-    references = ingredients.resolve([_character()], [_image()], [_record()], [], [MEDIA], "omni-flash")
+    references = ingredients.resolve([_character()], [_image()], [_record()], [], [MEDIA], "omni-1.2-flash")
     assert [(r.kind, r.id) for r in references] == [("media", MEDIA)]
     assert references[0].mention_ids == frozenset({WORKFLOW})
 
@@ -4468,7 +4485,7 @@ def test_generate_from_images_alone_still_submits_in_ingredients_mode_under_the_
     monkeypatch, tmp_path
 ):
     """Plan X, review: gflow picks Ingredients only for a request carrying characters, so an images-only run relies on
-    the composer being told the mode. Sent under Frames instead it would be a plain t2v at the same 15 credits at 10 s,
+    the composer being told the mode. Sent under Frames instead it would be a plain t2v at the same price at 10 s,
     which the price check cannot tell apart, and only the body check would catch it after the money is gone."""
     log = []
     captured = _generate_world(monkeypatch, log)
@@ -4479,14 +4496,15 @@ def test_generate_from_images_alone_still_submits_in_ingredients_mode_under_the_
             prompt=PROMPT,
             characters=[],
             media_ids=[MEDIA],
-            model="omni-flash",
+            model="omni-1.2-flash",
             duration=10,
             job_id="job-1",
             out_dir=tmp_path,
         )
     )
     assert captured["mode"] == "Ingredients" and captured["kind"] == "character"
-    assert captured["expected_credits"] == 15
+    # Omni 1.2 Flash at the 720p gen_character pins, 3 credits a second (measured 2026-11-09).
+    assert captured["expected_credits"] == 30
     assert [r.id for r in captured["watch"].references] == [MEDIA]
 
 
@@ -4496,7 +4514,7 @@ def test_two_images_the_dialog_cannot_tell_apart_are_refused_with_the_way_out():
     twin = _image(media="m-twin")
     records = [_record(), _record(media="m-twin", workflow="w-twin")]
     with pytest.raises(LookupError, match="rename the file"):
-        ingredients.resolve([_character()], [_image(), twin], records, [], [MEDIA], "omni-flash")
+        ingredients.resolve([_character()], [_image(), twin], records, [], [MEDIA], "omni-1.2-flash")
 
 
 # the recipe, read back after a paid run

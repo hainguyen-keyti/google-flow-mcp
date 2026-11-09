@@ -53,11 +53,12 @@ SIDEBAR = "mat-nav-list .mat-mdc-list-item"
 # holds the add button of "Create collection", so the last line of the row's text is that button's icon word.
 SIDEBAR_TITLE = "[matlistitemtitle]"
 KNOWN_MODELS = {
-    "Omni 1.1 Flash": "omni-flash",
+    "Omni 1.2 Flash": "omni-1.2-flash",
     "Veo 3.1 - Lite": "veo-lite",
-    "Veo 3.1 - Fast": "veo-fast",
-    "Veo 3.1 - Quality": "veo-quality",
 }
+# Measured 2026-11-09: Flow labels a model it is retiring "<name> Leaving Dec 5" in the picker. The owner dropped such
+# models the day they were seen (DECISIONS 2026-11-09), so the options file never offers one.
+LEAVING = re.compile(r"\bLeaving\b", re.IGNORECASE)
 
 
 class UnsafeClick(Exception):
@@ -293,6 +294,8 @@ def options_from_walk(walk: dict[str, Any]) -> dict[str, Any]:
     counts: list[int] = []
     for mode, per_model in walk["video"]["modes"].items():
         for label, cell in per_model.items():
+            if LEAVING.search(label):
+                continue
             got = _entry(mode, label, cell)
             counts = got.pop("counts")
             entry = models.get(slug(label))

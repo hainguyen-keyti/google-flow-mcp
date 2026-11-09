@@ -91,11 +91,14 @@ def test_a_job_id_already_in_a_ledger_under_out_is_refused_before_a_browser_open
 
 
 @pytest.mark.parametrize(
-    "change",
-    [["--duration", "4"], ["--model", "veo-lite"], ["--resolution", "360p"]],
-    ids=["4 s", "veo-lite", "360p"],
+    ("change", "says"),
+    [
+        (["--model", "veo-lite"], "end_frame runs on omni-1.2-flash only"),
+        (["--duration", "12"], "keeps an end frame only up to 10s"),
+    ],
+    ids=["veo-lite", "12 s"],
 )
-def test_an_end_frame_on_an_unpriced_cell_is_refused_on_the_cli_too(nothing_opens, tmp_path, change):
+def test_an_end_frame_where_flow_drops_it_is_refused_on_the_cli_too(nothing_opens, tmp_path, change, says):
     # Review of plan AQ (findings 3, 4): the end-frame guard lived in the tool function alone, so the CLI reached
     # gflow with a cell nobody paid for, and the tool's guard read no resolution.
     frame, end = _files(tmp_path, "a.png", "b.png")
@@ -106,7 +109,7 @@ def test_an_end_frame_on_an_unpriced_cell_is_refused_on_the_cli_too(nothing_open
     )
 
     assert result.exit_code == 1, result.output
-    assert "end_frame is measured only" in result.output and "Traceback" not in result.output, result.output
+    assert says in result.output and "Traceback" not in result.output, result.output
 
 
 def test_an_out_folder_outside_out_is_refused_before_a_browser_opens(nothing_opens, tmp_path):

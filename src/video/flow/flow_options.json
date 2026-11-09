@@ -1,106 +1,94 @@
 {
- "measured": "2026-10-22",
- "source": "a $0 walk of flow.google.com's composer settings: every option clicked, the live price line read, Start never clicked",
- "video": {
-  "modes": [
-   "Frames",
-   "Ingredients"
-  ],
-  "aspects": [
-   "16:9",
-   "9:16"
-  ],
-  "counts": [
-   1,
-   2,
-   3,
-   4
-  ],
-  "models": {
-   "omni-flash": {
-    "label": "Omni 1.1 Flash",
-    "resolutions": [
-     "360p",
-     "720p"
+  "measured": "2026-11-09",
+  "source": "a $0 walk of flow.google.com's composer settings: every option clicked, the live price line read, Start never clicked",
+  "video": {
+    "modes": [
+      "Frames",
+      "Ingredients"
     ],
-    "durations": [
-     4,
-     6,
-     8,
-     10
+    "aspects": [
+      "16:9",
+      "9:16"
     ],
-    "price_x1": {
-     "360p 4s": 4,
-     "360p 6s": 5,
-     "360p 8s": 6,
-     "360p 10s": 7,
-     "720p 4s": 7,
-     "720p 6s": 10,
-     "720p 8s": 12,
-     "720p 10s": 15
-    },
-    "modes": [
-     "Frames",
-     "Ingredients"
-    ]
-   },
-   "veo-lite": {
-    "label": "Veo 3.1 - Lite",
-    "resolutions": [],
-    "durations": [],
-    "price_x1": {
-     "": 10
-    },
-    "modes": [
-     "Frames",
-     "Ingredients"
-    ]
-   },
-   "veo-fast": {
-    "label": "Veo 3.1 - Fast",
-    "resolutions": [],
-    "durations": [],
-    "price_x1": {
-     "": 20
-    },
-    "modes": [
-     "Frames",
-     "Ingredients"
-    ]
-   },
-   "veo-quality": {
-    "label": "Veo 3.1 - Quality",
-    "resolutions": [],
-    "durations": [],
-    "price_x1": {
-     "": 100
-    },
-    "modes": [
-     "Frames",
-     "Ingredients"
-    ]
-   }
+    "counts": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "models": {
+      "omni-1.2-flash": {
+        "label": "Omni 1.2 Flash",
+        "resolutions": [
+          "360p",
+          "720p"
+        ],
+        "durations": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "price_x1": {
+          "360p 3s": 3,
+          "360p 4s": 4,
+          "360p 5s": 5,
+          "360p 6s": 6,
+          "360p 7s": 7,
+          "360p 8s": 8,
+          "360p 9s": 9,
+          "360p 10s": 10,
+          "720p 3s": 9,
+          "720p 4s": 12,
+          "720p 5s": 15,
+          "720p 6s": 18,
+          "720p 7s": 21,
+          "720p 8s": 24,
+          "720p 9s": 27,
+          "720p 10s": 30
+        },
+        "modes": [
+          "Frames",
+          "Ingredients"
+        ]
+      },
+      "veo-lite": {
+        "label": "Veo 3.1 - Lite",
+        "resolutions": [],
+        "durations": [],
+        "price_x1": {
+          "": 10
+        },
+        "modes": [
+          "Frames",
+          "Ingredients"
+        ]
+      }
+    }
+  },
+  "image": {
+    "models": [
+      "Nano Banana Pro",
+      "Nano Banana 2 Lite",
+      "Nano Banana 2.1"
+    ],
+    "aspects": [
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "counts": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "price_x1": 0
   }
- },
- "image": {
-  "models": [
-   "Nano Banana Pro",
-   "Nano Banana 2 Lite",
-   "Nano Banana 2.1"
-  ],
-  "aspects": [
-   "16:9",
-   "4:3",
-   "1:1",
-   "3:4",
-   "9:16"
-  ],
-  "counts": [
-   1,
-   2,
-   3,
-   4
-  ],
-  "price_x1": 0
- }
 }

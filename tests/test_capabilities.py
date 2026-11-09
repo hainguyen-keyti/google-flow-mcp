@@ -110,14 +110,15 @@ def test_the_answer_follows_its_sources(monkeypatch):
     monkeypatch.setitem(video_mod.VIDEO, "counts", [1, 2])
     monkeypatch.setitem(video_mod.VIDEO, "aspects", ["1:1"])
     monkeypatch.setitem(video_mod.FIXED, "duration", 9)
-    monkeypatch.setitem(ingredients.VOICE_CAPS, "veo-fast", 2)
+    monkeypatch.setitem(ingredients.VOICE_CAPS, "veo-lite", 2)
     monkeypatch.setattr(capabilities, "reference_cap_for", lambda model: 9)
     monkeypatch.setitem(clips.MEASURED_PRICE, "edit", 40)
     monkeypatch.setitem(clips.MEASURED_PRICE, "extend", 11)
     monkeypatch.setitem(clips.MEASURED_PRICE, "agent", 3)
     monkeypatch.setitem(clips._WHY, "agent", "another caveat")
-    monkeypatch.setitem(ingredients.PRICES, "omni-flash", 13)
-    monkeypatch.setitem(ingredients.LONGER_PRICES, ("omni-flash", 10), 16)
+    monkeypatch.setitem(ingredients._MODELS["omni-1.2-flash"]["price_x1"], "720p 8s", 13)
+    monkeypatch.setitem(ingredients._MODELS["omni-1.2-flash"]["price_x1"], "720p 10s", 16)
+    monkeypatch.setitem(ingredients.LENGTHS, "omni-1.2-flash", (8, 10))
     monkeypatch.setitem(ingredients.LENGTHS, "veo-lite", (8, 10))
     monkeypatch.setitem(video_mod.OPTIONS, "measured", "2027-01-01")
     monkeypatch.setattr(ingredients, "CAPS_MEASURED", "2027-01-02")
@@ -137,13 +138,13 @@ def test_the_answer_follows_its_sources(monkeypatch):
     assert video["models"]["veo-lite"]["credits_x1"][0]["credits"] == 11
     assert (video["counts"], video["aspects"]) == ([1, 2], ["1:1"])
     assert video["models"]["veo-lite"]["seconds"] == [9]
-    assert video["models"]["veo-fast"]["voice_ingredients"] == 2
+    assert video["models"]["veo-lite"]["voice_ingredients"] == 2
     assert {said["image_ingredients"] for said in video["models"].values()} == {9}
     assert (video["measured"], video["caps_measured"]) == ("2027-01-01", "2027-01-02")
     assert answer["editor"]["credits"] == {"clip_extend": 11, "clip_edit": 40, "agent_send": 3}
     assert answer["editor"]["notes"]["agent_send"] == "another caveat"
     character = answer["character_video"]["models"]
-    assert character["omni-flash"]["credits_x1"] == [
+    assert character["omni-1.2-flash"]["credits_x1"] == [
         {"seconds": 8, "credits": 13},
         {"seconds": 10, "credits": 16},
     ]
