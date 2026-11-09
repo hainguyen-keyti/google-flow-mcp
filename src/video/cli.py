@@ -118,7 +118,8 @@ def _read(profile: str, fn):
         if reason is None:
             raise
         raise click.ClickException(
-            f"Flow could not be reached ({reason.group()}): check the network, then run it again; nothing was read"
+            f"Flow could not be reached ({reason.group()}): check the network; if this command changes something, "
+            "read flow_projects or flow_media before running it again, since the change may have gone through"
         ) from None
 
 

@@ -3126,3 +3126,94 @@ def test_a_bill_at_the_cells_price_raises_no_notice_and_another_does():
     said = clips.price_notice("edit", 30, expected=24)
     assert said and said["measured"] == 24 and said["moved"] == 30
     assert clips.price_notice("extend", 9, expected=None) is None
+
+
+def test_an_edit_is_judged_against_the_source_as_listed_before_the_click(monkeypatch, tmp_path):
+    """Review of plan AW, N1: the new version shares the source's media id, so the cell must come from the listing read
+    before the click; read after it, a version listed first (here a 360p 4 s key) set the price instead of the source."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=276)
+    snapshot = clips._snapshot
+
+    async def with_a_version_first(session, project_id):
+        rows, scenes = await snapshot(session, project_id)
+        if any(row["id"] == "m-9" for row in rows):
+            version = {"workflow_id": "wf-v", "id": "src", "status": 3, "kind": "video", "created": 2}
+            version["model"] = "macaron_cookie_t2v_4s_360p"
+            rows = [version, *rows]
+        return rows, scenes
+
+    monkeypatch.setattr(clips, "_snapshot", with_a_version_first)
+
+    answer = _run_editor_job(tmp_path)
+
+    assert "balance_moved" not in answer, answer
+
+
+def test_save_frame_does_not_wait_for_an_upload_when_flow_never_started_the_save(monkeypatch):
+    """Review of plan AW, N3: with no 'Saving frame' notice nothing is on its way, so there is nothing to wait for."""
+    page = _SaveFramePage(notice=None)
+    page.upload_after_ms = None
+    session = _SaveFrameSession(page)
+    old = {"media": [{"id": "m1", "kind": "video", "title": "Red paper boat glides"}]}
+    monkeypatch.setattr(clips.reader, "project", _listings([old]))
+    monkeypatch.setattr(clips, "INDEX_STEP_S", 0.01)
+    monkeypatch.setattr(clips, "INDEX_WAIT_S", 0.02)
+
+    with pytest.raises(RuntimeError, match="never started the save"):
+        asyncio.run(clips.save_frame(session, "P", "m1"))
+    assert page.waited_ms < clips.UPLOAD_WAIT_S * 1000, page.waited_ms
+
+
+def test_save_frame_gives_up_waiting_for_an_upload_at_its_bound(monkeypatch):
+    page = _SaveFramePage()
+    page.upload_after_ms = None
+    session = _SaveFrameSession(page)
+    old = {"media": [{"id": "m1", "kind": "video", "title": "Red paper boat glides"}]}
+    monkeypatch.setattr(clips.reader, "project", _listings([old]))
+    monkeypatch.setattr(clips, "INDEX_STEP_S", 0.01)
+    monkeypatch.setattr(clips, "INDEX_WAIT_S", 0.02)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(clips.save_frame(session, "P", "m1"))
+    assert clips.UPLOAD_WAIT_S * 1000 <= page.waited_ms <= clips.UPLOAD_WAIT_S * 1000 + 30_000, page.waited_ms
+
+
+def test_save_frame_waits_for_the_frames_own_upload_not_any_reply(monkeypatch):
+    """Review of plan AW, M3: a listener that took any reply for the upload let the listing read leave too soon."""
+    page = _SaveFramePage()
+    page.upload_after_ms = 20_000
+    session = _SaveFrameSession(page)
+    other = type("R", (), {"url": "https://flow.google.com/_/x/data/batchexecute?rpcids=Zzl0ze&f=1"})()
+    clicked = page.get_by_role("button")
+
+    class _Button:
+        first = property(lambda self: self)
+
+        async def count(self):
+            return 1
+
+        async def click(self, timeout=None):
+            await clicked.click()
+            for handler in list(page.handlers):
+                handler(other)
+
+    page.get_by_role = lambda role, name=None: _Button()
+    old = {"media": [{"id": "m1", "kind": "video", "title": "Red paper boat glides"}]}
+    new = {
+        "media": [
+            *old["media"],
+            {"id": "f", "kind": "image", "title": "Saved frame from Red paper boat glides"},
+        ]
+    }
+    answers = [old, new]
+
+    async def project(session_, project_id, settle=10.0, *, versions=False):
+        page.log.append("listing read" if page.clicked else "listing before click")
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
+    monkeypatch.setattr(clips.reader, "project", project)
+    monkeypatch.setattr(clips, "INDEX_STEP_S", 0.01)
+
+    asyncio.run(clips.save_frame(session, "P", "m1"))
+
+    assert page.log.index("upload answered") < page.log.index("listing read"), page.log

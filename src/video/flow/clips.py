@@ -423,6 +423,8 @@ async def _generate_from_editor(
     if ledger.has_submitted(job_id):
         raise gen.AlreadySubmitted(f"job {job_id} already has a submitted row; use a new job id")
     rows, scenes_before = await _snapshot(session, project_id)
+    # The source as listed before the click: its new version shares its media id (review of plan AW, N1).
+    source_rows = list(rows)
     before = {r["workflow_id"] for r in rows}
     credits_before = (await reader.credits(session))["balance"]
 
@@ -535,7 +537,7 @@ async def _generate_from_editor(
     )
     spent = credits_before - credits_after
     surprise = price_notice(
-        kind, spent, bool(generated), expected=editor_expected_price(kind, rows, media_id)
+        kind, spent, bool(generated), expected=editor_expected_price(kind, source_rows, media_id)
     )
     said = {"balance_moved": surprise} if surprise else {}
     ledger.append(
@@ -921,7 +923,8 @@ async def save_frame(session: FlowSession, project_id: str, media_id: str) -> di
         # Measured 2026-11-09 on clip 914d55ec: reading the listing navigates away from the editor, and done at once it
         # left while the frame's upload was still on its way, so the image never came (rule 9, on a free action).
         waited = 0.0
-        while not uploaded and waited < UPLOAD_WAIT_S:
+        # No "Saving frame" notice means nothing is on its way (review of plan AW, N3).
+        while started and not uploaded and waited < UPLOAD_WAIT_S:
             await page.wait_for_timeout(UPLOAD_STEP_S * 1000)
             waited += UPLOAD_STEP_S
     finally:

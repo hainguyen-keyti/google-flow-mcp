@@ -1375,3 +1375,39 @@ def test_a_key_error_in_a_read_keeps_its_traceback(monkeypatch):
     result = CliRunner().invoke(cli.main, ["flow", "uploads", "P"])
 
     assert isinstance(result.exception, KeyError), result.output
+
+
+def test_a_playwright_error_that_is_not_the_network_keeps_its_traceback(monkeypatch):
+    """Review of plan AW, M15: only an unreachable Flow becomes the one-line exit."""
+    from click.testing import CliRunner
+    from playwright.async_api import Error as PlaywrightError
+
+    from video import cli
+
+    def broken(profile, fn):
+        raise PlaywrightError("Locator.click: Element is not attached to the DOM")
+
+    monkeypatch.setattr(cli, "_session_read", broken)
+
+    result = CliRunner().invoke(cli.main, ["flow", "uploads", "P"])
+
+    assert isinstance(result.exception, PlaywrightError), result.output
+
+
+def test_a_network_error_never_claims_a_change_did_not_happen(monkeypatch):
+    """Review of plan AW, N4: the same exit serves writes (project create, delete, upload), where 'nothing was read'
+    invites a second create; it says to look before running it again."""
+    from click.testing import CliRunner
+    from playwright.async_api import Error as PlaywrightError
+
+    from video import cli
+
+    def down(profile, fn):
+        raise PlaywrightError("Page.goto: net::ERR_INTERNET_DISCONNECTED at https://flow.google.com/")
+
+    monkeypatch.setattr(cli, "_session_read", down)
+
+    result = CliRunner().invoke(cli.main, ["flow", "uploads", "P"])
+
+    assert result.exit_code == 1 and "nothing was read" not in result.output, result.output
+    assert "before running it again" in result.output, result.output
