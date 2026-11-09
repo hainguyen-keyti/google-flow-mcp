@@ -1705,8 +1705,110 @@ class _RadioPage:
         self.clock += ms
 
     def locator(self, selector):
+        if selector == ingredients.SLIDER:
+            return _NoSlider()
         assert selector == ingredients.RADIO
         return _Radios(self)
+
+
+class _NoSlider:
+    async def count(self):
+        return 0
+
+
+class _Slider:
+    """Omni 1.2 Flash's Length slider as measured on 2026-11-09 (out/flow-1109/slider_probe.json): an input of type
+    range, values 0-7 for 3-10 s on this account, moved by Home and ArrowRight, its label reading the seconds."""
+
+    def __init__(self, page):
+        self.page = page
+
+    async def count(self):
+        return self.page.sliders
+
+    async def get_attribute(self, name):
+        return {"min": "0", "max": str(self.page.top), "step": "1"}[name]
+
+    async def press(self, key):
+        self.page.keys.append(key)
+        if key == "Home":
+            self.page.value = 0
+        elif (
+            key == "ArrowRight" and self.page.value < self.page.top and len(self.page.keys) <= self.page.moves
+        ):
+            self.page.value += 1
+
+    async def input_value(self):
+        return str(self.page.value)
+
+    async def inner_text(self):
+        return f"{self.page.value + 3 + self.page.label_off} Sec"
+
+    @property
+    def first(self):
+        return self
+
+
+class _SliderPage:
+    def __init__(self, *, sliders=1, top=7, start=7, moves=99, label_off=0):
+        self.sliders, self.top, self.value, self.moves, self.label_off = sliders, top, start, moves, label_off
+        self.keys = []
+        self.clock = 0
+        self.keyboard = _Keyboard()
+
+    async def wait_for_timeout(self, ms):
+        self.clock += ms
+
+    def locator(self, selector):
+        assert selector in (ingredients.SLIDER, ingredients.SLIDER_LABEL, ingredients.RADIO), selector
+        if selector == ingredients.RADIO:
+            return _UnreadRadios()
+        return _Slider(self)
+
+
+class _UnreadRadios:
+    """A pane with a Length slider has no length radio: one read here means the slider was passed over."""
+
+    def filter(self, has_text):
+        return self
+
+    async def count(self):
+        raise AssertionError("a pane with a Length slider was searched for a length radio")
+
+
+@pytest.mark.parametrize("seconds", [3, 4, 8, 10])
+def test_pin_duration_sets_the_length_slider_and_reads_it_back(no_settings_pane, seconds):
+    """I2 of plan AV: Omni 1.2 Flash has a Length slider, no radios; the length that is billed is the one asked."""
+    page = _SliderPage(start=7)
+    assert asyncio.run(ingredients.pin_duration(page, seconds)) == "pinned"
+    assert page.keys == ["Home", *["ArrowRight"] * (seconds - 3)]
+    assert page.value == seconds - 3
+    assert page.keyboard.pressed[-1] == "Escape"
+
+
+@pytest.mark.parametrize(
+    ("page", "seconds", "says"),
+    [
+        (_SliderPage(moves=3), 8, "did not stay at 8 s"),
+        (_SliderPage(label_off=1), 5, "did not stay at 5 s"),
+        (_SliderPage(), 11, "offers 3-10 s"),
+        (_SliderPage(), 2, "offers 3-10 s"),
+        (_SliderPage(sliders=2), 8, "2 Length sliders"),
+    ],
+    ids=[
+        "a slider that stopped short",
+        "a label that disagrees",
+        "past the end",
+        "before the start",
+        "two sliders",
+    ],
+)
+def test_pin_duration_refuses_a_slider_that_does_not_show_the_length_asked(
+    no_settings_pane, page, seconds, says
+):
+    with pytest.raises(LookupError, match=says):
+        asyncio.run(ingredients.pin_duration(page, seconds))
+    assert page.keyboard.pressed[-1] == "Escape"
 
 
 @pytest.fixture
@@ -4249,6 +4351,8 @@ class _PickyRadioPage(_RadioPage):
         self.asked = []
 
     def locator(self, selector):
+        if selector == ingredients.SLIDER:
+            return _NoSlider()
         assert selector == ingredients.RADIO
         return _PickyRadios(self)
 
@@ -4393,6 +4497,45 @@ def test_ten_seconds_asked_for_and_no_length_control_found_is_refused_before_the
 
     with pytest.raises(LookupError, match="10s"):
         asyncio.run(captured["setup"](type("Session", (), {"page": _GeneratePage(log)})()))
+
+
+@pytest.mark.parametrize("model", ["omni-1.2-flash"])
+def test_the_default_length_on_a_model_with_a_length_control_is_refused_when_it_cannot_be_set(
+    monkeypatch, tmp_path, model
+):
+    """I2 of plan AV: Omni 1.2 bills by the second, so an 8 s run whose Length slider was not set would be billed at
+    whatever length the composer remembered. Only a model with no length control at all runs on its fixed 8 s."""
+    log = []
+    captured, _ = _ten_second_setup_world(monkeypatch, log, pinned="absent")
+
+    asyncio.run(
+        ingredients.generate(
+            object(), "p-1", prompt=PROMPT, characters=[ENTITY], model=model, job_id="job-8", out_dir=tmp_path
+        )
+    )
+
+    with pytest.raises(LookupError, match="8s"):
+        asyncio.run(captured["setup"](type("Session", (), {"page": _GeneratePage(log)})()))
+
+
+def test_veo_lite_with_no_length_control_still_runs_its_fixed_eight_seconds(monkeypatch, tmp_path):
+    log = []
+    captured, _ = _ten_second_setup_world(monkeypatch, log, pinned="absent")
+
+    asyncio.run(
+        ingredients.generate(
+            object(),
+            "p-1",
+            prompt=PROMPT,
+            characters=[ENTITY],
+            model="veo-lite",
+            job_id="job-8",
+            out_dir=tmp_path,
+        )
+    )
+
+    extra = asyncio.run(captured["setup"](type("Session", (), {"page": _GeneratePage(log)})()))
+    assert extra["duration_row"] == "absent" and extra["seconds"] == 8
 
 
 def test_an_unmeasured_length_is_still_quoted_by_a_dry_run(monkeypatch, tmp_path):

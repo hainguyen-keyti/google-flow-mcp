@@ -837,13 +837,47 @@ async def apply_settings(page: Any, model: str, aspect: str, references: list[Re
         await settings.apply_video_settings(page, request)
 
 
+# Omni 1.2 Flash's Length control (measured 2026-11-09, out/flow-1109/slider_probe.json; gflow 0.96.1 reads the same
+# component): an input of type range whose value 0 is 3 s, one step a second, up to 7 (10 s) on this Pro account.
+SLIDER = ".cdk-overlay-pane flow-duration-slider input[type=range]"
+SLIDER_LABEL = ".cdk-overlay-pane flow-duration-slider .duration-slider-value"
+SLIDER_FIRST_SECOND = 3
+
+
+async def _pin_slider(page: Any, seconds: int) -> str:
+    slider = page.locator(SLIDER)
+    found = await slider.count()
+    if found != 1:
+        raise LookupError(f"{found} Length sliders in the settings pane; not guessing")
+    low = int(await slider.get_attribute("min")) + SLIDER_FIRST_SECOND
+    high = int(await slider.get_attribute("max")) + SLIDER_FIRST_SECOND
+    if not low <= seconds <= high:
+        raise LookupError(f"the Length slider offers {low}-{high} s here, not {seconds} s")
+    await slider.press("Home")
+    for _ in range(seconds - low):
+        await slider.press("ArrowRight")
+    await page.wait_for_timeout(600)
+    value = await slider.input_value()
+    label = await page.locator(SLIDER_LABEL).first.inner_text()
+    shown = re.search(r"\d+", label or "")
+    if value != str(seconds - low) or shown is None or int(shown.group()) != seconds:
+        raise LookupError(f"the Length slider did not stay at {seconds} s: value {value}, label {label!r}")
+    return "pinned"
+
+
 async def pin_duration(page: Any, seconds: int = SECONDS) -> str:
-    """Check the radio for `seconds` once it renders; a model whose pane shows no duration row answers 'absent'."""
+    """Set the length once its control renders: Omni 1.2's slider, read back, or the radio for `seconds`; a model
+    whose pane shows neither answers 'absent'."""
     await composer._open_settings(page, "duration")
     try:
+        slider = page.locator(SLIDER)
         radio = page.locator(RADIO).filter(has_text=re.compile(rf"^\s*{seconds}s\s*$"))
         waited = 0
-        while await radio.count() == 0 and waited < RADIO_WAIT_MS:
+        while waited < RADIO_WAIT_MS:
+            if await slider.count():
+                return await _pin_slider(page, seconds)
+            if await radio.count():
+                break
             await page.wait_for_timeout(500)
             waited += 500
         count = await radio.count()
@@ -1067,7 +1101,8 @@ async def generate(
         duration_row = await pin_duration(page, duration)
         # Shown no length control, a longer run would go out at whatever length the composer remembers (review of
         # plan U, F3); the default keeps its old behaviour, where the price line tells the lengths apart.
-        if duration_row != "pinned" and duration != SECONDS:
+        # A model the table gives several lengths (Omni 1.2, billed by the second) is refused at 8 s too.
+        if duration_row != "pinned" and (duration != SECONDS or len(LENGTHS.get(model, ())) > 1):
             raise LookupError(
                 f"asked for {duration}s but the composer shows no {duration}s length to pin; refusing"
             )
