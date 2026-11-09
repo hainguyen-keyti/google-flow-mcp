@@ -4861,3 +4861,19 @@ def test_an_end_frame_past_ten_seconds_is_refused_by_the_composer_tools_too(monk
     text = _texts([result])[0]
     assert result.is_error and "end frame" in text and "10 s" in text, text
     assert reached == []
+
+
+def test_an_end_frame_at_exactly_ten_seconds_still_runs():
+    """Scoped re-review of plan AV: 10 s is the longest Omni 1.2 clip that keeps its end frame, so it is taken."""
+    mcp_server._video_request(
+        model="omni-1.2-flash",
+        aspect="9:16",
+        resolution="720p",
+        duration=10,
+        count=1,
+        start_frame="M1",
+        end_frame="M2",
+        characters=None,
+        media_ids=None,
+        voices=None,
+    )
