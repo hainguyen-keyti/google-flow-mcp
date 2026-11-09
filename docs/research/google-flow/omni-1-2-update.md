@@ -52,8 +52,14 @@ in-app changelog, read 2026-11-09), **Google** (Google's blog or help pages) or 
 - Every generation cost exactly its table cell: Frames, start and end frame, Ingredients with an image, with a voice,
   `job_submit`, the gflow tools, Veo Lite.
 - **Edit** of an Omni 1.2 360p 4 s clip: 4 credits (the clip's own cell).
-- **Extend** of the same clip: 4 credits, and it came back as a **new version of the clip holding the whole of it**
-  (an 8.0 s file by ffprobe), not a new scene as Veo Extend made.
+- **Extend**: the extend panel shows no model picker, and the new version's record names
+  `models/omni_1p5_pro_flow`, a model the composer's picker does not offer. Two extends, 4 credits each, both came
+  back as a new version of the clip (not a new scene as Veo Extend made), but differed:
+  - On a 360p 4 s source: an 8.0 s file.
+  - On a 360p 3 s source (plan AW): a 4.0 s file that does not begin at the source's last frame. The composition
+    jumps; frames compared and looked at in `out/aw/compare.png`.
+
+  Treat an extension as a new shot to check, not a seamless continuation.
 - **Characters:** the editor's trash button reads "Move to trash", opens no dialog and returns to the project; the
   listing keeps the entry with `true` at `Zzl0ze[5][*][3][4]`.
 
@@ -123,9 +129,10 @@ Sources: Google's blog post and DeepMind page (via the research of 2026-11-09), 
    keeper at 720p, or upscale it.
    - For a flaw in one detail, use an edit rather than a fresh generation: an edit costs the same as generating
      and keeps the rest of the clip.
-8. **Extend instead of long generations.** Extend continues from the last frame, is billed like a generation of the
-   added seconds, returns the whole clip as a new version, and takes the same image, character and voice references.
-   Pass them again on every extension so the identity carries.
+8. **Extend with care.** Extend costs 4 credits at 360p, but on build YyfdEJNu4Zk it ran on Flow's own extend model
+   and once returned a 4 s clip that did not continue the source's last frame. Until the owner has judged extends
+   (rule 14), a long shot is safer as separate clips chained by start frames (`clip_save_frame` of the last frame,
+   then `gen_video` with it as `start_frame`).
 
 Quality claims above are Google's until the owner has watched Omni 1.2 clips side by side with Omni 1.1 and Veo
 Lite (rule 14).
