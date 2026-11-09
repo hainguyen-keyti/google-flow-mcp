@@ -4835,3 +4835,29 @@ def test_what_the_table_marks_unmeasured_is_what_the_tool_calls_unmeasured():
         assert (unmeasured in said) == (name in capabilities.CHARACTER_UNMEASURED), name
     assert "each part with the date" not in tools["flow_capabilities"].description
     assert "measured false" in tools["flow_capabilities"].description
+
+
+@pytest.mark.parametrize("tool", ["gen_video", "job_submit"])
+def test_an_end_frame_past_ten_seconds_is_refused_by_the_composer_tools_too(monkeypatch, tmp_path, tool):
+    """Review of plan AV, B1: past 10 s Flow drops the end frame and still bills (gflow 0.96.1, #1178); the gflow tool
+    refused it, while gen_video and job_submit set the slider, saw the price line agree and clicked."""
+    reached = _video_world(monkeypatch, tmp_path, [_submitted(), STARTED], answer=STARTED_ANSWER)
+    arguments = {
+        "prompt": "a boat",
+        "project": "P",
+        "job_id": "job-end-12",
+        "max_credits": 60,
+        "model": "omni-1.2-flash",
+        "resolution": "720p",
+        "duration": 12,
+        "start_frame": "M1",
+        "end_frame": "M2",
+    }
+
+    async def fn(session):
+        return await session.call_tool(tool, arguments)
+
+    result = with_client(fn)
+    text = _texts([result])[0]
+    assert result.is_error and "end frame" in text and "10 s" in text, text
+    assert reached == []

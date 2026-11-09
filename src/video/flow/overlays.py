@@ -106,6 +106,9 @@ async def watch_cookie_notice(page: Any, notices: list[str], unpressed: list[str
 # Measured 2026-11-09 on harleychina0 (out/av/banner.json): the banner's "Opt in" opens a dialog "Keep your oldest
 # creations in Flow" (Cancel, Opt in), and its Opt in answers "You're opted-in!"; the banner is gone on reload.
 EXPIRY = "text=/oldest creations will expire soon/i"
+# The banner itself: the nearest element around the expiry words that holds a button, so the first Opt in pressed is
+# the banner's own and never another button of that name elsewhere on the page (review of plan AV, N4).
+BANNER = "xpath=ancestor::*[.//button][1]"
 OPTED = "text=/opted-in/i"
 KEEP_DIALOG = "[role=dialog], [role=alertdialog]"
 OPT_IN = re.compile(r"^\s*Opt in\s*$", re.IGNORECASE)
@@ -137,7 +140,7 @@ async def keep_oldest_creations(page: Any, notices: list[str], unpressed: list[s
     try:
         if not await page.locator(EXPIRY).count():
             return False
-        offer = page.get_by_role("button", name=OPT_IN)
+        offer = page.locator(EXPIRY).first.locator(BANNER).get_by_role("button", name=OPT_IN)
         if (found := await offer.count()) != 1:
             return left(f"Flow's expiry banner shows {found} Opt in buttons, not one; nothing was clicked")
         await offer.first.click(timeout=PRESS_MS)

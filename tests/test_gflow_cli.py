@@ -167,3 +167,13 @@ def test_the_wrapper_applies_it_before_gflow_runs(monkeypatch):
     gflow_cli.run(["python", "image", "i2i", "a prompt"])
 
     assert applied == ["bodies", "nano2", "gen_null", "main"]
+
+
+def test_a_body_whose_model_fields_cannot_be_read_is_refused_here_not_handed_to_gflow(patched):
+    """Review of plan AV, M13: gflow 0.96.1 passes a Nano Banana image on BELUGA anywhere in the body, so a body whose
+    model fields this check cannot read is refused by this check itself, naming that it read none."""
+    body = 'f.req=[["ogiZ0b","[\\\\"BELUGA\\\\"]"]]'
+
+    said = patched(body, (), ImageModel.NARWHAL)
+
+    assert said and "none readable" in said, said

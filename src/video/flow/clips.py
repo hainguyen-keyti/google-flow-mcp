@@ -432,14 +432,22 @@ async def _generate_from_editor(
         await item.click(timeout=8_000)
         await page.wait_for_timeout(1_500)
     # An edit needs the picker read back on Omni 1.2: without one it could run on the model Flow is retiring.
-    if await _pin_editor_model(page) != "pinned" and kind == "edit":
+    editor_model = await _pin_editor_model(page)
+    if editor_model != "pinned" and kind == "edit":
         raise LookupError(f"the editor shows no model picker to set {EDITOR_MODEL!r}; nothing was submitted")
     box = page.locator(f"{EDITOR} [contenteditable='true']").first
     start = page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
     if not await _prompt_ready(page, box, start, prompt):
         raise RuntimeError(f"{kind}: the prompt never reached the editor box, nothing was submitted")
+    # An extend runs without a picker when Flow shows none: the row says so (review of plan AV, N1).
     ledger.append(
-        job_id, "submitted", kind=kind, source_media_id=media_id, prompt=prompt, credits_before=credits_before
+        job_id,
+        "submitted",
+        kind=kind,
+        source_media_id=media_id,
+        prompt=prompt,
+        credits_before=credits_before,
+        editor_model=EDITOR_MODEL if editor_model == "pinned" else editor_model,
     )
     # Exactly one click, ever. A second click lands in the plain edit box once the editor re-renders and
     # submits a differently priced job on top (measured 2026-09-13: an extra Omni edit, 20 credits).

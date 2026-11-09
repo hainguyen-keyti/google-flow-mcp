@@ -335,7 +335,7 @@ class _ExpiryPage:
         return _ExpiryLocator(self, selector)
 
     def get_by_role(self, role, name=None):
-        return _ExpiryLocator(self, "banner Opt in")
+        raise AssertionError("an Opt in button looked for on the whole page, not inside the banner")
 
 
 class _ExpiryLocator:
@@ -349,8 +349,12 @@ class _ExpiryLocator:
     def filter(self, has_text=None):
         return self
 
+    def locator(self, selector):
+        assert self.what == overlays.EXPIRY and selector == overlays.BANNER, (self.what, selector)
+        return _ExpiryLocator(self.page, "banner")
+
     def get_by_role(self, role, name=None):
-        return _ExpiryLocator(self.page, "dialog Opt in")
+        return _ExpiryLocator(self.page, "banner Opt in" if self.what == "banner" else "dialog Opt in")
 
     async def count(self):
         page = self.page

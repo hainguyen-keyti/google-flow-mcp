@@ -2854,7 +2854,7 @@ class _PickerButton:
         return self
 
     async def count(self):
-        return self.page.pickers
+        return self.page.pickers_matched
 
     async def inner_text(self):
         return f"{self.page.model}\narrow_drop_down"
@@ -2900,9 +2900,26 @@ class _PickerPage:
 
     def locator(self, selector):
         if selector == f"{clips.EDITOR} button":
-            return type("Buttons", (), {"filter": lambda _self, has_text: _PickerButton(self)})()
+            return _EditorButtons(self)
         assert selector == "[role=menuitem], [role=option]", selector
         return _ModelItems(self)
+
+
+class _EditorButtons:
+    """The editor's buttons as their text reads (out/av/probe.json, 2026-11-09): the picker reads
+    "Omni 1.1 Flash\narrow_drop_down", beside buttons the picker regex must not take."""
+
+    DECOYS = ("Done", "arrow_back", "history Hide history", "add")
+
+    def __init__(self, page):
+        self.page = page
+
+    def filter(self, has_text):
+        picker = has_text.search(f"{self.page.model}\narrow_drop_down") is not None
+        decoys = sum(1 for text in self.DECOYS if has_text.search(text))
+        page = self.page
+        page.pickers_matched = (page.pickers if picker else 0) + decoys
+        return _PickerButton(page)
 
 
 def test_the_editor_model_is_set_to_omni_1_2_and_read_back():
@@ -2985,3 +3002,30 @@ def test_every_editor_job_pins_the_model_before_its_prompt(monkeypatch, tmp_path
                 )
             )
         assert order == ["pin", "prompt"], (kind, order)
+
+
+@pytest.mark.parametrize(("pinned", "said"), [("pinned", "Omni 1.2 Flash"), ("absent", "absent")])
+def test_the_submitted_row_says_which_model_the_editor_ran_on(monkeypatch, tmp_path, pinned, said):
+    """Review of plan AV, N1: an extend goes on when the editor shows no picker, so its row says so."""
+
+    async def pin(page):
+        return pinned
+
+    monkeypatch.setattr(clips, "_pin_editor_model", pin)
+    _spending_but_barren(monkeypatch, tmp_path, _SaidFailed)
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            clips._generate_from_editor(
+                _ListeningSession(),
+                "p",
+                "src",
+                "go on",
+                kind="extend",
+                out_dir=tmp_path,
+                job_id="j-row",
+                wait=5.0,
+            )
+        )
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j-row")
+    submitted = [row for row in rows if row["status"] == "submitted"]
+    assert len(submitted) == 1 and submitted[0]["editor_model"] == said, rows

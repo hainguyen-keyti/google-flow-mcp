@@ -1359,6 +1359,12 @@ def _video_request(
     if any(not value or not value.strip() for value in wanted):
         raise ValueError("frame, character, media ids and voice names must not be blank")
     filled_resolution, filled_duration = video_mod.defaults(model, resolution, duration)
+    if end_frame and (filled_duration or 0) > END_FRAME_MAX_SECONDS:
+        raise ValueError(
+            f"an end frame is kept only up to {END_FRAME_MAX_SECONDS} s: at {filled_duration} s Flow drops it and "
+            "still bills a start-only clip (gflow 0.96.1, #1178). Ask for 10 s or less, or leave end_frame out. "
+            "Nothing was run and nothing was spent."
+        )
     video_mod.check_settings(
         model=model, resolution=filled_resolution, duration=filled_duration, count=count, aspect=aspect
     )
