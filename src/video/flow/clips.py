@@ -802,6 +802,10 @@ async def wait_for_new_media(
 
 
 SAVED_FRAME_TITLE = "Saved frame from"
+# The saved frame reaches Flow as an upload (rpc maseQ, measured 2026-09-18) some seconds after the click.
+UPLOAD_RPC = "maseQ"
+UPLOAD_WAIT_S = 60.0
+UPLOAD_STEP_S = 0.5
 NOTICE_WAIT_S = 10.0
 NOTICE_STEP_S = 0.5
 # Measured 2026-09-18: a click Flow accepts raises this notice at once. Both live runs that ended with no image
@@ -877,8 +881,24 @@ async def save_frame(session: FlowSession, project_id: str, media_id: str) -> di
         raise LookupError(
             f"the editor of {media_id} offers no 'Save frame' control; open flow_media and check the clip exists"
         )
-    await button.click(timeout=10_000)
-    started = await _save_started(page)
+    uploaded: list[str] = []
+
+    def heard(response: Any) -> None:
+        if UPLOAD_RPC in str(getattr(response, "url", "")):
+            uploaded.append(response.url)
+
+    page.on("response", heard)
+    try:
+        await button.click(timeout=10_000)
+        started = await _save_started(page)
+        # Measured 2026-11-09 on clip 914d55ec: reading the listing navigates away from the editor, and done at once it
+        # left while the frame's upload was still on its way, so the image never came (rule 9, on a free action).
+        waited = 0.0
+        while not uploaded and waited < UPLOAD_WAIT_S:
+            await page.wait_for_timeout(UPLOAD_STEP_S * 1000)
+            waited += UPLOAD_STEP_S
+    finally:
+        page.remove_listener("response", heard)
     try:
         saved = await wait_for_new_media(
             session,

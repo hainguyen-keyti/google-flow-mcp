@@ -1877,9 +1877,31 @@ class _SaveFramePage:
         self.notice = notice
         self.brightness_reads = 0
         self.painted_when_clicked = None
+        # Plan AW, D1: the frame's upload (rpc maseQ) answers some time after the click, and leaving the editor before
+        # then loses it (measured 2026-11-09 on clip 914d55ec).
+        self.upload_after_ms = 0
+        self.uploaded = False
+        self.handlers = []
+        self.log = []
 
     async def wait_for_timeout(self, ms):
         self.waited_ms += ms
+        due = self.upload_after_ms is not None and self.waited_ms >= self.upload_after_ms
+        if self.clicked and not self.uploaded and due:
+            self.uploaded = True
+            self.log.append("upload answered")
+            answer = type(
+                "R", (), {"url": "https://flow.google.com/_/x/data/batchexecute?rpcids=maseQ&f=1"}
+            )()
+            for handler in list(self.handlers):
+                handler(answer)
+
+    def on(self, event, handler):
+        assert event == "response"
+        self.handlers.append(handler)
+
+    def remove_listener(self, event, handler):
+        self.handlers.remove(handler)
 
     async def evaluate(self, script, arg=None):
         if "snack" in script:
@@ -3029,3 +3051,32 @@ def test_the_submitted_row_says_which_model_the_editor_ran_on(monkeypatch, tmp_p
     rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j-row")
     submitted = [row for row in rows if row["status"] == "submitted"]
     assert len(submitted) == 1 and submitted[0]["editor_model"] == said, rows
+
+
+def test_save_frame_stays_on_the_editor_until_the_frames_upload_has_answered(monkeypatch):
+    """Plan AW, D1, measured 2026-11-09 on clip 914d55ec: the listing read is a navigation, and made at once it left the
+    editor while the frame's upload (rpc maseQ) was still on its way, so the image never came; staying 15 s found it."""
+    page = _SaveFramePage()
+    page.upload_after_ms = 20_000
+    session = _SaveFrameSession(page)
+    old = {"media": [{"id": "m1", "kind": "video", "title": "Red paper boat glides"}]}
+    new = {
+        "media": [
+            *old["media"],
+            {"id": "frame-1", "kind": "image", "title": "Saved frame from Red paper boat glides"},
+        ]
+    }
+    answers = [old, new]
+
+    async def project(session_, project_id, settle=10.0, *, versions=False):
+        page.log.append("listing read" if page.clicked else "listing before click")
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
+    monkeypatch.setattr(clips.reader, "project", project)
+    monkeypatch.setattr(clips, "INDEX_STEP_S", 0.01)
+
+    result = asyncio.run(clips.save_frame(session, "P", "m1"))
+
+    assert result["media_id"] == "frame-1"
+    assert page.log.index("upload answered") < page.log.index("listing read"), page.log
+    assert page.handlers == [], "the listener goes once the upload has answered"
