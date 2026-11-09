@@ -11,6 +11,21 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from video import cli, gen
 from video.flow import clips
 
+REAL_PIN_EDITOR_MODEL = clips._pin_editor_model
+
+
+@pytest.fixture(autouse=True)
+def editor_model_pinned(monkeypatch):
+    """The editor fakes below carry no model picker; the pin itself is held by the tests of _pin_editor_model."""
+    pinned = []
+
+    async def pin(page):
+        pinned.append("pinned")
+        return "pinned"
+
+    monkeypatch.setattr(clips, "_pin_editor_model", pin)
+    return pinned
+
 
 class _NoSession:
     """A session that must not be touched: the ledger guard has to fire first (I1)."""
@@ -2825,3 +2840,148 @@ def test_the_menu_is_read_as_the_items_a_person_sees(monkeypatch):
 
     assert asyncio.run(clips._menu_texts(_Page())) == ["270p Animated GIF", "720p Upscaled"]
     assert "menuitem" in selectors[0]
+
+
+# The editor's model picker (plan AV, I4): measured 2026-11-09 on Omni 1.1 clips, it opened on "Omni 1.1 Flash".
+
+
+class _PickerButton:
+    def __init__(self, page):
+        self.page = page
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self):
+        return self.page.pickers
+
+    async def inner_text(self):
+        return f"{self.page.model}\narrow_drop_down"
+
+    async def click(self, timeout=None):
+        self.page.log.append("open picker")
+
+
+class _ModelItems:
+    def __init__(self, page):
+        self.page = page
+
+    def filter(self, has_text):
+        self.wanted = has_text
+        return self
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self):
+        return 1 if self.wanted in self.page.offered else 0
+
+    async def click(self, timeout=None):
+        self.page.log.append(f"pick {self.wanted}")
+        if self.page.sticks:
+            self.page.model = self.wanted
+
+
+class _PickerPage:
+    def __init__(
+        self, *, model="Omni 1.1 Flash", pickers=1, sticks=True, offered=("Omni 1.2 Flash", "Omni 1.1 Flash")
+    ):
+        self.model, self.pickers, self.sticks, self.offered = model, pickers, sticks, offered
+        self.log = []
+        self.keyboard = self
+
+    async def press(self, key):
+        self.log.append(key)
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    def locator(self, selector):
+        if selector == f"{clips.EDITOR} button":
+            return type("Buttons", (), {"filter": lambda _self, has_text: _PickerButton(self)})()
+        assert selector == "[role=menuitem], [role=option]", selector
+        return _ModelItems(self)
+
+
+def test_the_editor_model_is_set_to_omni_1_2_and_read_back():
+    page = _PickerPage()
+    assert asyncio.run(REAL_PIN_EDITOR_MODEL(page)) == "pinned"
+    assert page.log == ["open picker", "pick Omni 1.2 Flash"] and page.model == "Omni 1.2 Flash"
+
+
+def test_an_editor_already_on_omni_1_2_is_left_alone():
+    page = _PickerPage(model="Omni 1.2 Flash")
+    assert asyncio.run(REAL_PIN_EDITOR_MODEL(page)) == "pinned"
+    assert page.log == []
+
+
+@pytest.mark.parametrize(
+    ("page", "says"),
+    [
+        (_PickerPage(sticks=False), "reads 'Omni 1.1 Flash'"),
+        (_PickerPage(offered=("Omni 1.1 Flash",)), "offers no single 'Omni 1.2 Flash'"),
+        (_PickerPage(pickers=2), "2 model pickers"),
+    ],
+    ids=["a pick that does not stay", "no Omni 1.2 offered", "two pickers"],
+)
+def test_an_editor_model_that_cannot_be_set_to_omni_1_2_is_refused(page, says):
+    with pytest.raises(LookupError, match=re.escape(says)):
+        asyncio.run(REAL_PIN_EDITOR_MODEL(page))
+
+
+def test_an_editor_with_no_picker_answers_absent():
+    assert asyncio.run(REAL_PIN_EDITOR_MODEL(_PickerPage(pickers=0))) == "absent"
+
+
+def test_an_edit_with_no_model_picker_is_refused_before_anything_is_submitted(
+    monkeypatch, tmp_path, editor_model_pinned
+):
+    async def absent(page):
+        return "absent"
+
+    monkeypatch.setattr(clips, "_pin_editor_model", absent)
+    _spending_but_barren(monkeypatch, tmp_path, _SaidFailed)
+    session = _ListeningSession()
+
+    with pytest.raises(LookupError, match="no model picker"):
+        asyncio.run(
+            clips._generate_from_editor(
+                session, "p", "src", "dress her", kind="edit", out_dir=tmp_path, job_id="j-absent", wait=20.0
+            )
+        )
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j-absent")
+    assert [row["status"] for row in rows] == ["opening"], rows
+
+
+def test_every_editor_job_pins_the_model_before_its_prompt(monkeypatch, tmp_path, editor_model_pinned):
+    order = []
+
+    async def pin(page):
+        order.append("pin")
+        return "pinned"
+
+    async def prompt_ready(page, box, start, prompt):
+        order.append("prompt")
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(clips, "_pin_editor_model", pin)
+    _spending_but_barren(monkeypatch, tmp_path, _SaidFailed)
+    monkeypatch.setattr(clips, "_prompt_ready", prompt_ready)
+    for kind in ("edit", "extend"):
+        order.clear()
+        with pytest.raises(RuntimeError, match="stop here"):
+            asyncio.run(
+                clips._generate_from_editor(
+                    _ListeningSession(),
+                    "p",
+                    "src",
+                    "go",
+                    kind=kind,
+                    out_dir=tmp_path,
+                    job_id=f"j-{kind}",
+                    wait=5.0,
+                )
+            )
+        assert order == ["pin", "prompt"], (kind, order)

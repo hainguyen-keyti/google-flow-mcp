@@ -1992,10 +1992,10 @@ async def clip_recipe(project_id: str, media_id: str, workflow_id: str | None = 
 @server.tool(
     name="clip_extend",
     description=(
-        "Extend a clip with Veo 3.1 Lite. It spends credits and is ledgered: 10 credits per extend (measured on a "
-        "720p 8 s source and, 2026-10-08, on a 360p 4 s one). "
-        "Flow greys Extend out on some clips (measured: on Omni clips, and on a Veo clip after Omni edits and a 1080p "
-        "upscale); the call is then refused before the click, at no cost. The extension is a new clip inside a new "
+        "Extend a clip with Omni 1.2 Flash, picked in the editor's model picker and read back before the click when "
+        "the editor shows one (Google retired Veo Extend on 2026-11-05). It spends credits and is ledgered: Flow bills "
+        "an Omni 1.2 extend by the second like a generation (changelog 2026-11-05); the Veo 3.1 Lite extend measured "
+        "here cost 10 credits. When Flow greys Extend out, the call is refused before the click, at no cost. The extension is a new clip inside a new "
         "scene (the source is copied in first): its own file answered HTTP 400 and clip_download could not open it "
         "(measured 2026-09-29), so fetch it with scene_download on the scene_id this tool returns; that film's video "
         "stream ran 15.0 s for an 8 s source, 8 + 7: the extension is a 7.0 s clip, though the listing calls it 8 "
@@ -2018,10 +2018,13 @@ async def clip_extend(
 @server.tool(
     name="clip_edit",
     description=(
-        "Video-to-video edit of a clip with Omni 1.1 Flash. It spends credits and is ledgered, and the price follows "
-        "the source clip's cell: every edit of a 720p 8 s clip measured on this account cost 20 credits, the edit of "
-        "a 360p 4 s clip cost 10 (measured 2026-10-08), while Flow's own price table lists Omni Flash Edit at 40, so "
-        "budget for 40 and expect the source cell's price (the answer's balance_moved says when 20 was not it). "
+        "Video-to-video edit of a clip with Omni 1.2 Flash: the editor's model picker opens on the clip's own model "
+        "(Omni 1.1, which Flow retires on 2026-12-05, on older clips), so it is set to Omni 1.2 and read back before "
+        "the click, and an editor showing no picker is refused. It spends credits and is ledgered, and the price "
+        "follows the source clip's cell: Flow prices an Omni 1.2 edit like a generation, by the second (changelog "
+        "2026-11-05); on Omni 1.1 every edit of a 720p 8 s clip measured here cost 20 credits and of a 360p 4 s clip "
+        "10, while Flow's own price table then listed Omni Flash Edit at 40 (the answer's balance_moved says when 20 "
+        "was not it). "
         "This tool does not read the live price line before it clicks, so what stands between a "
         "changed price and a surprise bill is the balance read before and after, answered as credits_before and "
         "credits_after (the ledger row holds their difference as `spent`). An edit cannot change what is said: it "

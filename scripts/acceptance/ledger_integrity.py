@@ -105,11 +105,17 @@ def _patch(**fakes):
     a fake balance to every later test in the same pytest run (measured 2026-09-14: it broke
     tests/test_reader.py, which was the first test to read a real balance after this gate).
     """
+    # The editor's model picker (plan AV) is not this gate's subject: its stand-in page carries none.
+    fakes.setdefault("_pin_editor_model", _pinned)
     original = {name: getattr(clips, name) for name in fakes}
     original[_CREDITS] = clips.reader.credits
     for name, value in fakes.items():
         setattr(clips, name, value)
     return original
+
+
+async def _pinned(page):
+    return "pinned"
 
 
 def _restore(original):

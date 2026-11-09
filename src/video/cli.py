@@ -440,7 +440,7 @@ def clip_extend(
 def clip_edit(
     project_id: str, media_id: str, prompt: str, out_dir: str, job_id: str, wait: float, profile: str
 ) -> None:
-    """Video-to-video edit with Omni 1.1 Flash; spends credits, ledgered."""
+    """Video-to-video edit with Omni 1.2 Flash; spends credits, ledgered."""
     from video.mcp_server import Backend
 
     call = Backend(profile=profile).clip_edit(

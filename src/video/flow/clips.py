@@ -1,6 +1,7 @@
 """Per-clip actions on the clip editor /project/<id>/edit/<media> (measured 2026-09-12): 'Download media'
 offers 270p GIF, 720p Original, 1080p Upscaled and 4K Upscaled; 'Add clip' offers Add clip and
-Extend (Veo 3.1 - Lite); the prompt box 'Describe how to edit this video' runs Omni 1.1 Flash edits.
+Extend; the prompt box 'Describe how to edit this video' runs edits on the model its picker shows, set to Omni 1.2
+Flash before every edit and extend since 2026-11-09.
 Extend creates a scene (rpc rqZuUc) and the new clip is a generation record in Zzl0ze[2] WITHOUT a grid
 descriptor, so outputs are tracked through parsers.records. Extend and edit spend credits and are
 ledgered like gen jobs (I1, I5)."""
@@ -166,6 +167,40 @@ async def _menu_item(session: FlowSession, button: str, item: str) -> Any:
                 await page.keyboard.press("Escape")
                 await page.wait_for_timeout(1_500)
     raise LookupError(f"menu {button!r} has no item matching {item!r}")
+
+
+# Measured 2026-11-09 (out/av/probe.json): the editor's prompt box carries a model picker, "Omni 1.2 Flash" and
+# "Omni 1.1 Flash Leaving Dec 5", and it opened on Omni 1.1 on a clip made with it. Flow retires 1.1 on 2026-12-05 and
+# the owner dropped it on 2026-11-09, so an edit or an extend runs on Omni 1.2, picked and read back before Start.
+EDITOR_MODEL = "Omni 1.2 Flash"
+EDITOR_PICKER = re.compile(r"(Omni|Veo)\b.*arrow_drop_down", re.DOTALL)
+
+
+async def _pin_editor_model(page: Any) -> str:
+    """Pick Omni 1.2 Flash in the editor's model picker and read it back; 'absent' when the editor shows none."""
+    picker = page.locator(f"{EDITOR} button").filter(has_text=EDITOR_PICKER)
+    found = await picker.count()
+    if found == 0:
+        return "absent"
+    if found > 1:
+        raise LookupError(f"the editor shows {found} model pickers; not guessing, nothing was clicked")
+    if EDITOR_MODEL not in await picker.first.inner_text():
+        await picker.first.click(timeout=8_000)
+        await page.wait_for_timeout(1_200)
+        item = page.locator("[role=menuitem], [role=option]").filter(has_text=EDITOR_MODEL)
+        if await item.count() != 1:
+            await page.keyboard.press("Escape")
+            raise LookupError(
+                f"the editor's model menu offers no single {EDITOR_MODEL!r}; nothing was clicked"
+            )
+        await item.first.click(timeout=8_000)
+        await page.wait_for_timeout(1_200)
+    shown = await picker.first.inner_text()
+    if EDITOR_MODEL not in shown:
+        raise LookupError(
+            f"the editor's model picker reads {shown.split(chr(10))[0]!r}, not {EDITOR_MODEL!r}"
+        )
+    return "pinned"
 
 
 async def _select_version(
@@ -396,6 +431,9 @@ async def _generate_from_editor(
         opening_row()
         await item.click(timeout=8_000)
         await page.wait_for_timeout(1_500)
+    # An edit needs the picker read back on Omni 1.2: without one it could run on the model Flow is retiring.
+    if await _pin_editor_model(page) != "pinned" and kind == "edit":
+        raise LookupError(f"the editor shows no model picker to set {EDITOR_MODEL!r}; nothing was submitted")
     box = page.locator(f"{EDITOR} [contenteditable='true']").first
     start = page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
     if not await _prompt_ready(page, box, start, prompt):
