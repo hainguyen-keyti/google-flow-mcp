@@ -234,7 +234,7 @@ async def run_gflow(argv: list[str], profile: str = "default") -> tuple[int, str
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "GFLOW_CLI_PROFILE": profile},
+        env={**os.environ, "GFLOW_CLI_PROFILE": profile, "GFLOW_CLI_TELEMETRY": "0"},
     )
     out, err = await proc.communicate()
     return proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")

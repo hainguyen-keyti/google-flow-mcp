@@ -744,7 +744,10 @@ def test_a_model_or_length_gflow_would_refuse_is_refused_before_the_ledger_is_to
     assert "model must be one of" in _refused_before_the_ledger(
         monkeypatch, tmp_path, "gen_t2v", t2v | {"model": "omni"}
     )
-    assert "4/6/8/10" in _refused_before_the_ledger(monkeypatch, tmp_path, "gen_t2v", t2v | {"duration": 0})
+    # gflow 0.96.1 words it "one of [4, 6, 8, 10] seconds"; 0.78.0 wrote "4/6/8/10".
+    assert "[4, 6, 8, 10]" in _refused_before_the_ledger(
+        monkeypatch, tmp_path, "gen_t2v", t2v | {"duration": 0}
+    )
     veo_ten = t2v | {"model": "veo-lite", "duration": 10}
     assert "caps at 8s" in _refused_before_the_ledger(monkeypatch, tmp_path, "gen_t2v", veo_ten)
     r2v_ten = {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-2", "duration": 10}

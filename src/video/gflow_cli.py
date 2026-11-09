@@ -49,17 +49,18 @@ def accept_nano_banana_2_1() -> None:
     if getattr(checked, "accepts_nano_banana_2_1", False):
         return
 
-    def check(body, reference_ids, model=None):
+    def check(body, reference_ids, model=None, *args, **kwargs):
         if model is Model.NARWHAL and body:
             named = requested_models(body)
             if named == {"BELUGA"}:
-                return checked(body, reference_ids, None)
-            if named and named != {"NARWHAL"}:
+                return checked(body, reference_ids, None, *args, **kwargs)
+            # gflow 0.96.1 passes NARWHAL on "BELUGA" anywhere in the body, so an unread model field is refused here.
+            if named != {"NARWHAL"}:
                 return (
-                    f"migrated host: the image submit body names model {', '.join(sorted(named))} where NARWHAL was "
-                    "asked; refusing to report a generation made with persisted settings"
+                    f"migrated host: the image submit body names model {', '.join(sorted(named)) or 'none readable'} "
+                    "where NARWHAL was asked; refusing to report a generation made with persisted settings"
                 )
-        return checked(body, reference_ids, model)
+        return checked(body, reference_ids, model, *args, **kwargs)
 
     check.accepts_nano_banana_2_1 = True
     migrated_composer._image_body_problem = check

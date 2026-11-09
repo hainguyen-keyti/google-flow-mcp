@@ -7,7 +7,10 @@ the Playwright fallback is what always ran. Fail the read up front, same path.
     uv tool run --from gflow-cli python scripts/gflow.py video t2v "..." --project <id>
 """
 
+import os
 import sys
+
+os.environ["GFLOW_CLI_TELEMETRY"] = "0"
 
 import browser_cookie3
 

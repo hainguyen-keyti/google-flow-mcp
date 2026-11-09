@@ -505,6 +505,29 @@ def test_the_gflow_process_is_told_which_profile_to_spend_on(monkeypatch):
     assert seen["env"]["PATH_CANARY"] == "still-here"
 
 
+def test_run_gflow_turns_gflow_telemetry_off_whatever_the_parent_set(monkeypatch):
+    """gflow 0.95.0 sends a weekly usage report unless GFLOW_CLI_TELEMETRY is off; the owner turned it off
+    (2026-11-09), so a parent shell that turned it on does not reach the gflow child."""
+    seen = {}
+
+    class _Proc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_exec(*args, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return _Proc()
+
+    monkeypatch.setenv("GFLOW_CLI_TELEMETRY", "1")
+    monkeypatch.setattr(gen.asyncio, "create_subprocess_exec", fake_exec)
+
+    asyncio.run(gen.run_gflow(["image", "t2i", "a boat"], profile="acc2"))
+
+    assert seen["env"]["GFLOW_CLI_TELEMETRY"] == "0"
+
+
 def test_run_job_spends_and_reads_the_balance_on_one_and_the_same_profile(monkeypatch, tmp_path):
     """The balance was read on the profile the repo named while gflow spent on the one gflow guessed; they agreed
     only because this machine used to hold one profile. Point gflow's default at another account and the ledger

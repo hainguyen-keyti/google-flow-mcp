@@ -241,7 +241,7 @@ wheels = [
 
 [[package]]
 name = "gflow-cli"
-version = "0.78.0"
+version = "0.96.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "browser-cookie3" },
@@ -253,15 +253,16 @@ dependencies = [
     { name = "platformdirs" },
     { name = "playwright" },
     { name = "pydantic-settings" },
+    { name = "python-dotenv" },
     { name = "rich" },
     { name = "sse-starlette" },
     { name = "structlog" },
     { name = "tenacity" },
     { name = "uvicorn", extra = ["standard"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/64/ae/f811a75993e1a197893b459673ffaa9391f540b703d275b3a6c652272d05/gflow_cli-0.78.0.tar.gz", hash = "sha256:64a45449e70d9bca17c2e15d9d19e8f6f6260b44a9490b09b73cc3406421628f", size = 5890939, upload-time = "2026-09-17T20:11:42.741Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d0/23/5056a35f083d847e2843fc99344d0659a327045029dd37aa2635f9c34fcc/gflow_cli-0.96.1.tar.gz", hash = "sha256:ed7aab76ab6af61c7f8bd09db96ade7559afdbdb963357ab2919d0fb346af0c6", size = 6748202, upload-time = "2026-11-08T05:26:07.666Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/8f/27162682463b061bde9a364277f26608c72764c0313ab539f41529ccc158/gflow_cli-0.78.0-py3-none-any.whl", hash = "sha256:81ca8718f5f0eed729c15c29b108afcfd273b1571fc9ca2f98c471ed0130e684", size = 1376550, upload-time = "2026-09-17T20:11:40.808Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/28/74385339aae2d9bbfd15ff5a0b16ac14350ead71cc2edfc04b0028aecf8b/gflow_cli-0.96.1-py3-none-any.whl", hash = "sha256:a27d6b3e6e65bbea6426a4a86a93528fd19c360e7eee5521b8b16546789adf46", size = 1644675, upload-time = "2026-11-08T05:26:05.296Z" },
 ]
 
 [[package]]
@@ -1237,7 +1238,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "gflow-cli", specifier = "==0.78.0" },
+    { name = "gflow-cli", specifier = "==0.96.1" },
     { name = "mcp", specifier = "==2.2.0" },
 ]
 

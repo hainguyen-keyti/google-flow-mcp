@@ -312,9 +312,7 @@ class VideoBodyCheck:
             raw = ""
         body = unquote_plus(raw)
         # The start+end submit (nprQif) names itself only inside f.req (review of plan AB, B1).
-        rpcids = parse_qs(urlsplit(url).query).get("rpcids", [""])[0].split(",") + [
-            mc._body_rpcid(body) or ""
-        ]
+        rpcids = parse_qs(urlsplit(url).query).get("rpcids", [""])[0].split(",") + [mc.body_rpcid(body) or ""]
         submit = [rpcid for rpcid in rpcids if rpcid in mc.SUBMIT_RPCS]
         if not submit:
             return

@@ -10,7 +10,7 @@ keywords = ["google-flow", "veo", "mcp", "video-generation", "agent"]
 # 3.12: rglob(case_sensitive=False), which every paid tool's ledger sweep uses (review 2026-10-08, D25).
 requires-python = ">=3.12"
 dependencies = [
-    "gflow-cli==0.78.0",
+    "gflow-cli==0.96.1",
     "mcp==2.2.0",
 ]
 
