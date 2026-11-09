@@ -147,6 +147,8 @@ async def list_uploads(session: FlowSession, project_id: str) -> dict[str, Any]:
     try:
         await page.locator(SIDEBAR).first.wait_for(state="attached", timeout=30_000)
     except PlaywrightTimeoutError as exc:
+        # A project of another account shows its page, then goes to Flow's not-found page (measured 2026-11-09).
+        session._not_found(session.project_url(project_id))
         raise RuntimeError(f"list_uploads: the sidebar of {project_id} never rendered") from exc
     # Only now does absence carry information: a project that has never had an upload grows no "Uploads"
     # item. Asked any earlier, absence just means the page has not painted yet.

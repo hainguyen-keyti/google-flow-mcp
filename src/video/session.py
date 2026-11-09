@@ -16,6 +16,7 @@ from typing import Any, Self
 
 from gflow_cli import auth as _auth
 from gflow_cli.api.client import FlowApiClient
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import video  # noqa: F401
 from video import bodies, extensions, gen, offscreen
@@ -32,6 +33,7 @@ MIGRATED_ROOT = "https://flow.google.com/"
 NEW_PROJECT_BUTTON = "flow-projects-page button.new-project-button"
 GRID_READY = f'a[href*="/project/"], {NEW_PROJECT_BUTTON}'
 PROJECT_READY = "flow-project-page"
+NOT_FOUND = "flow.google.com/404"
 COMPOSER_READY = ".settings-trigger-button"
 
 
@@ -55,6 +57,7 @@ class FlowSession:
         headless: bool = False,
         client_factory: Callable[..., Any] | None = None,
     ) -> None:
+        self.profile_name = profile
         self.profile_dir = profile_dir if profile_dir is not None else profile_dir_for(profile)
         self.headless = headless
         self._factory = client_factory or _default_factory
@@ -130,11 +133,24 @@ class FlowSession:
     async def goto(self, url: str, *, ready: str | None = None, timeout_ms: int = 60_000) -> None:
         await self.page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         if ready:
-            await self.page.locator(ready).first.wait_for(state="visible", timeout=timeout_ms)
+            try:
+                await self.page.locator(ready).first.wait_for(state="visible", timeout=timeout_ms)
+            except PlaywrightTimeoutError:
+                self._not_found(url)
+                raise
+        self._not_found(url)
         # Every Flow page names the build the ledger rows and paid answers then carry: read on each navigation, so a
         # server living across a Flow deploy does not stamp the old build (technical review of plan AQ, S1).
         await version.read(self.page)
         await overlays.keep_oldest_creations(self.page, self.notices, self.unpressed)
+
+    def _not_found(self, url: str) -> None:
+        # Measured 2026-11-09: a project of another account, or one deleted, sends the page to /404?reason=project.
+        if NOT_FOUND in str(getattr(self.page, "url", "")):
+            raise LookupError(
+                f"Flow says this was not found ({self.page.url}) when opening {url}: the project is not on this "
+                f"account (profile {self.profile_name!r}) or was deleted; flow_projects lists the ones that are"
+            )
 
     @staticmethod
     def project_url(project_id: str) -> str:

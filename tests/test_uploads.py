@@ -327,3 +327,24 @@ def test_a_file_that_is_not_an_image_is_refused_before_the_session_is_touched(tm
         asyncio.run(uploads.upload(_Untouched(), "p", path))
 
     assert "nothing was sent" in str(said.value)
+
+
+def test_a_project_of_another_account_is_named_not_found_not_a_sidebar_that_never_rendered(monkeypatch):
+    """Plan AW, D5, measured 2026-11-09: harleychina0's project opened on the default profile goes to
+    /404?reason=project after the project page showed, so the sidebar wait timed out and the tool blamed the sidebar."""
+    monkeypatch.setattr(uploads, "capture", _no_capture)
+    page = _FakePage(uploads_on_disk=4)
+    page.matches = lambda selector, has_text: 0
+    page.url = "https://flow.google.com/404?reason=project"
+    session = _FakeSession(page)
+    session.profile_name = "default"
+
+    def not_found(url):
+        raise LookupError(
+            f"Flow says this was not found when opening {url}: the project is not on this account"
+        )
+
+    session._not_found = not_found
+
+    with pytest.raises(LookupError, match="not on this account"):
+        asyncio.run(uploads.list_uploads(session, "p"))

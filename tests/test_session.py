@@ -494,3 +494,47 @@ def test_every_navigation_opts_in_through_flows_expiry_banner(monkeypatch, tmp_p
 
     assert seen[0] == "https://flow.google.com/project/x"
     assert seen[1] == (session.page, session.notices, session.unpressed)
+
+
+@pytest.mark.parametrize("ready_times_out", [True, False])
+def test_a_project_flow_answers_not_found_is_said_in_those_words(monkeypatch, tmp_path, ready_times_out):
+    """Plan AW, D5, measured 2026-11-09: a project of another account sends the page to /404?reason=project,
+    "Project not found."; the tools said "the sidebar never rendered" or timed out instead."""
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    from video.flow import overlays, version
+
+    monkeypatch.setattr(version, "current", None)
+
+    async def nothing(*args):
+        return False
+
+    monkeypatch.setattr(overlays, "keep_oldest_creations", nothing)
+
+    class _Locator:
+        @property
+        def first(self):
+            return self
+
+        async def wait_for(self, **kwargs):
+            if ready_times_out:
+                raise PlaywrightTimeoutError("Timeout 60000ms exceeded")
+
+    class _Page:
+        url = "https://flow.google.com/404?reason=project"
+
+        async def goto(self, url, **kwargs):
+            return None
+
+        def locator(self, selector):
+            return _Locator()
+
+        async def evaluate(self, js):
+            return []
+
+    session = FlowSession("someone", profile_dir=tmp_path)
+    session.page = _Page()
+
+    with pytest.raises(LookupError, match="not found") as refused:
+        asyncio.run(session.goto("https://flow.google.com/project/P", ready="flow-project-page"))
+    assert "this account" in str(refused.value), refused.value

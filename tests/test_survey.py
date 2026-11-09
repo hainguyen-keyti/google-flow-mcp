@@ -1306,3 +1306,72 @@ def test_a_new_image_row_is_named_in_the_comparison():
     found = survey.compare_options(base, current)
 
     assert ("image option changed", "rows", "added [['Low', 'Medium', 'High']]") in found
+
+
+def test_flow_check_with_the_network_down_says_so_in_one_line(monkeypatch):
+    """Plan AU debt D4: with the network down `flow check` ended in a Playwright traceback. A read that cannot reach
+    Flow is one line naming the network error and an exit code, never a traceback."""
+    from click.testing import CliRunner
+    from playwright.async_api import Error as PlaywrightError
+
+    from video import cli, session
+
+    class _Down:
+        def __init__(self, profile):
+            self.page = None
+
+        async def __aenter__(self):
+            raise PlaywrightError(
+                "Page.goto: net::ERR_INTERNET_DISCONNECTED at https://flow.google.com/\nCall log: x"
+            )
+
+        async def __aexit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(session, "FlowSession", _Down)
+
+    result = CliRunner().invoke(cli.main, ["flow", "check"])
+
+    assert result.exit_code == 1, result.output
+    assert "net::ERR_INTERNET_DISCONNECTED" in result.output and "Traceback" not in result.output, (
+        result.output
+    )
+    assert "Call log" not in result.output, result.output
+    assert not isinstance(result.exception, PlaywrightError), result.exception
+
+
+def test_a_read_of_a_project_flow_cannot_find_is_one_line_too(monkeypatch):
+    """Plan AW, D5, measured 2026-11-09: `video flow uploads` on another account's project printed the right words
+    under a traceback."""
+    from click.testing import CliRunner
+
+    from video import cli
+
+    def not_found(profile, fn):
+        raise LookupError(
+            "Flow says this was not found: the project is not on this account (profile 'default')"
+        )
+
+    monkeypatch.setattr(cli, "_session_read", not_found)
+
+    result = CliRunner().invoke(cli.main, ["flow", "uploads", "P"])
+
+    assert result.exit_code == 1 and "not on this account" in result.output, result.output
+    assert "Traceback" not in result.output and not isinstance(result.exception, LookupError), (
+        result.exception
+    )
+
+
+def test_a_key_error_in_a_read_keeps_its_traceback(monkeypatch):
+    from click.testing import CliRunner
+
+    from video import cli
+
+    def broken(profile, fn):
+        raise KeyError("media")
+
+    monkeypatch.setattr(cli, "_session_read", broken)
+
+    result = CliRunner().invoke(cli.main, ["flow", "uploads", "P"])
+
+    assert isinstance(result.exception, KeyError), result.output

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 
 import click
 
@@ -91,14 +92,34 @@ def lane(profile: str, as_json: bool) -> None:
         click.echo(f"{result['verdict']} projects={result['projects']}")
 
 
-def _read(profile: str, fn):
-    from video.session import FlowSession
+def _session_read(profile: str, fn):
+    from video import session as session_mod
 
     async def run():
-        async with FlowSession(profile) as session:
+        async with session_mod.FlowSession(profile) as session:
             return await fn(session)
 
     return asyncio.run(run())
+
+
+def _read(profile: str, fn):
+    """A read on its own Flow session; a Flow that cannot be reached, or that answers "not found", is the command's
+    one-line exit message, never a traceback (plan AU debts, paid in plan AW)."""
+    from playwright.async_api import Error as PlaywrightError
+
+    try:
+        return _session_read(profile, fn)
+    except (KeyError, IndexError):
+        raise  # a bug, not something Flow said: keep its traceback
+    except LookupError as exc:
+        raise click.ClickException(str(exc)) from None
+    except PlaywrightError as exc:
+        reason = re.search(r"net::ERR_[A-Z_]+", str(exc))
+        if reason is None:
+            raise
+        raise click.ClickException(
+            f"Flow could not be reached ({reason.group()}): check the network, then run it again; nothing was read"
+        ) from None
 
 
 def _spend(call):
