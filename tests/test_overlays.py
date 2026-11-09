@@ -297,3 +297,117 @@ def test_what_covers_a_control_is_reported_with_its_own_words():
 
 def test_an_uncovered_control_reports_nothing():
     assert asyncio.run(overlays.covering(_Page(covering=None), "button.settings-trigger-button")) is None
+
+
+# The expiry banner (plan AV, I6). Measured 2026-11-09 on harleychina0 (out/av/banner.json, banner_3_confirmed.png):
+# "Your oldest creations will expire soon. Opt-in to keep them around." with an "Opt in" button opens a dialog "Keep
+# your oldest creations in Flow" with Cancel and Opt in; its Opt in answers "You're opted-in!" and the banner is gone
+# on reload. The owner decided the MCP presses it (DECISIONS 2026-11-09).
+
+KEEP_TEXT = (
+    "Keep your oldest creations in Flow Any creations you made before May 19, 2026 are subject to the old expiration "
+    "policy and will expire on a rolling basis starting November 20, 2026. Cancel Opt in"
+)
+
+
+class _ExpiryPage:
+    def __init__(self, *, banner=True, offers=1, dialog_buttons=1, confirms=True, raises=None):
+        self.banner, self.offers, self.dialog_buttons, self.confirms, self.raises = (
+            banner,
+            offers,
+            dialog_buttons,
+            confirms,
+            raises,
+        )
+        self.dialog = False
+        self.opted = False
+        self.clicks = []
+        self.keys = []
+        self.keyboard = self
+
+    async def press(self, key):
+        self.keys.append(key)
+
+    async def wait_for_timeout(self, ms):
+        return None
+
+    def locator(self, selector):
+        return _ExpiryLocator(self, selector)
+
+    def get_by_role(self, role, name=None):
+        return _ExpiryLocator(self, "banner Opt in")
+
+
+class _ExpiryLocator:
+    def __init__(self, page, what):
+        self.page, self.what = page, what
+
+    @property
+    def first(self):
+        return self
+
+    def filter(self, has_text=None):
+        return self
+
+    def get_by_role(self, role, name=None):
+        return _ExpiryLocator(self.page, "dialog Opt in")
+
+    async def count(self):
+        page = self.page
+        if page.raises and self.what == page.raises[0]:
+            raise page.raises[1]
+        if self.what == overlays.EXPIRY:
+            return int(page.banner and not page.opted)
+        if self.what == overlays.OPTED:
+            return int(page.opted)
+        if self.what == "banner Opt in":
+            return page.offers if page.banner else 0
+        if self.what == overlays.KEEP_DIALOG:
+            return int(page.dialog)
+        if self.what == "dialog Opt in":
+            return page.dialog_buttons if page.dialog else 0
+        raise AssertionError(self.what)
+
+    async def inner_text(self, timeout=None):
+        return KEEP_TEXT
+
+    async def click(self, timeout=None):
+        self.page.clicks.append(self.what)
+        if self.what == "banner Opt in":
+            self.page.dialog = True
+        elif self.what == "dialog Opt in":
+            self.page.dialog = False
+            self.page.opted = self.page.confirms
+
+
+def test_the_expiry_banner_is_opted_in_through_its_dialog_and_said():
+    page, notices, unpressed = _ExpiryPage(), [], []
+
+    assert asyncio.run(overlays.keep_oldest_creations(page, notices, unpressed)) is True
+    assert page.clicks == ["banner Opt in", "dialog Opt in"]
+    assert len(notices) == 1 and "Keep your oldest creations" in notices[0] and unpressed == []
+
+
+def test_a_page_without_the_banner_is_left_alone():
+    page, notices, unpressed = _ExpiryPage(banner=False), [], []
+
+    assert asyncio.run(overlays.keep_oldest_creations(page, notices, unpressed)) is False
+    assert page.clicks == [] and notices == [] and unpressed == []
+
+
+@pytest.mark.parametrize(
+    ("page", "said", "clicked"),
+    [
+        (_ExpiryPage(offers=2), "2 Opt in buttons", []),
+        (_ExpiryPage(dialog_buttons=0), "0 Opt in buttons in its dialog", ["banner Opt in"]),
+        (_ExpiryPage(confirms=False), "did not say it opted in", ["banner Opt in", "dialog Opt in"]),
+        (_ExpiryPage(raises=(overlays.EXPIRY, PlaywrightError("page closed"))), "Error", []),
+    ],
+    ids=["two offers", "a dialog with no Opt in", "no confirmation", "the page fails"],
+)
+def test_an_expiry_banner_that_cannot_be_opted_in_is_named_and_never_raises(page, said, clicked):
+    notices, unpressed = [], []
+
+    assert asyncio.run(overlays.keep_oldest_creations(page, notices, unpressed)) is False
+    assert page.clicks == clicked and notices == []
+    assert len(unpressed) == 1 and said in unpressed[0], unpressed

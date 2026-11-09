@@ -1,13 +1,15 @@
 """What Flow lays over its own page.
 
-One overlay is known and allowed: the cookie notice, whose single button the owner lets the driver press (DECISIONS
-2026-10-01). No other overlay is given a handler; `covering` names whatever sits on a control for the callers that ask
+Two are known and allowed: the cookie notice, whose single button the owner lets the driver press (DECISIONS
+2026-10-01), and the banner asking to opt in to keeping the oldest creations, which the owner lets the driver opt in
+through (DECISIONS 2026-11-09). No other overlay is given a handler; `covering` names whatever sits on a control for the callers that ask
 (the composer's Settings trigger and its "+" button), and nothing of it is clicked.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from typing import Any
 
@@ -99,6 +101,62 @@ async def watch_cookie_notice(page: Any, notices: list[str], unpressed: list[str
 
     await page.add_locator_handler(page.locator(COOKIE_BAR), dismiss, no_wait_after=True)
     return idle
+
+
+# Measured 2026-11-09 on harleychina0 (out/av/banner.json): the banner's "Opt in" opens a dialog "Keep your oldest
+# creations in Flow" (Cancel, Opt in), and its Opt in answers "You're opted-in!"; the banner is gone on reload.
+EXPIRY = "text=/oldest creations will expire soon/i"
+OPTED = "text=/opted-in/i"
+KEEP_DIALOG = "[role=dialog], [role=alertdialog]"
+OPT_IN = re.compile(r"^\s*Opt in\s*$", re.IGNORECASE)
+DIALOG_MS = 5_000
+OPTED_MS = 8_000
+STEP_MS = 250
+
+
+async def keep_oldest_creations(page: Any, notices: list[str], unpressed: list[str]) -> bool:
+    """Opt in to keeping the creations Flow would otherwise expire, when its banner shows; never raises.
+
+    `notices` gets what the dialog said once Flow confirmed the opt-in; `unpressed` gets why it was left, once."""
+
+    def left(why: str) -> bool:
+        if why not in unpressed:
+            unpressed.append(why)
+            sys.stderr.write(f"[video] {why}\n")
+        return False
+
+    async def shows(locator: Any, budget_ms: int) -> bool:
+        waited = 0
+        while not await locator.count():
+            if waited >= budget_ms:
+                return False
+            await page.wait_for_timeout(STEP_MS)
+            waited += STEP_MS
+        return True
+
+    try:
+        if not await page.locator(EXPIRY).count():
+            return False
+        offer = page.get_by_role("button", name=OPT_IN)
+        if (found := await offer.count()) != 1:
+            return left(f"Flow's expiry banner shows {found} Opt in buttons, not one; nothing was clicked")
+        await offer.first.click(timeout=PRESS_MS)
+        dialog = page.locator(KEEP_DIALOG).filter(has_text="Keep your oldest creations")
+        confirm = dialog.get_by_role("button", name=OPT_IN)
+        if not await shows(dialog, DIALOG_MS) or (found := await confirm.count()) != 1:
+            await page.keyboard.press("Escape")
+            return left(
+                f"Flow's expiry banner showed {found} Opt in buttons in its dialog, not one; left as it was"
+            )
+        text = " ".join((await dialog.first.inner_text(timeout=READ_MS)).split())[:200]
+        await confirm.first.click(timeout=PRESS_MS)
+        if not await shows(page.locator(OPTED), OPTED_MS):
+            return left(f"Flow did not say it opted in after its dialog's Opt in was pressed: {text!r}")
+    except Exception as exc:  # noqa: BLE001
+        return left(f"Flow's expiry banner was not opted in ({type(exc).__name__})")
+    notices.append(text)
+    sys.stderr.write(f"[video] opted in to keep the oldest creations: {text}\n")
+    return True
 
 
 async def covering(page: Any, selector: str) -> dict[str, Any] | None:

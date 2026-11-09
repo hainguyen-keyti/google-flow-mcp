@@ -134,6 +134,7 @@ class FlowSession:
         # Every Flow page names the build the ledger rows and paid answers then carry: read on each navigation, so a
         # server living across a Flow deploy does not stamp the old build (technical review of plan AQ, S1).
         await version.read(self.page)
+        await overlays.keep_oldest_creations(self.page, self.notices, self.unpressed)
 
     @staticmethod
     def project_url(project_id: str) -> str:

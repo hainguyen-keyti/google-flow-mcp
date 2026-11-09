@@ -453,3 +453,44 @@ def test_the_first_navigation_reads_the_flow_build_once_for_the_process(monkeypa
     # Every navigation, one evaluate each: a server living across a Flow deploy would otherwise stamp the old build
     # on every row and answer until a flow_check happened to run (technical review of plan AQ, S1).
     assert session.page.evaluated == 2, "read on every navigation, so a new build is seen when it lands"
+
+
+def test_every_navigation_opts_in_through_flows_expiry_banner(monkeypatch, tmp_path):
+    """Plan AV, I6: the owner signs in and uses the MCP; a banner asking to keep the oldest creations is opted in
+    through by the driver itself (DECISIONS 2026-11-09), right after a page loads and before any other action."""
+    from video.flow import overlays, version
+
+    monkeypatch.setattr(version, "current", None)
+    seen = []
+
+    async def keep(page, notices, unpressed):
+        seen.append((page, notices, unpressed))
+        return True
+
+    monkeypatch.setattr(overlays, "keep_oldest_creations", keep)
+
+    class _Locator:
+        async def wait_for(self, **kwargs):
+            return None
+
+        @property
+        def first(self):
+            return self
+
+    class _Page:
+        async def goto(self, url, **kwargs):
+            seen.append(url)
+
+        def locator(self, selector):
+            return _Locator()
+
+        async def evaluate(self, js):
+            return []
+
+    session = FlowSession(profile_dir=tmp_path)
+    session.page = _Page()
+
+    asyncio.run(session.goto("https://flow.google.com/project/x", ready="flow-project-page"))
+
+    assert seen[0] == "https://flow.google.com/project/x"
+    assert seen[1] == (session.page, session.notices, session.unpressed)
