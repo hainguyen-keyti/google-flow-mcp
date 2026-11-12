@@ -30,7 +30,7 @@ Current Flow credit balance. Free.
 
 **Arguments**: `month` (optional)
 
-Where a month's credits went and what the balance still buys: one live read of the balance, and the ledgers under the out folder summed for the month (the current one unless month is given as YYYY-MM): credits spent, split by what was made (kind, model, resolution), drafts and finals, credits charged with no clip, the daily rate so far, and how many 8 s clips the balance buys at Omni 1.2 360p, Omni 1.2 720p and Veo 3.1 Lite on the surveyed table. It counts only what this server's ledgers hold: a clip made by hand in Flow, or by another copy of this repo, is in the balance and not in the split. flow_time is the time Flow sends beside the balance, passed on as it came; what it marks is unmeasured. Free.
+Where a month's credits went and what the balance still buys: one live read of the balance, and the ledgers under the out folder summed for the month (the current one unless month is given as YYYY-MM): credits spent, split by what was made (kind, model, resolution), drafts and finals, credits charged with no clip, the daily rate so far, and how many 8 s clips the balance buys at Omni 1.2 360p, Omni 1.2 720p and Veo 3.1 Lite on the surveyed table. It counts only what this server's ledgers hold: a clip made by hand in Flow, or by another copy of this repo, is in the balance and not in the split; a job_submit job not yet collected is named under submitted_not_collected at the price Flow quoted, since its bill is written at job_collect. flow_time is the time Flow sends beside the balance, passed on as it came; what it marks is unmeasured. Like flow_credits it appends the balance to out/credits.jsonl. Free.
 
 ### `flow_capabilities`
 

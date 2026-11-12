@@ -7,6 +7,7 @@ the 360p price, so the tool that answers this says where the month went before t
 
 from __future__ import annotations
 
+import calendar
 import time
 from collections import defaultdict
 from typing import Any
@@ -35,7 +36,13 @@ def _jobs(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         job_id = row.get("job_id")
         if not isinstance(job_id, str):
             continue
-        job = jobs.setdefault(job_id, {"spent": 0, "ts": 0.0, "status": None})
+        job = jobs.setdefault(job_id, {"spent": 0, "ts": 0.0, "status": None, "settled": False})
+        if row.get("status") == "started":
+            job.update(started=float(row.get("ts") or 0))
+        if isinstance(row.get("quoted_credits"), int) and not isinstance(row.get("quoted_credits"), bool):
+            job["quoted"] = row["quoted_credits"]
+        if row.get("status") in OUTCOMES:
+            job["settled"] = True
         for key in ("kind", "model", "resolution"):
             if row.get(key) is not None and key not in job:
                 job[key] = row[key]
@@ -71,8 +78,21 @@ def summary(
         mine = [job for job_id, job in charged.items() if kinds.get(job_id) == kind]
         return {"credits": sum(job["spent"] for job in mine), "jobs": len(mine)}
 
+    # job_submit is charged at the click and its bill is written only at job_collect: named apart until then.
+    waiting = [
+        job
+        for job in _jobs(rows).values()
+        if not job["settled"] and "started" in job and _month(job["started"]) == month
+    ]
     spent = sum(job["spent"] for job in charged.values())
-    days = int(time.strftime("%d", time.localtime(now))) if _month(now) == month else 0
+    year, number = (int(part) for part in month.split("-"))
+    days = (
+        int(time.strftime("%d", time.localtime(now)))
+        if _month(now) == month
+        else calendar.monthrange(year, number)[1]
+    )
+    if _month(now) < month:
+        days = 0
     out: dict[str, Any] = {
         "month": month,
         "balance": balance,
@@ -83,6 +103,10 @@ def summary(
             for (kind, model, resolution), (credits, jobs) in sorted(by.items(), key=lambda item: -item[1][0])
         ],
         "charged_with_no_clip": {"credits": sum(job["spent"] for job in lost), "jobs": len(lost)},
+        "submitted_not_collected": {
+            "quoted_credits": sum(job.get("quoted", 0) for job in waiting),
+            "jobs": len(waiting),
+        },
         "drafts": of("draft"),
         "finals": of("final"),
         "days_so_far": days,

@@ -96,3 +96,46 @@ def test_the_time_in_flows_balance_reply_is_passed_on_as_unmeasured():
 
     assert said["flow_time"]["epoch"] == 1796112586 and "unmeasured" in said["flow_time"]["note"]
     assert "flow_time" not in _summary(balance_raw=[100, 1])
+
+
+# Review of plan AY.
+
+
+def test_a_job_with_two_outcome_rows_is_billed_once_at_the_last():
+    """m8: a job that read `pending` and then `done` carries the same bill twice in its rows."""
+    rows = [
+        {"ts": _ts(2), "job_id": "p", "status": "submitted", "kind": "video"},
+        {"ts": _ts(2), "job_id": "p", "status": "pending", "spent": 24},
+        {"ts": _ts(2) + 60, "job_id": "p", "status": "done", "spent": 24},
+    ]
+    said = _summary(rows=rows, shots=[])
+
+    assert said["spent"] == 24 and said["jobs_charged"] == 1
+    assert said["charged_with_no_clip"] == {"credits": 0, "jobs": 0}
+
+
+def test_a_spent_that_is_not_a_number_of_credits_is_not_counted():
+    """m15: True is an int to Python."""
+    rows = [{"ts": _ts(2), "job_id": "t", "status": "done", "spent": True}]
+
+    assert _summary(rows=rows, shots=[])["spent"] == 0
+
+
+def test_a_submitted_job_nobody_collected_is_said_with_its_quoted_price():
+    """N5: job_submit is charged at the click (measured 2026-10-03), and its bill reaches the ledger only at
+    job_collect. Until then the month's spend lacks it, so it is named apart, at the price Flow quoted."""
+    rows = [
+        {"ts": _ts(7), "job_id": "s", "status": "submitted", "kind": "video", "quoted_credits": 9},
+        {"ts": _ts(7) + 5, "job_id": "s", "status": "started"},
+        *_job("a", 2, 24),
+    ]
+    said = _summary(rows=rows, shots=[])
+
+    assert said["spent"] == 24
+    assert said["submitted_not_collected"] == {"quoted_credits": 9, "jobs": 1}
+
+
+def test_a_past_month_is_averaged_over_its_own_days():
+    said = _summary(month="2026-10")
+
+    assert said["spent"] == 24 and said["days_so_far"] == 31 and said["per_day"] == round(24 / 31, 1)

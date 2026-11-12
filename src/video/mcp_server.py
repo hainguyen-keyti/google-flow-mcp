@@ -1487,8 +1487,10 @@ async def flow_credits() -> str:
         "split by what was made (kind, model, resolution), drafts and finals, credits charged with no clip, the daily "
         "rate so far, and how many 8 s clips the balance buys at Omni 1.2 360p, Omni 1.2 720p and Veo 3.1 Lite on the "
         "surveyed table. It counts only what this server's ledgers hold: a clip made by hand in Flow, or by another "
-        "copy of this repo, is in the balance and not in the split. flow_time is the time Flow sends beside the "
-        "balance, passed on as it came; what it marks is unmeasured. Free."
+        "copy of this repo, is in the balance and not in the split; a job_submit job not yet collected is named under "
+        "submitted_not_collected at the price Flow quoted, since its bill is written at job_collect. flow_time is the "
+        "time Flow sends beside the balance, passed on as it came; what it marks is unmeasured. Like flow_credits it "
+        "appends the balance to out/credits.jsonl. Free."
     ),
 )
 async def flow_budget(month: str | None = None) -> str:
@@ -2453,7 +2455,7 @@ def _shot(
         row = _draft_row(final_of)
         if row is None:
             raise ValueError(
-                f"no draft {final_of!r} is recorded under the out folder: a final is made from a draft that finished "
+                f"no draft {final_of!r} is recorded under the out folder: a final is made from a draft that ran "
                 "(gen_video or job_submit with draft=true)"
             )
         differs = [
@@ -2483,13 +2485,24 @@ def _shot_done(
     """Record a draft's request, or which draft a final was made from, beside the ledger; say it in the answer."""
     if not (draft or final_of):
         return answer
-    shots = gen_mod.Ledger(backend._editor_out_dir(out_dir) / SHOTS)
     if draft:
-        shots.append(job_id, "draft", project=project, prompt=prompt, request=request)
         answer["draft"] = True
     else:
-        shots.append(job_id, "final", project=project, final_of=final_of)
         answer["final_of"], answer["final_note"] = final_of, FINAL_NOTE
+    # After the charge: a write that fails must not stand in for the paid answer (review of plan AY, N3).
+    try:
+        shots = gen_mod.Ledger(backend._editor_out_dir(out_dir) / SHOTS)
+        if draft:
+            shots.append(job_id, "draft", project=project, prompt=prompt, request=request)
+        else:
+            shots.append(job_id, "final", project=project, final_of=final_of)
+    except Exception as exc:  # noqa: BLE001
+        note = (
+            f"the {'draft' if draft else 'final'} was not recorded beside the ledger ({type(exc).__name__})"
+        )
+        answer["draft_note" if draft else "final_record_note"] = note + (
+            "; final_of cannot find it, so run the keeper as a plain 720p call" if draft else ""
+        )
     return answer
 
 
@@ -2670,6 +2683,11 @@ async def job_submit(
             "voices": voices,
         },
     )
+    if request["count"] != 1:
+        raise ValueError(
+            f"job_submit makes one clip per call, and draft {final_of!r} asked for {request['count']}: finish it with "
+            "gen_video, which runs the draft's own count"
+        )
     _video_request(**request)
     _paid_run(job_id, max_credits)
     options = {name: value for name, value in request.items() if name != "count"}

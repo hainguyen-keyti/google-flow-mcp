@@ -5237,3 +5237,38 @@ def test_flow_budget_refuses_a_month_it_cannot_read(monkeypatch, tmp_path):
     result = _call("flow_budget", {"month": "November"})
 
     assert result.is_error and "YYYY-MM" in _texts([result])[0]
+
+
+def test_job_submit_refuses_to_finish_a_draft_of_several_clips(monkeypatch, tmp_path):
+    """Review of plan AY, N1: job_submit makes one clip, so a count=2 draft finished through it ran one and said
+    nothing."""
+    _a_draft(monkeypatch, tmp_path, count=2)
+    reached = _video_world(monkeypatch, tmp_path, [DONE_ROWS[0], STARTED], answer=STARTED_ANSWER)
+
+    result = _call("job_submit", {**SHOT, "job_id": "f-n1", "final_of": "d-9"})
+
+    assert result.is_error and "one clip" in _texts([result])[0] and reached == []
+
+
+def test_a_final_is_made_from_a_draft_row_only(monkeypatch, tmp_path):
+    """m9: a `final` row carries no request to run."""
+    _a_draft(monkeypatch, tmp_path)
+    reached = _video_world(monkeypatch, tmp_path, DONE_ROWS)
+    made = _call("gen_video", {**SHOT, "job_id": "f-a", "final_of": "d-9"})
+    assert not made.is_error, _texts([made])
+
+    again = _call("gen_video", {**SHOT, "job_id": "f-b", "final_of": "f-a"})
+
+    assert again.is_error and "no draft" in _texts([again])[0] and len(reached) == 1
+
+
+def test_a_draft_that_cannot_be_recorded_keeps_its_paid_answer(monkeypatch, tmp_path):
+    """N3: the write comes after the charge; an error there must not stand in for the answer."""
+    _video_world(monkeypatch, tmp_path, DONE_ROWS)
+    (tmp_path / "shots.jsonl").mkdir()
+
+    result = _call("gen_video", {**SHOT, "job_id": "d-n3", "draft": True})
+
+    assert not result.is_error, _texts([result])
+    answer = _payload(result)
+    assert answer["outcome"]["code"] == "DONE" and "not recorded" in answer["draft_note"]
