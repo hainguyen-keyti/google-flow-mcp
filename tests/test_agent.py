@@ -93,7 +93,7 @@ class _Said:
 def _agent_world(monkeypatch, balances=None):
     balances = list(balances or [])
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return {"uwAyfb": [[]]}
 

@@ -650,10 +650,10 @@ def test_check_reads_the_build_the_free_replies_and_the_pages_and_reports_no_dri
     project["Zzl0ze"] = [_fixture("Zzl0ze_20261022_test_project")]
     modes = []
 
-    async def fake_grid(session, settle=6.0):
+    async def fake_grid(session, settle=6.0, **kwargs):
         return grid
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return project
 
@@ -708,10 +708,10 @@ def test_check_with_a_project_compares_the_listing_and_a_moved_status_cell_is_dr
         **{name: [_fixture(name)] for name in ("ngNC2", "yBhWQ", "HTrJv", "tRARke")},
     }
 
-    async def fake_grid(session, settle=6.0):
+    async def fake_grid(session, settle=6.0, **kwargs):
         return grid
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return project
 
@@ -754,10 +754,10 @@ def test_a_check_whose_composer_cannot_be_settled_reports_the_project_page_as_a_
     project["Zzl0ze"] = [_fixture("Zzl0ze_20261022_test_project")]
     recorded = []
 
-    async def fake_grid(session, settle=6.0):
+    async def fake_grid(session, settle=6.0, **kwargs):
         return grid
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return project
 
@@ -793,7 +793,7 @@ def test_a_check_whose_grid_lacks_the_project_list_reports_it_instead_of_raising
     grid = {"nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
     recorded = []
 
-    async def fake_grid(session, settle=6.0):
+    async def fake_grid(session, settle=6.0, **kwargs):
         return grid
 
     async def record(self, route, scope=None):
@@ -821,10 +821,10 @@ def test_a_check_whose_listing_was_not_heard_reports_it_as_drift_instead_of_rais
     project = {name: [_fixture(name)] for name in ("ngNC2", "yBhWQ", "HTrJv", "tRARke")}
     recorded, modes = [], []
 
-    async def fake_grid(session, settle=6.0):
+    async def fake_grid(session, settle=6.0, **kwargs):
         return grid
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return project
 
@@ -872,10 +872,10 @@ def test_a_write_through_report_is_refused_on_a_skipped_route_and_the_picker_ski
     walked = []
     listings = {"p-no-scene": _fixture("Zzl0ze"), "p-full": _fixture("Zzl0ze_character")}
 
-    async def fake_grid(session, settle=6.0):
+    async def fake_grid(session, settle=6.0, **kwargs):
         return {"UpteDb": [[[[pid, ["t", None, [1, 0], None, None]] for pid in listings]]]}
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return {"Zzl0ze": [listings[session.urls[-1].rsplit("/", 1)[-1]]]}
 
@@ -915,7 +915,7 @@ def test_a_selector_the_baseline_counted_that_now_counts_zero_refuses_a_write():
 
 
 def test_check_without_a_project_reads_the_grid_only_and_touches_no_project(monkeypatch, tmp_path):
-    async def fake_grid(session, settle=6.0):
+    async def fake_grid(session, settle=6.0, **kwargs):
         return {"UpteDb": [_fixture("UpteDb")], "nzlxg": [_fixture("nzlxg")], "Yizz8d": [_fixture("Yizz8d")]}
 
     async def must_not(*args, **kwargs):

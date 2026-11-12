@@ -143,7 +143,7 @@ def test_upload_reports_the_tiles_it_can_see_not_double(monkeypatch, tmp_path):
     # Same doubling selector, second caller. Measured 2026-09-14 in the Uploads view of 604b2de7:
     # flow-tile-container 4, flow-image-tile 4, flow-video-tile 0, and the union 8, against a screenshot
     # showing 4 uploads. upload() reports that figure after every upload, so it doubled there too.
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         return {"maseQ": [MASEQ]}
 
     async def fake_project(session, project_id, settle=10.0, *, versions=False):

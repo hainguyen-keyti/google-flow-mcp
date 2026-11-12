@@ -249,7 +249,7 @@ class _Session:
 def _flow_answers(monkeypatch, *frames):
     queue = list(frames)
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return queue.pop(0)
 
@@ -992,7 +992,7 @@ def _media(media_id, title, kind="video"):
 def _scene_answers(monkeypatch, media, listing_after=None):
     """capture for the rename, list_scenes for the confirmation."""
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return {"BpMsoe": [[]]}
 

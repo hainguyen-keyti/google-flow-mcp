@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -20,8 +21,26 @@ Frames = dict[str, list[Any]]
 CREDITS_LOG = Path("out") / "credits.jsonl"
 
 
-async def capture(session: FlowSession, action: Callable[[], Awaitable[Any]], *, settle: float) -> Frames:
+# Plan AX, measured 2026-11-12: a balance read took 7.3 s, 6 s of it this fixed wait, on a page that loads in 1.2 s.
+QUIET_S = 1.0
+STEP_MS = 100
+_RPCIDS = re.compile(r"[?&]rpcids=([^&]+)")
+
+
+async def capture(
+    session: FlowSession,
+    action: Callable[[], Awaitable[Any]],
+    *,
+    settle: float,
+    wants: tuple[str, ...] = (),
+) -> Frames:
+    """Run the action and collect the batchexecute replies it brings. With `wants`, the wait ends once every reply
+    named has arrived whole and no reply has come for QUIET_S; `settle` stays the bound, and the whole wait when no
+    reply is named."""
     tasks: list[asyncio.Task[str]] = []
+    named: list[tuple[set[str], asyncio.Task[str]]] = []
+    last = [0]
+    waited = [0]
 
     async def body_of(resp: Any) -> str:
         try:
@@ -30,13 +49,28 @@ async def capture(session: FlowSession, action: Callable[[], Awaitable[Any]], *,
             return ""
 
     def on_response(resp: Any) -> None:
-        if "batchexecute" in resp.request.url:
-            tasks.append(asyncio.ensure_future(body_of(resp)))
+        url = resp.request.url
+        if "batchexecute" in url:
+            task = asyncio.ensure_future(body_of(resp))
+            tasks.append(task)
+            found = _RPCIDS.search(url)
+            named.append((set(found.group(1).split(",")) if found else set(), task))
+            last[0] = waited[0]
+
+    def arrived() -> bool:
+        whole = set().union(*[rpcids for rpcids, task in named if task.done()])
+        return set(wants) <= whole and all(task.done() for task in tasks)
 
     session.page.on("response", on_response)
     try:
         await action()
-        await session.page.wait_for_timeout(int(settle * 1000))
+        if not wants:
+            await session.page.wait_for_timeout(int(settle * 1000))
+        while wants and waited[0] < settle * 1000:
+            if arrived() and waited[0] - last[0] >= QUIET_S * 1000:
+                break
+            await session.page.wait_for_timeout(STEP_MS)
+            waited[0] += STEP_MS
     finally:
         session.page.remove_listener("response", on_response)
     frames: Frames = {}
@@ -52,16 +86,18 @@ def one(frames: Frames, rpcid: str) -> Any:
     return frames[rpcid][0]
 
 
-async def grid(session: FlowSession, settle: float = 6.0) -> Frames:
-    return await capture(session, lambda: session.goto(MIGRATED_ROOT, ready=GRID_READY), settle=settle)
+async def grid(session: FlowSession, settle: float = 6.0, *, wants: tuple[str, ...] = ()) -> Frames:
+    return await capture(
+        session, lambda: session.goto(MIGRATED_ROOT, ready=GRID_READY), settle=settle, wants=wants
+    )
 
 
 async def projects(session: FlowSession) -> list[dict[str, Any]]:
-    return parsers.projects(one(await grid(session), "UpteDb"))
+    return parsers.projects(one(await grid(session, wants=("UpteDb",)), "UpteDb"))
 
 
 async def credits(session: FlowSession) -> dict[str, Any]:
-    info = parsers.credits(one(await grid(session), "nzlxg"))
+    info = parsers.credits(one(await grid(session, wants=("nzlxg",)), "nzlxg"))
     CREDITS_LOG.parent.mkdir(parents=True, exist_ok=True)
     with CREDITS_LOG.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"ts": time.time(), "balance": info["balance"]}) + "\n")
@@ -72,7 +108,10 @@ async def project(
     session: FlowSession, project_id: str, settle: float = 10.0, *, versions: bool = False
 ) -> dict[str, Any]:
     frames = await capture(
-        session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=settle
+        session,
+        lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY),
+        settle=settle,
+        wants=("Zzl0ze", "ngNC2", "yBhWQ"),
     )
     listing = one(frames, "Zzl0ze")
     out = {
@@ -87,7 +126,10 @@ async def project(
 
 async def records(session: FlowSession, project_id: str, settle: float = 8.0) -> list[dict[str, Any]]:
     frames = await capture(
-        session, lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY), settle=settle
+        session,
+        lambda: session.goto(session.project_url(project_id), ready=PROJECT_READY),
+        settle=settle,
+        wants=("Zzl0ze",),
     )
     return parsers.records(one(frames, "Zzl0ze"))
 

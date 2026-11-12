@@ -605,7 +605,7 @@ def test_an_orphaned_opening_row_does_not_block_the_same_job_from_running_again(
     async def fake_menu_item(session, button, item):
         return _Clickable()
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return {"uwAyfb": [[]]}
 
@@ -1528,7 +1528,7 @@ def test_editor_job_keeps_polling_past_the_scene_copy_until_its_own_record_is_do
     async def fake_menu_item(session, button, item):
         return _Clickable()
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return {"uwAyfb": [[]]}
 
@@ -1745,7 +1745,7 @@ def test_await_submit_stays_on_the_editor_until_a_request_goes_out(monkeypatch):
     calls = []
     replies = iter([{}, {}, {"uwAyfb": [[]]}])
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         calls.append(settle)
         await action()
         return next(replies)

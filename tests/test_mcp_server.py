@@ -1766,7 +1766,7 @@ def _offline_backend(monkeypatch, frames_for, out_dir=None):
     in tmp_path has to hand that tmp_path over as the out folder (review 2026-09-18)."""
     session = _OfflineSession()
 
-    async def fake_capture(s, action, *, settle):
+    async def fake_capture(s, action, *, settle, wants=()):
         await action()
         return frames_for(s.urls[-1])
 

@@ -54,7 +54,7 @@ class _Session:
 def _flow_answers(monkeypatch, *frames):
     queue = list(frames)
 
-    async def fake_capture(session, action, *, settle):
+    async def fake_capture(session, action, *, settle, wants=()):
         await action()
         return queue.pop(0)
 
