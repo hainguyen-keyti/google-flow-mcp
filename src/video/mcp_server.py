@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -24,6 +25,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen as gen_mod
 from video import outcome as outcome_mod
+from video import session as session_mod
 from video.flow import agent as agent_mod
 from video.flow import capabilities as capabilities_mod
 from video.flow import characters as characters_mod
@@ -310,27 +312,32 @@ class Backend:
         reach the agent: a retry swallows it (scene_download), and so does a step that must not fail
         (_agent_restore). A notice left standing is named either way (review of plan AL and its scoped re-reviews,
         2026-10-02)."""
+        if self._keeper is not None:
+            return await self._keeper.run(lambda session: self._call(session, fn))
         async with FlowSession(self.profile) as session:
-            try:
-                result = await fn(session)
-            except Exception as exc:
-                await session.notices_settled()
-                self._unreported += session.notices
-                self._noted(exc)
-                for left in session.unpressed:
-                    exc.add_note(left)
-                raise
-            except BaseException:
-                # A cancelled call answers nobody: what it pressed so far waits for the next answer.
-                self._unreported += session.notices
-                raise
+            return await self._call(session, fn)
+
+    async def _call(self, session: FlowSession, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
+        try:
+            result = await fn(session)
+        except Exception as exc:
             await session.notices_settled()
             self._unreported += session.notices
-            if isinstance(result, dict):
-                self._tell(result)
-                if session.unpressed:
-                    result["notices_left_standing"] = list(session.unpressed)
-            return result
+            self._noted(exc)
+            for left in session.unpressed:
+                exc.add_note(left)
+            raise
+        except BaseException:
+            # A cancelled call answers nobody: what it pressed so far waits for the next answer.
+            self._unreported += session.notices
+            raise
+        await session.notices_settled()
+        self._unreported += session.notices
+        if isinstance(result, dict):
+            self._tell(result)
+            if session.unpressed:
+                result["notices_left_standing"] = list(session.unpressed)
+        return result
 
     def _noted(self, failed: BaseException) -> None:
         """Name on an error the presses no answer has carried yet, and keep them for the answer that will."""
@@ -2597,4 +2604,5 @@ def run_stdio(profile: str = "default") -> None:
     global backend
     if profile != backend.profile:
         backend = Backend(profile=profile)
+    backend.keeping_browser()
     asyncio.run(server.run_stdio_async())

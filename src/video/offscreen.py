@@ -9,7 +9,8 @@ left the window may land on that monitor instead; that is unmeasured.
 
 gflow opens every browser with `launch_persistent_context` and hard-codes its flags (gflow_cli/api/client.py:516-520),
 so that one Playwright call is wrapped in the processes this repo runs, never by editing gflow. Set
-VIDEO_BROWSER_OFFSCREEN=0 to see the windows again.
+VIDEO_BROWSER_OFFSCREEN=0 to see the windows again. The same wrapper hands the keyboard focus back to the app that
+had it before the launch (plan AX).
 """
 
 from __future__ import annotations
@@ -60,6 +61,47 @@ async def push_aside(context: Any) -> None:
         return
 
 
+FOCUS_TIMEOUT_S = 3.0
+_FRONT = 'tell application "System Events" to get name of first application process whose frontmost is true'
+
+
+async def _osascript(script: str) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "osascript", "-e", script, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+    )
+    out, _ = await asyncio.wait_for(proc.communicate(), FOCUS_TIMEOUT_S)
+    return out.decode("utf-8", "replace").strip()
+
+
+async def front_app() -> str | None:
+    """The app holding the keyboard focus, on macOS; None anywhere else or when it cannot be read."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        return await _osascript(_FRONT) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def activate(app: str) -> None:
+    await _osascript(f'tell application "{app}" to activate')
+
+
+async def give_focus_back(before: str | None) -> None:
+    """Chrome takes the keyboard focus when it launches (measured 2026-11-12: "Claude" in front before, "Google
+    Chrome" after); hand it back to the app that had it. Never raises, and touches nothing when Chrome did not take
+    it, when nothing was in front, or when the owner was in Chrome already."""
+    try:
+        if not before or '"' in before:
+            return
+        now = await front_app()
+        if now and now != before:
+            await activate(before)
+            sys.stderr.write(f"[video] focus given back to {before}\n")
+    except Exception:  # noqa: BLE001
+        return
+
+
 def install() -> None:
     """Wrap Playwright's launch once per process; a no-op when switched off."""
     global _installed
@@ -68,9 +110,11 @@ def install() -> None:
     original = BrowserType.launch_persistent_context
 
     async def launch(self: Any, user_data_dir: Any, **kwargs: Any) -> Any:
+        before = await front_app() if headed(kwargs) else None
         context = await original(self, user_data_dir, **kwargs)
         if headed(kwargs):
             await push_aside(context)
+            await give_focus_back(before)
         return context
 
     BrowserType.launch_persistent_context = launch  # type: ignore[method-assign]

@@ -18,6 +18,21 @@ def _playwrights_own_launch(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_focus_scripting(monkeypatch):
+    """Plan AX: a launch asks macOS which app is in front and gives it the focus back; no test may script the owner's
+    desktop, so every test sees no app in front. Tests of that step replace these two themselves."""
+
+    async def nobody():
+        return None
+
+    async def nothing(app):
+        return None
+
+    monkeypatch.setattr(offscreen, "front_app", nobody, raising=False)
+    monkeypatch.setattr(offscreen, "activate", nothing, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_agent_mode_browser(monkeypatch):
     """Backend.generate turns Flow's Agent mode off in a real browser before gflow runs; no test may open one, so
     every test gets an Agent that was already off. Tests of that step call the real methods, kept on REAL_AGENT."""

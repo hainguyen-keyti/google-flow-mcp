@@ -538,3 +538,175 @@ def test_a_project_flow_answers_not_found_is_said_in_those_words(monkeypatch, tm
     with pytest.raises(LookupError, match="not found") as refused:
         asyncio.run(session.goto("https://flow.google.com/project/P", ready="flow-project-page"))
     assert "this account" in str(refused.value), refused.value
+
+
+# Plan AX: one browser kept between the calls of an MCP server, a fresh page per call.
+
+
+class _KeptFake:
+    """What BrowserKeeper drives: a session it opens once, begins and ends a call on, and closes."""
+
+    made: list = []
+
+    def __init__(self, profile):
+        self.profile = profile
+        self.log = []
+        self.fail_end = False
+        _KeptFake.made.append(self)
+
+    async def _open(self):
+        self.log.append("open")
+
+    async def _begin_call(self):
+        self.log.append("begin")
+
+    async def _end_call(self):
+        self.log.append("end")
+        if self.fail_end:
+            raise RuntimeError("page would not close")
+
+    async def _close(self):
+        self.log.append("close")
+
+
+@pytest.fixture
+def kept(tmp_path, monkeypatch):
+    from video import session as session_mod
+
+    _KeptFake.made = []
+    monkeypatch.setattr(session_mod, "WANT_DIR", tmp_path / "want")
+    keeper = session_mod.BrowserKeeper(
+        "p", idle_s=60.0, session_factory=_KeptFake, profile_dir=tmp_path / "p"
+    )
+    return session_mod, keeper
+
+
+def test_five_calls_open_one_browser_and_five_pages(kept):
+    session_mod, keeper = kept
+
+    async def go():
+        async def read(session):
+            return len(session.log)
+
+        for _ in range(5):
+            await keeper.run(read)
+        await keeper.close()
+
+    asyncio.run(go())
+
+    assert len(_KeptFake.made) == 1
+    assert _KeptFake.made[0].log == ["open", *["begin", "end"] * 5, "close"]
+
+
+def test_a_call_that_fails_closes_the_browser_and_the_next_opens_a_new_one(kept):
+    """I2: after an error the browser is in doubt, so it is not handed to the next call."""
+    session_mod, keeper = kept
+
+    async def go():
+        async def boom(session):
+            raise LookupError("Flow said no")
+
+        async def fine(session):
+            return "ok"
+
+        with pytest.raises(LookupError):
+            await keeper.run(boom)
+        assert await keeper.run(fine) == "ok"
+        await keeper.close()
+
+    asyncio.run(go())
+
+    assert [fake.log for fake in _KeptFake.made] == [
+        ["open", "begin", "close"],
+        ["open", "begin", "end", "close"],
+    ]
+
+
+def test_a_page_that_will_not_close_costs_the_browser_not_the_answer(kept):
+    session_mod, keeper = kept
+
+    async def go():
+        async def fine(session):
+            session.fail_end = True
+            return "ok"
+
+        assert await keeper.run(fine) == "ok"
+        assert keeper.open is False
+
+    asyncio.run(go())
+    assert _KeptFake.made[0].log == ["open", "begin", "end", "close"]
+
+
+def test_two_calls_never_share_the_browser_at_once(kept):
+    """I3: the guard that kept two sessions apart keeps two calls on one browser apart."""
+    session_mod, keeper = kept
+    inside = []
+
+    async def go():
+        async def slow(session):
+            inside.append("in")
+            assert inside.count("in") - inside.count("out") == 1, inside
+            await asyncio.sleep(0.05)
+            inside.append("out")
+
+        await asyncio.gather(keeper.run(slow), keeper.run(slow), keeper.run(slow))
+        await keeper.close()
+
+    asyncio.run(go())
+    assert inside == ["in", "out"] * 3
+
+
+def test_an_idle_browser_is_closed_and_the_guard_is_free_between_calls(kept, monkeypatch):
+    """I2: the lease goes back after the idle period, and nothing holds the guard while the browser idles."""
+    session_mod, keeper = kept
+    keeper.idle_s = 0.05
+    monkeypatch.setattr(session_mod, "WANT_POLL_S", 0.01)
+
+    async def go():
+        async def fine(session):
+            return "ok"
+
+        await keeper.run(fine)
+        assert session_mod._GUARD.acquire(blocking=False), "the guard is held while the browser idles"
+        session_mod._GUARD.release()
+        await asyncio.sleep(0.3)
+        assert keeper.open is False
+
+    asyncio.run(go())
+    assert _KeptFake.made[0].log == ["open", "begin", "end", "close"]
+
+
+def test_an_idle_browser_yields_at_once_when_another_process_wants_the_profile(kept, monkeypatch):
+    """Several MCP servers share one account: a kept browser would lock the others out for the whole idle period."""
+    session_mod, keeper = kept
+    monkeypatch.setattr(session_mod, "WANT_POLL_S", 0.01)
+
+    async def go():
+        async def fine(session):
+            return "ok"
+
+        await keeper.run(fine)
+        await asyncio.sleep(0.05)
+        assert keeper.open is True, "its own announcement must not close it"
+        session_mod.announce(keeper.profile_dir, pid=1)
+        await asyncio.sleep(0.2)
+        assert keeper.open is False
+
+    asyncio.run(go())
+
+
+def test_a_one_shot_session_closes_a_kept_browser_of_its_profile_first(kept, tmp_path):
+    """A second browser on one profile cannot launch: gen's balance read and the CLI open their own session."""
+    session_mod, keeper = kept
+
+    async def go():
+        async def fine(session):
+            return "ok"
+
+        await keeper.run(fine)
+        await session_mod.release_kept(tmp_path / "p")
+        assert keeper.open is False
+        await session_mod.release_kept(tmp_path / "other")
+
+    asyncio.run(go())
+    assert _KeptFake.made[0].log == ["open", "begin", "end", "close"]

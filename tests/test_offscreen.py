@@ -263,3 +263,71 @@ def test_the_next_test_sees_playwrights_own_launch_again():
     rest of the pytest run; tests/conftest.py puts the original back after every test."""
     assert BrowserType.launch_persistent_context.__qualname__ == "BrowserType.launch_persistent_context"
     assert offscreen._installed is False
+
+
+# Plan AX, measured 2026-11-12: a launch made Chrome the frontmost app ("Claude" before, "Google Chrome" after), and
+# `osascript -e 'tell application "<app>" to activate'` gave the focus back in 0.16 s.
+
+
+def _focus(monkeypatch, before, after, log, fail=False):
+    answers = [before, after]
+
+    async def front_app():
+        log.append("front?")
+        return answers.pop(0) if answers else after
+
+    async def activate(app):
+        log.append(("activate", app))
+        if fail:
+            raise OSError("osascript is not there")
+
+    monkeypatch.setattr(offscreen, "front_app", front_app)
+    monkeypatch.setattr(offscreen, "activate", activate)
+
+
+def test_the_app_that_was_in_front_gets_the_focus_back_after_a_launch(launch, monkeypatch):
+    log, _ = launch
+    _focus(monkeypatch, "Claude", "Google Chrome", log)
+    offscreen.install()
+
+    _launch(headless=False)
+
+    order = [entry if isinstance(entry, str) else entry[0] for entry in log]
+    assert order.index("front?") < order.index("launch") < order.index("activate"), log
+    assert ("activate", "Claude") in log
+    assert order.index("Browser.setWindowBounds") < order.index("activate"), (
+        "moved aside first, then the focus"
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [("Claude", "Claude"), (None, "Google Chrome"), ("Google Chrome", "Google Chrome")],
+    ids=["Chrome never took it", "nothing was in front", "the owner was in Chrome"],
+)
+def test_the_focus_is_left_alone_when_there_is_nothing_to_give_back(launch, monkeypatch, before, after):
+    log, _ = launch
+    _focus(monkeypatch, before, after, log)
+    offscreen.install()
+
+    _launch(headless=False)
+
+    assert not [entry for entry in log if entry[0] == "activate"], log
+
+
+def test_a_focus_that_cannot_be_given_back_never_breaks_the_launch(launch, monkeypatch):
+    log, _ = launch
+    _focus(monkeypatch, "Claude", "Google Chrome", log, fail=True)
+    offscreen.install()
+
+    assert _launch(headless=False) is not None
+
+
+def test_a_headless_launch_touches_no_focus(launch, monkeypatch):
+    log, _ = launch
+    _focus(monkeypatch, "Claude", "Google Chrome", log)
+    offscreen.install()
+
+    _launch(headless=True)
+
+    assert "front?" not in log, log

@@ -5,6 +5,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from gflow_cli.api.transports.migrated_composer import R2V_DURATION_S
@@ -4877,3 +4878,81 @@ def test_an_end_frame_at_exactly_ten_seconds_still_runs():
         media_ids=None,
         voices=None,
     )
+
+
+# Plan AX: the stdio server keeps one browser between calls; everything else opens one per call as before.
+
+
+def _kept_backend(monkeypatch, tmp_path, log):
+    from video import session as session_mod
+
+    class _Fake:
+        notices: ClassVar[list] = []
+        unpressed: ClassVar[list] = []
+
+        def __init__(self, profile):
+            log.append(f"made {profile}")
+
+        async def _open(self):
+            log.append("open")
+
+        async def _begin_call(self):
+            log.append("begin")
+
+        async def _end_call(self):
+            log.append("end")
+
+        async def _close(self):
+            log.append("close")
+
+        async def notices_settled(self):
+            return None
+
+    monkeypatch.setattr(session_mod, "WANT_DIR", tmp_path / "want")
+    monkeypatch.setattr(mcp_server, "FlowSession", _Fake)
+    monkeypatch.setattr(session_mod, "profile_dir_for", lambda profile: tmp_path / profile)
+    return mcp_server.Backend(profile="acc", out_dir=tmp_path).keeping_browser()
+
+
+def test_a_backend_that_keeps_its_browser_opens_it_once_for_many_calls(monkeypatch, tmp_path):
+    log = []
+    backend = _kept_backend(monkeypatch, tmp_path, log)
+
+    async def go():
+        async def read(session):
+            return {"balance": 5}
+
+        first = await backend._with(read)
+        second = await backend._with(read)
+        await backend.close()
+        return first, second
+
+    first, second = asyncio.run(go())
+
+    assert first == second == {"balance": 5}
+    assert log == ["made acc", "open", "begin", "end", "begin", "end", "close"]
+
+
+def test_the_keep_switch_gives_back_a_browser_per_call(monkeypatch, tmp_path):
+    log = []
+    monkeypatch.setenv("VIDEO_KEEP_BROWSER", "0")
+    backend = _kept_backend(monkeypatch, tmp_path, log)
+    assert backend._keeper is None
+
+
+def test_a_backend_made_without_asking_keeps_nothing():
+    assert mcp_server.Backend()._keeper is None
+
+
+def test_the_stdio_server_is_the_one_that_keeps_its_browser(monkeypatch):
+    ran = []
+    monkeypatch.setattr(mcp_server.server, "run_stdio_async", lambda: ran.append("serve") or _nothing())
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+
+    mcp_server.run_stdio("default")
+
+    assert ran == ["serve"] and mcp_server.backend._keeper is not None
+
+
+async def _nothing():
+    return None
