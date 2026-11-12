@@ -294,6 +294,18 @@ def _job_refused(job_id: str | None, seen: str) -> str:
     )
 
 
+_TRANSIENT_WORDS = ("not observed", "has been closed", "Target closed", "Target page, context or browser")
+
+
+def _transient(exc: BaseException) -> bool:
+    """A failure a second try can get past: a Playwright timeout, a reply the page never sent, a closed browser."""
+    if isinstance(exc, PlaywrightTimeoutError):
+        return True
+    return isinstance(exc, (LookupError, PlaywrightError)) and any(
+        word in str(exc) for word in _TRANSIENT_WORDS
+    )
+
+
 class Backend:
     def __init__(self, profile: str = "default", out_dir: Path = Path("out")) -> None:
         self.profile = profile
@@ -303,6 +315,20 @@ class Backend:
         # What each job_submit call still in its session asked for: it has no ledger row until it clicks.
         self._submitting: list[tuple[str, str, str]] = []
         self._unreported: list[str] = []
+
+    # The stdio server keeps one browser between its calls (plan AX); a Backend made any other way opens one per call.
+    _keeper: session_mod.BrowserKeeper | None = None
+
+    def keeping_browser(self) -> Backend:
+        if os.environ.get(session_mod.KEEP_ENV, "1") != "0":
+            self._keeper = session_mod.BrowserKeeper(
+                self.profile, session_factory=lambda profile: FlowSession(profile)
+            )
+        return self
+
+    async def close(self) -> None:
+        if self._keeper is not None:
+            await self._keeper.close()
 
     async def _with(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
         """Run one call in its own session and say what the session did to Flow's cookie notice.
