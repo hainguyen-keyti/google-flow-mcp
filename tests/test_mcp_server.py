@@ -4956,3 +4956,79 @@ def test_the_stdio_server_is_the_one_that_keeps_its_browser(monkeypatch):
 
 async def _nothing():
     return None
+
+
+# Plan AX, I5: a $0 read that fails on a transient error is tried once more by the server; nothing else is.
+
+
+def _flaky_backend(monkeypatch, tmp_path, failures):
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    errors = {
+        "timeout": PlaywrightTimeoutError("Page.goto: Timeout 60000ms exceeded."),
+        "unheard": LookupError("rpc nzlxg not observed; saw ['UpteDb']"),
+        "not found": LookupError("Flow says this was not found: the project is not on this account"),
+        "bug": KeyError("media"),
+    }
+    backend = mcp_server.Backend(out_dir=tmp_path)
+    calls = []
+    left = list(failures)
+
+    async def fake_with(fn):
+        calls.append(fn)
+        if left:
+            raise errors[left.pop(0)]
+        return {"balance": 7}
+
+    monkeypatch.setattr(backend, "_with", fake_with)
+    return backend, calls
+
+
+@pytest.mark.parametrize("failure", ["timeout", "unheard"])
+def test_a_read_that_fails_once_on_a_transient_error_is_answered_on_the_second_try(
+    monkeypatch, tmp_path, failure
+):
+    backend, calls = _flaky_backend(monkeypatch, tmp_path, [failure])
+
+    answer = asyncio.run(backend.credits())
+
+    assert answer == {"balance": 7, "retried": 1} and len(calls) == 2
+
+
+def test_a_read_that_fails_twice_fails_with_the_second_error(monkeypatch, tmp_path):
+    backend, calls = _flaky_backend(monkeypatch, tmp_path, ["timeout", "unheard"])
+
+    with pytest.raises(LookupError, match="not observed"):
+        asyncio.run(backend.credits())
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("failure", ["not found", "bug"])
+def test_a_read_that_fails_for_good_is_not_tried_again(monkeypatch, tmp_path, failure):
+    backend, calls = _flaky_backend(monkeypatch, tmp_path, [failure])
+
+    with pytest.raises(LookupError):
+        asyncio.run(backend.credits())
+    assert len(calls) == 1
+
+
+def test_a_read_that_answers_at_once_says_nothing_of_a_retry(monkeypatch, tmp_path):
+    backend, calls = _flaky_backend(monkeypatch, tmp_path, [])
+
+    assert asyncio.run(backend.credits()) == {"balance": 7} and len(calls) == 1
+
+
+def test_only_the_free_reads_are_ever_retried():
+    """I5, read off the source: the retrying call is used by the read methods named here and by nothing that spends
+    or changes Flow."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(mcp_server.Backend).lstrip())
+    users = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef)
+        and any(isinstance(n, ast.Attribute) and n.attr == "_read" for n in ast.walk(node))
+    }
+    assert users == {"lane", "projects", "credits", "media", "characters"}, users

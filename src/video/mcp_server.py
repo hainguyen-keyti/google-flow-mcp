@@ -21,6 +21,7 @@ from gflow_cli.data.redaction import redact_error_detail
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, TextContent
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from video import gen as gen_mod
@@ -560,14 +561,27 @@ class Backend:
             return None
         return self._came_to(rows)
 
+    async def _read(self, fn: Callable[[FlowSession], Awaitable[Any]]) -> Any:
+        """A $0 read, tried once more when it failed on something that passes: a timeout, a reply not heard, a
+        browser that closed under it. Never used by a call that spends or changes Flow (plan AX, I5)."""
+        try:
+            return await self._with(fn)
+        except Exception as exc:
+            if not _transient(exc):
+                raise
+        result = await self._with(fn)
+        if isinstance(result, dict):
+            result["retried"] = 1
+        return result
+
     async def lane(self) -> dict[str, Any]:
-        return await self._with(lane_mod.run)
+        return await self._read(lane_mod.run)
 
     async def projects(self) -> list[dict[str, Any]]:
-        return await self._with(reader.projects)
+        return await self._read(reader.projects)
 
     async def credits(self) -> dict[str, Any]:
-        return await self._with(reader.credits)
+        return await self._read(reader.credits)
 
     async def capabilities(self) -> dict[str, Any]:
         # No session: the answer is the repo's own measured table, the one the tools refuse and charge by.
@@ -589,11 +603,11 @@ class Backend:
         # media id is invisible there; `versions` is the only view that shows every version.
         # A filter that cannot be honoured is refused before a browser opens, never quietly ignored.
         _check_media_filters(kind, since, limit)
-        listing = await self._with(lambda s: reader.project(s, project_id, versions=all_versions))
+        listing = await self._read(lambda s: reader.project(s, project_id, versions=all_versions))
         return media_filters(listing, kind, since, limit, brief)
 
     async def characters(self, project_id: str) -> list[dict[str, Any]]:
-        return await self._with(lambda s: characters_mod.list_characters(s, project_id))
+        return await self._read(lambda s: characters_mod.list_characters(s, project_id))
 
     async def voices(self, project_id: str, entity_id: str) -> list[dict[str, str]]:
         return await self._with(lambda s: characters_mod.list_voices(s, project_id, entity_id))
