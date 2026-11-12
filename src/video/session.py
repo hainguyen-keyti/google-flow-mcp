@@ -34,6 +34,8 @@ KEEP_ENV = "VIDEO_KEEP_BROWSER"
 IDLE_S = 120.0
 WANT_POLL_S = 1.0
 WANT_WAIT_S = 30.0
+# Above the 180 s a process waits for the lease: an older announcement is nobody's.
+WANT_MAX_AGE_S = 200.0
 WANT_DIR = Path(tempfile.gettempdir()) / "video-keeper"
 BACKGROUND_PAGE_MS = 5_000
 PAGE_CLOSE_TIMEOUT_S = 10.0
@@ -236,6 +238,8 @@ def withdraw(profile_dir: Path, pid: int | None = None) -> None:
 
 
 def _alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -246,18 +250,19 @@ def _alive(pid: int) -> bool:
 
 
 def _wants_of_others(profile_dir: Path) -> list[Path]:
-    """The announcements of other live processes; one left by a process that died is removed."""
+    """The announcements of other live processes. One left by a process that died, or older than any process waits
+    for the lease (its pid may have been reused), is removed; never raises, since the idle watch runs on it."""
     found = []
     try:
         for file in WANT_DIR.glob(f"{Path(profile_dir).name}.*.want"):
             pid = file.name.split(".")[-2]
             if not pid.isdigit() or int(pid) == os.getpid():
                 continue
-            if _alive(int(pid)):
+            if _alive(int(pid)) and time.time() - file.stat().st_mtime <= WANT_MAX_AGE_S:
                 found.append(file)
             else:
                 file.unlink(missing_ok=True)
-    except OSError:
+    except Exception:  # noqa: BLE001
         return found
     return found
 

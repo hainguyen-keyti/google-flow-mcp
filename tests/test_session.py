@@ -978,3 +978,28 @@ def test_a_one_shot_session_closes_the_kept_browser_itself_when_it_opens(kept, t
 
     asyncio.run(go())
     assert _KeptFake.made[0].log[-1] == "close" and log[0] == "launch"
+
+
+def test_a_want_older_than_any_lease_wait_is_treated_as_dead(kept):
+    """Last scoped pass of plan AX, N-1: a pid reused by an unrelated process kept its want alive for good, and every
+    call then relaunched after waiting. A process waits at most 180 s for the lease, so an older want is nobody's."""
+    import os
+
+    session_mod, keeper = kept
+    session_mod.announce(keeper.profile_dir, pid=1)
+    file = session_mod._want_file(keeper.profile_dir, 1)
+    old = file.stat().st_mtime - session_mod.WANT_MAX_AGE_S - 5
+    os.utime(file, (old, old))
+
+    assert session_mod._wanted_by_another(keeper.profile_dir) is False
+    assert not file.exists()
+
+
+@pytest.mark.parametrize("name", ["p.99999999999999999999.want", "p.0.want", "p.x.want"])
+def test_a_want_file_with_no_usable_pid_never_breaks_the_watch(kept, name):
+    """N-2: an absurd pid raised OverflowError inside the idle watch, which then died and kept the browser."""
+    session_mod, keeper = kept
+    session_mod.WANT_DIR.mkdir(parents=True, exist_ok=True)
+    (session_mod.WANT_DIR / name).touch()
+
+    assert session_mod._wanted_by_another(keeper.profile_dir) is False
