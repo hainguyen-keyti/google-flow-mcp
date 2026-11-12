@@ -213,21 +213,24 @@ async def _take_guard() -> None:
         await asyncio.sleep(_GUARD_POLL_S)
 
 
-def _want_file(profile_dir: Path) -> Path:
-    return WANT_DIR / f"{Path(profile_dir).name}.want"
+def _want_file(profile_dir: Path, pid: int) -> Path:
+    return WANT_DIR / f"{Path(profile_dir).name}.{pid}.want"
 
 
 def announce(profile_dir: Path, pid: int | None = None) -> None:
-    """Say this process is about to launch on the profile, so a browser another process keeps idle on it yields."""
+    """Say this process is about to launch on the profile, so a browser another process keeps idle on it yields.
+    One file per process: an announcement never overwrites another's (review of plan AX, B3)."""
     with contextlib.suppress(OSError):
         WANT_DIR.mkdir(parents=True, exist_ok=True)
-        _want_file(profile_dir).write_text(str(os.getpid() if pid is None else pid), encoding="utf-8")
+        _want_file(profile_dir, os.getpid() if pid is None else pid).touch()
 
 
 def _wanted_by_another(profile_dir: Path, since: float) -> bool:
+    """Whether another process announced after `since`, the moment this process's browser opened."""
     try:
-        file = _want_file(profile_dir)
-        return file.stat().st_mtime > since and file.read_text(encoding="utf-8").strip() != str(os.getpid())
+        own = _want_file(profile_dir, os.getpid())
+        files = WANT_DIR.glob(f"{Path(profile_dir).name}.*.want")
+        return any(file != own and file.stat().st_mtime > since for file in files)
     except OSError:
         return False
 
@@ -274,7 +277,7 @@ class BrowserKeeper:
         self._session: Any = None
         self._watch: asyncio.Task[None] | None = None
         self._used = 0.0
-        self._used_wall = 0.0
+        self._opened_wall = 0.0
 
     @property
     def profile_dir(self) -> Path:
@@ -290,6 +293,31 @@ class BrowserKeeper:
         await _take_guard()
         try:
             self._stop_watch()
+            session = await self._begun()
+            try:
+                result = await fn(session)
+            except BaseException:
+                # The browser is in doubt after any failure: it is never handed to the next call.
+                await self._drop_quietly()
+                raise
+            try:
+                await session._end_call()
+            except BaseException as exc:
+                # A cancel landing here must give the browser back too (review of plan AX, B2).
+                await self._drop_quietly()
+                if not isinstance(exc, Exception):
+                    raise
+            else:
+                self._used = time.monotonic()
+                self._watch = asyncio.ensure_future(self._idle())
+            return result
+        finally:
+            _GUARD.release()
+
+    async def _begun(self) -> Any:
+        """The kept session with a fresh page for this call, opened when there is none. A kept browser that died
+        between calls (the owner quit Chrome, a crash) is opened again once: nothing of the call has run yet."""
+        for fresh in (False, True):
             if self._session is None:
                 announce(self.profile_dir)
                 session = self._factory(self.profile)
@@ -298,26 +326,25 @@ class BrowserKeeper:
                 except BaseException:
                     await session._close()
                     raise
-                self._session = session
+                self._session, self._opened_wall, fresh = session, time.time(), True
                 _KEPT[str(self.profile_dir)] = self
             session = self._session
             try:
                 await session._begin_call()
-                result = await fn(session)
-            except BaseException:
-                # The browser is in doubt after any failure: it is never handed to the next call.
-                await self._drop()
-                raise
-            try:
-                await session._end_call()
-            except Exception:  # noqa: BLE001
-                await self._drop()
-            else:
-                self._used, self._used_wall = time.monotonic(), time.time()
-                self._watch = asyncio.ensure_future(self._idle())
-            return result
-        finally:
-            _GUARD.release()
+            except BaseException as exc:
+                await self._drop_quietly()
+                if fresh or not isinstance(exc, Exception):
+                    raise
+                continue
+            return session
+        raise RuntimeError("unreachable")
+
+    async def _drop_quietly(self) -> None:
+        """Close the browser without letting a close error stand in for the call's own (it can say charged=yes)."""
+        try:
+            await self._drop()
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("closing the kept browser failed (%s)", type(exc).__name__)
 
     async def close(self) -> None:
         await _take_guard()
@@ -343,7 +370,7 @@ class BrowserKeeper:
         while self._session is not None:
             await asyncio.sleep(WANT_POLL_S)
             idle = time.monotonic() - self._used >= self.idle_s
-            if not idle and not _wanted_by_another(self.profile_dir, self._used_wall):
+            if not idle and not _wanted_by_another(self.profile_dir, self._opened_wall):
                 continue
             if not _GUARD.acquire(blocking=False):
                 continue

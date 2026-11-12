@@ -69,7 +69,13 @@ async def _osascript(script: str) -> str:
     proc = await asyncio.create_subprocess_exec(
         "osascript", "-e", script, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
     )
-    out, _ = await asyncio.wait_for(proc.communicate(), FOCUS_TIMEOUT_S)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), FOCUS_TIMEOUT_S)
+    except BaseException:
+        # A script left behind a permission prompt would pile up, one per launch.
+        with contextlib.suppress(Exception):
+            proc.kill()
+        raise
     return out.decode("utf-8", "replace").strip()
 
 
@@ -90,12 +96,13 @@ async def activate(app: str) -> None:
 async def give_focus_back(before: str | None) -> None:
     """Chrome takes the keyboard focus when it launches (measured 2026-11-12: "Claude" in front before, "Google
     Chrome" after); hand it back to the app that had it. Never raises, and touches nothing when Chrome did not take
-    it, when nothing was in front, or when the owner was in Chrome already."""
+    it, when nothing was in front, when the owner was in Chrome already, or when another app is in front by now."""
     try:
         if not before or '"' in before:
             return
         now = await front_app()
-        if now and now != before:
+        # Only from Chrome: an owner who moved to another app during the launch keeps it.
+        if now and now != before and "Chrom" in now:
             await activate(before)
             sys.stderr.write(f"[video] focus given back to {before}\n")
     except Exception:  # noqa: BLE001

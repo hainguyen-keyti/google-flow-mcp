@@ -4949,9 +4949,36 @@ def test_the_stdio_server_is_the_one_that_keeps_its_browser(monkeypatch):
     monkeypatch.setattr(mcp_server.server, "run_stdio_async", lambda: ran.append("serve") or _nothing())
     monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
 
+    closed = []
+
+    async def close(self):
+        closed.append("close")
+
+    monkeypatch.setattr(mcp_server.Backend, "close", close)
+
     mcp_server.run_stdio("default")
 
     assert ran == ["serve"] and mcp_server.backend._keeper is not None
+    # Review of plan AX, N3: the kept browser is closed when the server stops, inside the loop that owns it.
+    assert closed == ["close"]
+
+
+def test_the_stdio_server_closes_its_browser_when_serving_fails(monkeypatch):
+    async def broken():
+        raise RuntimeError("stdin closed")
+
+    closed = []
+
+    async def close(self):
+        closed.append("close")
+
+    monkeypatch.setattr(mcp_server.server, "run_stdio_async", broken)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend())
+    monkeypatch.setattr(mcp_server.Backend, "close", close)
+
+    with pytest.raises(RuntimeError, match="stdin closed"):
+        mcp_server.run_stdio("default")
+    assert closed == ["close"]
 
 
 async def _nothing():

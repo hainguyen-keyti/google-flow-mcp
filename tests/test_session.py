@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import threading
+from typing import ClassVar
 
 import pytest
 from gflow_cli.errors import ProfileLockedError
@@ -546,7 +547,7 @@ def test_a_project_flow_answers_not_found_is_said_in_those_words(monkeypatch, tm
 class _KeptFake:
     """What BrowserKeeper drives: a session it opens once, begins and ends a call on, and closes."""
 
-    made: list = []
+    made: ClassVar[list] = []
 
     def __init__(self, profile):
         self.profile = profile
@@ -582,7 +583,7 @@ def kept(tmp_path, monkeypatch):
 
 
 def test_five_calls_open_one_browser_and_five_pages(kept):
-    session_mod, keeper = kept
+    _, keeper = kept
 
     async def go():
         async def read(session):
@@ -600,7 +601,7 @@ def test_five_calls_open_one_browser_and_five_pages(kept):
 
 def test_a_call_that_fails_closes_the_browser_and_the_next_opens_a_new_one(kept):
     """I2: after an error the browser is in doubt, so it is not handed to the next call."""
-    session_mod, keeper = kept
+    _, keeper = kept
 
     async def go():
         async def boom(session):
@@ -623,7 +624,7 @@ def test_a_call_that_fails_closes_the_browser_and_the_next_opens_a_new_one(kept)
 
 
 def test_a_page_that_will_not_close_costs_the_browser_not_the_answer(kept):
-    session_mod, keeper = kept
+    _, keeper = kept
 
     async def go():
         async def fine(session):
@@ -639,7 +640,7 @@ def test_a_page_that_will_not_close_costs_the_browser_not_the_answer(kept):
 
 def test_two_calls_never_share_the_browser_at_once(kept):
     """I3: the guard that kept two sessions apart keeps two calls on one browser apart."""
-    session_mod, keeper = kept
+    _, keeper = kept
     inside = []
 
     async def go():
@@ -710,3 +711,204 @@ def test_a_one_shot_session_closes_a_kept_browser_of_its_profile_first(kept, tmp
 
     asyncio.run(go())
     assert _KeptFake.made[0].log == ["open", "begin", "end", "close"]
+
+
+# Tier 1 review of plan AX.
+
+
+def test_a_call_cancelled_while_its_page_closes_gives_the_browser_back(kept):
+    """B2: a cancel landing in _end_call skipped the drop and the idle watch, so the browser and its lease stayed."""
+    session_mod, keeper = kept
+
+    async def go():
+        async def fine(session):
+            async def cancelled():
+                raise asyncio.CancelledError
+
+            session._end_call = cancelled
+            return "ok"
+
+        with pytest.raises(asyncio.CancelledError):
+            await keeper.run(fine)
+        assert keeper.open is False
+        assert session_mod._GUARD.acquire(blocking=False)
+        session_mod._GUARD.release()
+
+    asyncio.run(go())
+    assert _KeptFake.made[0].log[-1] == "close"
+
+
+def test_a_want_announced_while_a_call_ran_is_honoured_when_the_call_ends(kept, monkeypatch):
+    """B3: the want was compared with the END of the last call, so one announced during it was never seen."""
+    session_mod, keeper = kept
+    monkeypatch.setattr(session_mod, "WANT_POLL_S", 0.01)
+
+    async def go():
+        async def slow(session):
+            session_mod.announce(keeper.profile_dir, pid=1)
+            await asyncio.sleep(0.05)
+            return "ok"
+
+        await keeper.run(slow)
+        await asyncio.sleep(0.2)
+        assert keeper.open is False
+
+    asyncio.run(go())
+
+
+def test_a_want_of_another_process_is_not_lost_when_this_one_announces(kept, monkeypatch):
+    session_mod, keeper = kept
+
+    session_mod.announce(keeper.profile_dir, pid=1)
+    session_mod.announce(keeper.profile_dir)
+
+    assert session_mod._wanted_by_another(keeper.profile_dir, 0.0)
+
+
+def test_a_want_from_before_this_browser_opened_is_not_a_reason_to_close_it(kept, monkeypatch):
+    session_mod, keeper = kept
+    monkeypatch.setattr(session_mod, "WANT_POLL_S", 0.01)
+    session_mod.announce(keeper.profile_dir, pid=1)
+
+    async def go():
+        await asyncio.sleep(0.05)
+
+        async def fine(session):
+            return "ok"
+
+        await keeper.run(fine)
+        await asyncio.sleep(0.1)
+        assert keeper.open is True
+        await keeper.close()
+
+    asyncio.run(go())
+
+
+def test_a_browser_that_will_not_close_never_replaces_the_calls_own_error(kept):
+    """N1: the call's error can carry `charged=yes`; a close error must not stand in for it."""
+    _, keeper = kept
+
+    async def go():
+        async def boom(session):
+            async def broken():
+                raise RuntimeError("the client exit failed")
+
+            session._close = broken
+            raise LookupError("outcome code=CHARGED_NO_OUTPUT charged=yes")
+
+        with pytest.raises(LookupError, match="charged=yes"):
+            await keeper.run(boom)
+        assert keeper.open is False
+
+    asyncio.run(go())
+
+
+def test_a_kept_browser_that_died_between_calls_is_opened_again_before_the_call_runs(kept):
+    """N2: the owner quit Chrome, or it crashed. Nothing of the call has run yet, so a fresh browser is safe."""
+    _, keeper = kept
+    ran = []
+
+    async def go():
+        async def fine(session):
+            ran.append(session)
+            return "ok"
+
+        await keeper.run(fine)
+
+        async def dead():
+            raise RuntimeError("Target page, context or browser has been closed")
+
+        _KeptFake.made[0]._begin_call = dead
+        assert await keeper.run(fine) == "ok"
+        await keeper.close()
+
+    asyncio.run(go())
+    assert len(_KeptFake.made) == 2 and ran == _KeptFake.made
+    assert _KeptFake.made[0].log[-1] == "close"
+
+
+class _RealPage:
+    def __init__(self, log, name):
+        self.log, self.name = log, name
+
+    async def close(self):
+        self.log.append(f"close {self.name}")
+
+    async def add_locator_handler(self, *args, **kwargs):
+        return None
+
+    def locator(self, selector):
+        return selector
+
+
+class _RealClient:
+    def __init__(self, log):
+        self.log = log
+        made = iter(range(1, 99))
+        client = self
+
+        class _Context:
+            async def new_page(self):
+                page = _RealPage(log, f"page-{next(made)}")
+                log.append(f"new {page.name}")
+                return page
+
+        self._context = _Context()
+        del client
+
+    async def __aenter__(self):
+        self.log.append("launch")
+
+    async def __aexit__(self, *exc):
+        self.log.append("exit")
+
+
+def test_each_call_of_a_real_session_gets_its_own_page_and_its_own_notices(tmp_path, monkeypatch):
+    """Review gaps M1 and M11: the keeper tests drive a fake, so the real begin and end of a call are held here."""
+    from video import session as session_mod
+
+    log = []
+    monkeypatch.setattr(session_mod.offscreen, "install", lambda: None)
+    monkeypatch.setattr(session_mod.bodies, "install", lambda: None)
+    monkeypatch.setattr(session_mod.extensions, "install", lambda: None)
+    session = FlowSession("p", profile_dir=tmp_path, client_factory=lambda *a, **k: _RealClient(log))
+
+    async def go():
+        await session._open()
+        await session._begin_call()
+        first = session.page
+        session.notices.append("pressed in call one")
+        session.unpressed.append("left in call one")
+        await session._end_call()
+        assert session.page is None
+        await session._begin_call()
+        assert session.page is not first
+        assert session.notices == [] and session.unpressed == []
+        await session._end_call()
+        await session._close()
+
+    asyncio.run(go())
+    assert log == ["launch", "new page-1", "close page-1", "new page-2", "close page-2", "exit"]
+
+
+def test_a_one_shot_session_closes_the_kept_browser_itself_when_it_opens(kept, tmp_path, monkeypatch):
+    """Review gap M5: the one-shot session's own __aenter__ is what closes it; release_kept alone was tested."""
+    session_mod, keeper = kept
+    log = []
+    monkeypatch.setattr(session_mod.offscreen, "install", lambda: None)
+    monkeypatch.setattr(session_mod.bodies, "install", lambda: None)
+    monkeypatch.setattr(session_mod.extensions, "install", lambda: None)
+
+    async def go():
+        async def fine(session):
+            return "ok"
+
+        await keeper.run(fine)
+        one_shot = FlowSession(
+            "p", profile_dir=tmp_path / "p", client_factory=lambda *a, **k: _RealClient(log)
+        )
+        async with one_shot:
+            assert keeper.open is False
+
+    asyncio.run(go())
+    assert _KeptFake.made[0].log[-1] == "close" and log[0] == "launch"

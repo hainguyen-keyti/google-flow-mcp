@@ -331,3 +331,36 @@ def test_a_headless_launch_touches_no_focus(launch, monkeypatch):
     _launch(headless=True)
 
     assert "front?" not in log, log
+
+
+def test_the_focus_is_not_taken_from_an_app_the_owner_moved_to_during_the_launch(launch, monkeypatch):
+    """Review of plan AX, N5: a launch takes about 8 s; the owner who switched to a third app keeps it."""
+    log, _ = launch
+    _focus(monkeypatch, "Claude", "Notes", log)
+    offscreen.install()
+
+    _launch(headless=False)
+
+    assert not [entry for entry in log if entry[0] == "activate"], log
+
+
+def test_a_focus_script_that_hangs_is_killed_at_its_bound(monkeypatch):
+    """Review of plan AX, N5: a script left running (behind a permission prompt) piled up, one per launch."""
+    killed = []
+
+    class _Proc:
+        async def communicate(self):
+            await asyncio.sleep(60)
+
+        def kill(self):
+            killed.append("kill")
+
+    async def spawn(*args, **kwargs):
+        return _Proc()
+
+    monkeypatch.setattr(offscreen.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(offscreen, "FOCUS_TIMEOUT_S", 0.05)
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(offscreen._osascript("anything"))
+    assert killed == ["kill"]

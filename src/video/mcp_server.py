@@ -1285,7 +1285,8 @@ server = TellingServer(
         "2 min idle, so the first call after a pause pays about 8 s to open it: measured 2026-11-12, a balance read "
         "took 11 s then 2-3 s, a project's media 4-5 s; a change takes up to about 50 s, a generation 2-5 min, "
         "clip_extend and clip_edit up to about 7 min, so a slow call is not a failed one. A free read that failed on "
-        "a timeout is tried once more by the server and then says retried: 1; a paid call is never run twice. To "
+        "a timeout is tried once more by the server (an object answer then says retried: 1); a paid call is never run "
+        "twice. To "
         "start a video "
         "without waiting for its render, job_submit runs gen_video's own guards and click and answers once the "
         "request has left (153 s measured, the balance already charged); job_status then says where the job stands "
@@ -2649,4 +2650,13 @@ def run_stdio(profile: str = "default") -> None:
     if profile != backend.profile:
         backend = Backend(profile=profile)
     backend.keeping_browser()
-    asyncio.run(server.run_stdio_async())
+
+    async def serve() -> None:
+        try:
+            await server.run_stdio_async()
+        finally:
+            # In the loop that owns the kept browser: left to the process's death, Chrome could outlive the server
+            # and hold the profile against the next one (review of plan AX, N3).
+            await backend.close()
+
+    asyncio.run(serve())
