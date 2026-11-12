@@ -4263,12 +4263,13 @@ def test_job_submit_hands_the_driver_what_gen_video_hands_it(monkeypatch, tmp_pa
         | {"end_frame": "E"},
         {"model": "veo-lite", "media_ids": ["M"], "characters": ["E"], "voices": ["Achird"]},
         {"out_dir": str(tmp_path / "films")},
+        {"draft": True, "duration": 4},
         {},
     ]
     schema = served_tool_objects()["job_submit"].input_schema["properties"]
     named = {key for options in option_sets for key in options}
-    # retry_of needs a refused job on record and has its own test below.
-    unexercised = {"project", "prompt", "job_id", "max_credits", "retry_of"}
+    # retry_of needs a refused job on record, final_of a finished draft: each has its own tests.
+    unexercised = {"project", "prompt", "job_id", "max_credits", "retry_of", "final_of"}
     assert set(schema) - named == unexercised, "an option no set exercises"
 
     for index, options in enumerate(option_sets):
@@ -5059,3 +5060,145 @@ def test_only_the_free_reads_are_ever_retried():
         and any(isinstance(n, ast.Attribute) and n.attr == "_read" for n in ast.walk(node))
     }
     assert users == {"lane", "projects", "credits", "media", "characters"}, users
+
+
+# Plan AY: draft at 360p, finish at 720p. The owner watched a 360p clip's free upscale beside native 720p on
+# 2026-11-12 and kept it for drafts only.
+
+DONE_ROWS = [
+    ("submitted", {"kind": "video", "project": "P", "prompt": "a cup on a table", "credits_before": 100}),
+    ("done", {"spent": 8, "credits_before": 100, "credits_after": 92}),
+]
+SHOT = {"project": "P", "prompt": "a cup on a table", "max_credits": 30}
+
+
+def _shots(tmp_path):
+    return gen.Ledger(tmp_path / "shots.jsonl").rows()
+
+
+@pytest.mark.parametrize("tool", ["gen_video", "job_submit"])
+def test_a_draft_reaches_the_driver_at_360p_and_leaves_its_request_behind(monkeypatch, tmp_path, tool):
+    rows = DONE_ROWS if tool == "gen_video" else [DONE_ROWS[0], STARTED]
+    reached = _video_world(
+        monkeypatch, tmp_path, rows, answer=STARTED_ANSWER if tool == "job_submit" else None
+    )
+
+    result = _call(tool, {**SHOT, "job_id": "d-1", "draft": True, "duration": 6, "start_frame": "M1"})
+
+    assert not result.is_error, _texts([result])
+    assert reached[0]["resolution"] == "360p" and reached[0]["duration"] == 6
+    assert _payload(result)["draft"] is True
+    (row,) = _shots(tmp_path)
+    assert (row["job_id"], row["status"], row["project"], row["prompt"]) == (
+        "d-1",
+        "draft",
+        "P",
+        "a cup on a table",
+    )
+    assert row["request"]["duration"] == 6 and row["request"]["start_frame"] == "M1"
+    assert row["request"]["resolution"] == "360p"
+
+
+@pytest.mark.parametrize(
+    ("change", "says"),
+    [
+        ({"resolution": "720p"}, "a draft is 360p"),
+        ({"model": "veo-lite"}, "no resolution to draft at"),
+        ({"final_of": "d-0"}, "either draft or final_of"),
+    ],
+    ids=["another resolution", "a model with one resolution", "a draft that is also a final"],
+)
+def test_a_draft_that_cannot_be_one_is_refused_before_a_browser(monkeypatch, tmp_path, change, says):
+    reached = _video_world(monkeypatch, tmp_path, DONE_ROWS)
+
+    result = _call("gen_video", {**SHOT, "job_id": "d-2", "draft": True, **change})
+
+    assert result.is_error and says in _texts([result])[0], _texts([result])
+    assert reached == [] and _shots(tmp_path) == []
+
+
+def test_a_draft_that_failed_leaves_no_request_to_finish(monkeypatch, tmp_path):
+    reached = _video_world(monkeypatch, tmp_path, [DONE_ROWS[0]], fails=RuntimeError("Flow dropped it"))
+
+    result = _call("gen_video", {**SHOT, "job_id": "d-3", "draft": True})
+
+    assert result.is_error and len(reached) == 1 and _shots(tmp_path) == []
+
+
+def test_a_dry_run_of_a_draft_quotes_360p_and_leaves_nothing(monkeypatch, tmp_path):
+    reached = _video_world(monkeypatch, tmp_path, [])
+
+    result = _call(
+        "gen_video", {"project": "P", "prompt": "a cup on a table", "draft": True, "dry_run": True}
+    )
+
+    assert not result.is_error, _texts([result])
+    assert reached[0]["resolution"] == "360p" and _shots(tmp_path) == []
+
+
+def _a_draft(monkeypatch, tmp_path, **request):
+    _video_world(monkeypatch, tmp_path, DONE_ROWS)
+    made = _call("gen_video", {**SHOT, "job_id": "d-9", "draft": True, **request})
+    assert not made.is_error, _texts([made])
+
+
+@pytest.mark.parametrize("tool", ["gen_video", "job_submit"])
+def test_a_final_runs_the_drafts_own_request_at_720p(monkeypatch, tmp_path, tool):
+    _a_draft(monkeypatch, tmp_path, duration=6, aspect="16:9", start_frame="M1", end_frame="M2")
+    rows = DONE_ROWS if tool == "gen_video" else [DONE_ROWS[0], STARTED]
+    reached = _video_world(
+        monkeypatch, tmp_path, rows, answer=STARTED_ANSWER if tool == "job_submit" else None
+    )
+
+    result = _call(tool, {**SHOT, "job_id": "f-1", "final_of": "d-9"})
+
+    assert not result.is_error, _texts([result])
+    got = reached[0]
+    assert (got["resolution"], got["duration"], got["aspect"]) == ("720p", 6, "16:9")
+    assert (got["start_frame"], got["end_frame"], got["job_id"]) == ("M1", "M2", "f-1")
+    answer = _payload(result)
+    assert answer["final_of"] == "d-9" and "new generation" in answer["final_note"]
+    final = [row for row in _shots(tmp_path) if row["status"] == "final"]
+    assert [(row["job_id"], row["final_of"]) for row in final] == [("f-1", "d-9")]
+
+
+@pytest.mark.parametrize(
+    ("change", "says"),
+    [
+        ({"final_of": "nobody"}, "no draft"),
+        ({"prompt": "another shot"}, "prompt"),
+        ({"project": "Q"}, "project"),
+        ({"duration": 4}, "duration"),
+        ({"media_ids": ["M9"]}, "media_ids"),
+        ({"resolution": "360p"}, "resolution"),
+    ],
+    ids=[
+        "an unknown draft",
+        "another prompt",
+        "another project",
+        "a length",
+        "an ingredient",
+        "a resolution",
+    ],
+)
+def test_a_final_that_is_not_its_draft_is_refused_before_a_browser(monkeypatch, tmp_path, change, says):
+    _a_draft(monkeypatch, tmp_path, duration=6)
+    reached = _video_world(monkeypatch, tmp_path, DONE_ROWS)
+
+    result = _call("gen_video", {**SHOT, "job_id": "f-2", "final_of": "d-9", **change})
+
+    assert result.is_error and says in _texts([result])[0], _texts([result])
+    assert reached == []
+
+
+def test_a_final_still_needs_its_own_job_id_and_cap(monkeypatch, tmp_path):
+    _a_draft(monkeypatch, tmp_path)
+    reached = _video_world(monkeypatch, tmp_path, DONE_ROWS)
+
+    no_cap = _call(
+        "gen_video", {"project": "P", "prompt": "a cup on a table", "job_id": "f-3", "final_of": "d-9"}
+    )
+    same_id = _call("gen_video", {**SHOT, "job_id": "d-9", "final_of": "d-9"})
+
+    assert no_cap.is_error and "max_credits" in _texts([no_cap])[0]
+    assert same_id.is_error and reached == []

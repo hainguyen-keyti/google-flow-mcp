@@ -2362,6 +2362,101 @@ def _video_options(*, count: bool = True) -> str:
     )
 
 
+# Plan AY: the owner watched a 360p clip's free 720p upscale beside native 720p on 2026-11-12 and kept it for drafts
+# only, so a shot is drafted at 360p (a third of the price) and the keeper is made at 720p from the same request.
+DRAFT_RESOLUTION = "360p"
+FINAL_RESOLUTION = "720p"
+SHOTS = "shots.jsonl"
+FINAL_NOTE = (
+    "a final is a new generation from the draft's own request at 720p, not the draft's clip made sharper: look at it "
+    "before using it"
+)
+_SHOT_DEFAULTS: dict[str, Any] = {
+    "model": VIDEO_DEFAULT_MODEL,
+    "aspect": "9:16",
+    "resolution": None,
+    "duration": None,
+    "count": 1,
+    "start_frame": None,
+    "end_frame": None,
+    "characters": None,
+    "media_ids": None,
+    "voices": None,
+}
+
+
+def _draft_row(job_id: str) -> dict[str, Any] | None:
+    for ledger in backend._ledgers():
+        for row in gen_mod.Ledger(ledger.with_name(SHOTS)).rows(job_id):
+            if row.get("status") == "draft":
+                return row
+    return None
+
+
+def _shot(
+    project: str, prompt: str, job_id: str | None, draft: bool, final_of: str | None, given: dict[str, Any]
+) -> dict[str, Any]:
+    """The request a draft or a final runs, refused before any browser when it cannot be one."""
+    if draft and final_of:
+        raise ValueError("pass either draft or final_of, not both: a final is made from a finished draft")
+    if draft:
+        if given["resolution"] not in (None, DRAFT_RESOLUTION):
+            raise ValueError(
+                f"a draft is {DRAFT_RESOLUTION}; leave resolution out, got {given['resolution']!r}"
+            )
+        offered = video_mod.VIDEO["models"].get(given["model"], {}).get("resolutions") or []
+        if given["model"] in video_mod.VIDEO["models"] and DRAFT_RESOLUTION not in offered:
+            raise ValueError(
+                f"{given['model']} has no resolution to draft at: it makes one size at one price; draft on "
+                f"{VIDEO_DEFAULT_MODEL}, or run it as it is"
+            )
+        return {**given, "resolution": DRAFT_RESOLUTION}
+    if final_of:
+        if final_of == job_id:
+            raise ValueError("a final needs a job_id of its own, not its draft's")
+        row = _draft_row(final_of)
+        if row is None:
+            raise ValueError(
+                f"no draft {final_of!r} is recorded under the out folder: a final is made from a draft that finished "
+                "(gen_video or job_submit with draft=true)"
+            )
+        differs = [
+            name for name, value in (("project", project), ("prompt", prompt)) if row.get(name) != value
+        ]
+        differs += [name for name, value in given.items() if value != _SHOT_DEFAULTS[name]]
+        if differs:
+            raise ValueError(
+                "a final runs its draft's own request: pass the draft's project and prompt and leave the rest out; "
+                f"these differ or were passed: {', '.join(differs)}"
+            )
+        return {**row["request"], "resolution": FINAL_RESOLUTION}
+    return given
+
+
+def _shot_done(
+    answer: dict[str, Any],
+    *,
+    project: str,
+    prompt: str,
+    job_id: str,
+    out_dir: str | None,
+    draft: bool,
+    final_of: str | None,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    """Record a draft's request, or which draft a final was made from, beside the ledger; say it in the answer."""
+    if not (draft or final_of):
+        return answer
+    shots = gen_mod.Ledger(backend._editor_out_dir(out_dir) / SHOTS)
+    if draft:
+        shots.append(job_id, "draft", project=project, prompt=prompt, request=request)
+        answer["draft"] = True
+    else:
+        shots.append(job_id, "final", project=project, final_of=final_of)
+        answer["final_of"], answer["final_note"] = final_of, FINAL_NOTE
+    return answer
+
+
 @server.tool(
     name="gen_video",
     description=(
@@ -2411,44 +2506,56 @@ async def gen_video(
     out_dir: str | None = None,
     voices: list[str] | None = None,
     retry_of: str | None = None,
+    draft: bool = False,
+    final_of: str | None = None,
 ) -> str:
     _video_named(project, prompt)
     _retry_named(retry_of, dry_run)
-    _video_request(
-        model=model,
-        aspect=aspect,
-        resolution=resolution,
-        duration=duration,
-        count=count,
-        start_frame=start_frame,
-        end_frame=end_frame,
-        characters=characters,
-        media_ids=media_ids,
-        voices=voices,
+    request = _shot(
+        project,
+        prompt,
+        job_id,
+        draft,
+        final_of,
+        {
+            "model": model,
+            "aspect": aspect,
+            "resolution": resolution,
+            "duration": duration,
+            "count": count,
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "characters": characters,
+            "media_ids": media_ids,
+            "voices": voices,
+        },
     )
+    _video_request(**request)
     if not dry_run:
         _paid_run(job_id, max_credits)
-    return _json(
-        await backend.gen_video(
-            project,
-            prompt,
-            job_id=job_id,
-            max_credits=max_credits,
-            model=model,
-            aspect=aspect,
-            resolution=resolution,
-            duration=duration,
-            count=count,
-            start_frame=start_frame,
-            end_frame=end_frame,
-            characters=characters or [],
-            media_ids=media_ids or [],
-            voices=voices or [],
-            dry_run=dry_run,
-            out_dir=out_dir,
-            **({"retry_of": retry_of} if retry_of else {}),
-        )
+    lists = {name: request[name] or [] for name in ("characters", "media_ids", "voices")}
+    answer = await backend.gen_video(
+        project,
+        prompt,
+        job_id=job_id,
+        max_credits=max_credits,
+        **{**request, **lists},
+        dry_run=dry_run,
+        out_dir=out_dir,
+        **({"retry_of": retry_of} if retry_of else {}),
     )
+    if not dry_run and isinstance(answer, dict):
+        answer = _shot_done(
+            answer,
+            project=project,
+            prompt=prompt,
+            job_id=job_id or "",
+            out_dir=out_dir,
+            draft=draft,
+            final_of=final_of,
+            request=request,
+        )
+    return _json(answer)
 
 
 @server.tool(
@@ -2500,41 +2607,55 @@ async def job_submit(
     out_dir: str | None = None,
     voices: list[str] | None = None,
     retry_of: str | None = None,
+    draft: bool = False,
+    final_of: str | None = None,
 ) -> str:
     _video_named(project, prompt)
     _retry_named(retry_of, False)
-    _video_request(
-        model=model,
-        aspect=aspect,
-        resolution=resolution,
-        duration=duration,
-        count=1,
-        start_frame=start_frame,
-        end_frame=end_frame,
-        characters=characters,
-        media_ids=media_ids,
-        voices=voices,
+    request = _shot(
+        project,
+        prompt,
+        job_id,
+        draft,
+        final_of,
+        {
+            "model": model,
+            "aspect": aspect,
+            "resolution": resolution,
+            "duration": duration,
+            "count": 1,
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "characters": characters,
+            "media_ids": media_ids,
+            "voices": voices,
+        },
     )
+    _video_request(**request)
     _paid_run(job_id, max_credits)
-    return _json(
-        await backend.job_submit(
-            project,
-            prompt,
-            job_id=job_id,
-            max_credits=max_credits,
-            model=model,
-            aspect=aspect,
-            resolution=resolution,
-            duration=duration,
-            start_frame=start_frame,
-            end_frame=end_frame,
-            characters=characters or [],
-            media_ids=media_ids or [],
-            voices=voices or [],
-            out_dir=out_dir,
-            **({"retry_of": retry_of} if retry_of else {}),
-        )
+    options = {name: value for name, value in request.items() if name != "count"}
+    lists = {name: request[name] or [] for name in ("characters", "media_ids", "voices")}
+    answer = await backend.job_submit(
+        project,
+        prompt,
+        job_id=job_id,
+        max_credits=max_credits,
+        **{**options, **lists},
+        out_dir=out_dir,
+        **({"retry_of": retry_of} if retry_of else {}),
     )
+    if isinstance(answer, dict):
+        answer = _shot_done(
+            answer,
+            project=project,
+            prompt=prompt,
+            job_id=job_id,
+            out_dir=out_dir,
+            draft=draft,
+            final_of=final_of,
+            request=request,
+        )
+    return _json(answer)
 
 
 @server.tool(
