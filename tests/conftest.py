@@ -45,3 +45,12 @@ def _no_agent_mode_browser(monkeypatch):
 
     monkeypatch.setattr(mcp_server.Backend, "_agent_off", already_off)
     monkeypatch.setattr(mcp_server.Backend, "_agent_restore", restored)
+
+
+@pytest.fixture(autouse=True)
+def _wants_stay_in_the_test(monkeypatch, tmp_path):
+    """Plan AX: a session announces itself in a file under the temp dir; a test's announcement stays in its own
+    folder, so no test leaves one behind or yields to a real server's."""
+    from video import session as session_mod
+
+    monkeypatch.setattr(session_mod, "WANT_DIR", tmp_path / "video-keeper")

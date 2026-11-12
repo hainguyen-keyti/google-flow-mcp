@@ -33,6 +33,7 @@ os.environ.setdefault("GFLOW_CLI_LEASE_WAIT_SECONDS", "180")
 KEEP_ENV = "VIDEO_KEEP_BROWSER"
 IDLE_S = 120.0
 WANT_POLL_S = 1.0
+WANT_WAIT_S = 30.0
 WANT_DIR = Path(tempfile.gettempdir()) / "video-keeper"
 BACKGROUND_PAGE_MS = 5_000
 PAGE_CLOSE_TIMEOUT_S = 10.0
@@ -85,7 +86,10 @@ class FlowSession:
             # Holding the guard, any kept browser of this process is idle: a second one cannot launch on its profile.
             await _close_kept(self.profile_dir)
             announce(self.profile_dir)
-            await self._open()
+            try:
+                await self._open()
+            finally:
+                withdraw(self.profile_dir)
             await self._begin_call()
         except BaseException:
             await self._teardown()
@@ -225,14 +229,62 @@ def announce(profile_dir: Path, pid: int | None = None) -> None:
         _want_file(profile_dir, os.getpid() if pid is None else pid).touch()
 
 
-def _wanted_by_another(profile_dir: Path, since: float) -> bool:
-    """Whether another process announced after `since`, the moment this process's browser opened."""
+def withdraw(profile_dir: Path, pid: int | None = None) -> None:
+    """Take the announcement back: this process holds the profile now, or gave up on it."""
+    with contextlib.suppress(OSError):
+        _want_file(profile_dir, os.getpid() if pid is None else pid).unlink(missing_ok=True)
+
+
+def _alive(pid: int) -> bool:
     try:
-        own = _want_file(profile_dir, os.getpid())
-        files = WANT_DIR.glob(f"{Path(profile_dir).name}.*.want")
-        return any(file != own and file.stat().st_mtime > since for file in files)
-    except OSError:
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return False
+    except OSError:
+        return True
+    return True
+
+
+def _wants_of_others(profile_dir: Path) -> list[Path]:
+    """The announcements of other live processes; one left by a process that died is removed."""
+    found = []
+    try:
+        for file in WANT_DIR.glob(f"{Path(profile_dir).name}.*.want"):
+            pid = file.name.split(".")[-2]
+            if not pid.isdigit() or int(pid) == os.getpid():
+                continue
+            if _alive(int(pid)):
+                found.append(file)
+            else:
+                file.unlink(missing_ok=True)
+    except OSError:
+        return found
+    return found
+
+
+def _wanted_by_another(profile_dir: Path) -> bool:
+    return bool(_wants_of_others(profile_dir))
+
+
+async def _let_earlier_wants_go_first(profile_dir: Path) -> None:
+    """Before this process launches: wait, up to WANT_WAIT_S, for the processes that announced BEFORE it to take the
+    profile and withdraw. Without it, a process that yielded and was called again at once took the profile back
+    before the one it yielded to (scoped re-review of plan AX, N-a). First come, first served, so two never wait
+    on each other."""
+    try:
+        mine = _want_file(profile_dir, os.getpid()).stat().st_mtime
+    except OSError:
+        return
+    waited = 0.0
+    while waited < WANT_WAIT_S:
+        try:
+            earlier = [file for file in _wants_of_others(profile_dir) if file.stat().st_mtime < mine]
+        except OSError:
+            earlier = []
+        if not earlier:
+            return
+        await asyncio.sleep(WANT_POLL_S)
+        waited += WANT_POLL_S
 
 
 _KEPT: dict[str, BrowserKeeper] = {}
@@ -277,7 +329,6 @@ class BrowserKeeper:
         self._session: Any = None
         self._watch: asyncio.Task[None] | None = None
         self._used = 0.0
-        self._opened_wall = 0.0
 
     @property
     def profile_dir(self) -> Path:
@@ -322,11 +373,14 @@ class BrowserKeeper:
                 announce(self.profile_dir)
                 session = self._factory(self.profile)
                 try:
+                    await _let_earlier_wants_go_first(self.profile_dir)
                     await session._open()
                 except BaseException:
+                    withdraw(self.profile_dir)
                     await session._close()
                     raise
-                self._session, self._opened_wall, fresh = session, time.time(), True
+                withdraw(self.profile_dir)
+                self._session, fresh = session, True
                 _KEPT[str(self.profile_dir)] = self
             session = self._session
             try:
@@ -370,7 +424,7 @@ class BrowserKeeper:
         while self._session is not None:
             await asyncio.sleep(WANT_POLL_S)
             idle = time.monotonic() - self._used >= self.idle_s
-            if not idle and not _wanted_by_another(self.profile_dir, self._opened_wall):
+            if not idle and not _wanted_by_another(self.profile_dir):
                 continue
             if not _GUARD.acquire(blocking=False):
                 continue

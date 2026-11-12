@@ -762,23 +762,89 @@ def test_a_want_of_another_process_is_not_lost_when_this_one_announces(kept, mon
     session_mod.announce(keeper.profile_dir, pid=1)
     session_mod.announce(keeper.profile_dir)
 
-    assert session_mod._wanted_by_another(keeper.profile_dir, 0.0)
+    assert session_mod._wanted_by_another(keeper.profile_dir)
 
 
-def test_a_want_from_before_this_browser_opened_is_not_a_reason_to_close_it(kept, monkeypatch):
+def test_a_want_that_was_withdrawn_is_not_a_reason_to_close(kept, monkeypatch):
     session_mod, keeper = kept
     monkeypatch.setattr(session_mod, "WANT_POLL_S", 0.01)
     session_mod.announce(keeper.profile_dir, pid=1)
+    session_mod.withdraw(keeper.profile_dir, pid=1)
 
     async def go():
-        await asyncio.sleep(0.05)
-
         async def fine(session):
             return "ok"
 
         await keeper.run(fine)
         await asyncio.sleep(0.1)
         assert keeper.open is True
+        await keeper.close()
+
+    asyncio.run(go())
+
+
+def test_a_process_that_asked_first_goes_first_when_the_browser_reopens(kept, monkeypatch):
+    """Scoped re-review of plan AX, N-a: A yielded to B's want, then A's next call reopened before B had the lease,
+    and B's want, older than A's new browser, was never seen again. A now waits for an earlier want to be withdrawn,
+    which B does once it holds the lease."""
+    session_mod, keeper = kept
+    monkeypatch.setattr(session_mod, "WANT_POLL_S", 0.01)
+    session_mod.announce(keeper.profile_dir, pid=1)
+    order = []
+
+    async def go():
+        async def fine(session):
+            order.append("A runs")
+            return "ok"
+
+        async def b_gets_the_lease():
+            await asyncio.sleep(0.1)
+            order.append("B has the lease")
+            session_mod.withdraw(keeper.profile_dir, pid=1)
+
+        await asyncio.gather(keeper.run(fine), b_gets_the_lease())
+        await keeper.close()
+
+    asyncio.run(go())
+    assert order == ["B has the lease", "A runs"]
+
+
+def test_waiting_for_an_earlier_want_is_bounded(kept, monkeypatch):
+    session_mod, keeper = kept
+    monkeypatch.setattr(session_mod, "WANT_POLL_S", 0.01)
+    monkeypatch.setattr(session_mod, "WANT_WAIT_S", 0.05)
+    session_mod.announce(keeper.profile_dir, pid=1)
+
+    async def go():
+        async def fine(session):
+            return "ok"
+
+        assert await keeper.run(fine) == "ok"
+        await keeper.close()
+
+    asyncio.run(go())
+
+
+def test_the_want_of_a_process_that_died_is_ignored_and_cleared(kept):
+    session_mod, keeper = kept
+    dead = 2_000_000_000
+    session_mod.announce(keeper.profile_dir, pid=dead)
+
+    assert session_mod._wanted_by_another(keeper.profile_dir) is False
+    assert not session_mod._want_file(keeper.profile_dir, dead).exists()
+
+
+def test_a_process_withdraws_its_want_once_its_browser_is_open(kept):
+    import os
+
+    session_mod, keeper = kept
+
+    async def go():
+        async def fine(session):
+            assert not session_mod._want_file(keeper.profile_dir, os.getpid()).exists()
+            return "ok"
+
+        await keeper.run(fine)
         await keeper.close()
 
     asyncio.run(go())
