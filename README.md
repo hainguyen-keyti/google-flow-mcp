@@ -108,8 +108,13 @@ and Veo 3.1 Quality leave Flow on 2026-12-05, and every tool here refuses them a
 | `clip_download` at 4k (a Flow upscale) | not offered on Pro: greyed out, refused before any click (Flow's table: Ultra, 50) |
 | Every read: lane, projects, media, credits, characters, scenes, voices, what a clip was made from (`clip_recipe`), and this table as data (`flow_capabilities`: every model's cells, lengths and caps, no browser) | 0 |
 
-Timing, so a slow call is not mistaken for a broken one: a read takes 15 to 50 s, a change about 50 s, a
-generation 2 to 5 min, `clip_extend` and `clip_edit` up to 7 min. `job_submit` answered in 153 s with the balance
+Timing, so a slow call is not mistaken for a broken one. The MCP server keeps one Chrome open between calls (each
+call gets a fresh background tab) and closes it after 2 minutes idle, when another process asks for the profile, or
+after a call that failed; `VIDEO_KEEP_BROWSER=0` opens one per call as before. Measured 2026-11-12: a balance read
+took 11 s on the first call (8 s of it opening Chrome) and 2 to 3 s after, a project's media 4 to 5 s; a change takes
+up to about 50 s, a generation 2 to 5 min, `clip_extend` and `clip_edit` up to 7 min. Chrome stays a real window
+moved off the left edge (headless is refused by Google's reCAPTCHA), and the keyboard focus is handed back to the app
+that had it. A free read that fails on a timeout is tried once more by the server; a paid call never is. `job_submit` answered in 153 s with the balance
 already charged, `job_status` and `job_collect` in about 47 s each, and two clips submitted back to back were both
 ready within about 4 min of their submits (measured 2026-10-03, Omni 1.1 Flash 360p 4 s, 4 credits each).
 
