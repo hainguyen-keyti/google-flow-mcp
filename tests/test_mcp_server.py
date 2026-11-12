@@ -5203,7 +5203,7 @@ def test_a_final_still_needs_its_own_job_id_and_cap(monkeypatch, tmp_path):
     same_id = _call("gen_video", {**SHOT, "job_id": "d-9", "final_of": "d-9"})
 
     assert no_cap.is_error and "max_credits" in _texts([no_cap])[0]
-    assert same_id.is_error and reached == []
+    assert same_id.is_error and "job_id of its own" in _texts([same_id])[0] and reached == []
 
 
 def test_flow_budget_reads_every_ledger_and_one_live_balance(monkeypatch, tmp_path):
