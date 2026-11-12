@@ -170,6 +170,15 @@ class _Account(mcp_server.Backend):
     async def credits(self):
         return self.replies["credits"]
 
+    async def budget(self, month=None):
+        # The real sum over no ledgers and the canned balance: only the browser read is faked.
+        from video.flow import budget
+
+        info = self.replies["credits"]
+        return self.replies.get(
+            "budget", budget.summary(rows=[], shots=[], balance=info["balance"] or 0, month=month)
+        )
+
     async def media(self, project_id, all_versions=False, kind=None, since=None, limit=None, brief=False):
         # Only the browser is faked: the filters run through the server's own rules, so a smoke row that checks a
         # filtered answer is checking the real ones.
@@ -221,7 +230,7 @@ def _failing(rows):
 def test_a_healthy_account_passes_every_row(monkeypatch):
     rows = _rows(monkeypatch, _replies())
 
-    assert len(rows) == 20
+    assert len(rows) == 21
     assert _failing(rows) == {}
 
 
@@ -332,7 +341,7 @@ def test_an_empty_project_passes_every_row(monkeypatch):
 
     rows = _rows(monkeypatch, replies)
 
-    assert len(rows) == 20
+    assert len(rows) == 21
     assert _failing(rows) == {
         "scene_clips": "the project holds no scene to read",
         "flow_voices": "the project holds no character to read voices from",

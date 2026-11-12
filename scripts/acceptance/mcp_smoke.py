@@ -35,6 +35,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 # A second session on the same profile (a running MCP server) waits for the lease instead of failing at once.
@@ -58,6 +59,7 @@ READ_ONLY_NO_ARGS = (
     "flow_lane",
     "flow_projects",
     "flow_credits",
+    "flow_budget",
     "flow_tools",
     "flow_capabilities",
     "flow_check",
@@ -199,6 +201,28 @@ def a_balance(payload):
     balance = payload.get("balance") if isinstance(payload, dict) else None
     if isinstance(balance, bool) or not isinstance(balance, int) or balance < 0:
         return f"balance is {balance!r}, expected an int of 0 or more"
+    return None
+
+
+def a_budget(payload):
+    # Plan AY: the month's spend from the ledgers and what the balance buys from the surveyed table.
+    problem = a_balance(payload)
+    if problem:
+        return problem
+    spent = payload.get("spent")
+    if isinstance(spent, bool) or not isinstance(spent, int) or spent < 0:
+        return f"spent is {spent!r}, expected an int of 0 or more"
+    if payload.get("month") != time.strftime("%Y-%m"):
+        return f"month is {payload.get('month')!r}, expected the current one"
+    buys = payload.get("balance_buys")
+    if not isinstance(buys, list) or not buys:
+        return "balance_buys names no cell"
+    for row in buys:
+        each = row.get("credits_each") if isinstance(row, dict) else None
+        if not isinstance(each, int) or each < 1 or row.get("clips") != payload["balance"] // each:
+            return f"a balance_buys row does not follow from the balance: {row!r}"
+    if sum(row.get("credits", 0) for row in payload.get("by") or []) != spent:
+        return "the split by kind does not add up to spent"
     return None
 
 
@@ -543,6 +567,7 @@ async def run(findings):
                     "flow_lane": a_lane,
                     "flow_projects": a_project_list,
                     "flow_credits": a_balance,
+                    "flow_budget": a_budget,
                     # Called with no project on purpose: that is the path that opens the first project itself.
                     "flow_tools": a_tool_list,
                     "flow_capabilities": a_capability_map,

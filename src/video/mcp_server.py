@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -28,6 +29,7 @@ from video import gen as gen_mod
 from video import outcome as outcome_mod
 from video import session as session_mod
 from video.flow import agent as agent_mod
+from video.flow import budget as budget_mod
 from video.flow import capabilities as capabilities_mod
 from video.flow import characters as characters_mod
 from video.flow import clips as clips_mod
@@ -964,6 +966,17 @@ class Backend:
         finally:
             self._submitting.remove(asked)
 
+    async def budget(self, month: str | None = None) -> dict[str, Any]:
+        info = await self.credits()
+        rows: list[dict[str, Any]] = []
+        shots: list[dict[str, Any]] = []
+        for ledger in self._ledgers():
+            rows += gen_mod.Ledger(ledger).rows()
+            shots += gen_mod.Ledger(ledger.with_name(SHOTS)).rows()
+        return budget_mod.summary(
+            rows=rows, shots=shots, balance=info["balance"], month=month, balance_raw=info.get("raw")
+        )
+
     def _ledgers(self) -> list[Path]:
         """Every ledger under the out folder, each once, spelled as the out folder is: a clip fetched beside one is
         then written to its row as `out/...`, the way the blocking tools write theirs."""
@@ -1459,6 +1472,24 @@ async def flow_projects() -> str:
 @server.tool(name="flow_credits", description="Current Flow credit balance. Free.")
 async def flow_credits() -> str:
     return _json(await backend.credits())
+
+
+@server.tool(
+    name="flow_budget",
+    description=(
+        "Where a month's credits went and what the balance still buys: one live read of the balance, and the ledgers "
+        "under the out folder summed for the month (the current one unless month is given as YYYY-MM): credits spent, "
+        "split by what was made (kind, model, resolution), drafts and finals, credits charged with no clip, the daily "
+        "rate so far, and how many 8 s clips the balance buys at Omni 1.2 360p, Omni 1.2 720p and Veo 3.1 Lite on the "
+        "surveyed table. It counts only what this server's ledgers hold: a clip made by hand in Flow, or by another "
+        "copy of this repo, is in the balance and not in the split. flow_time is the time Flow sends beside the "
+        "balance, passed on as it came; what it marks is unmeasured. Free."
+    ),
+)
+async def flow_budget(month: str | None = None) -> str:
+    if month is not None and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        raise ValueError(f"month must be YYYY-MM, got {month!r}")
+    return _json(await backend.budget(month))
 
 
 @server.tool(

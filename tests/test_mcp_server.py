@@ -28,6 +28,7 @@ EXPECTED_TOOLS = {
     "flow_lane",
     "flow_projects",
     "flow_credits",
+    "flow_budget",
     "flow_media",
     "flow_characters",
     "flow_tools",
@@ -115,6 +116,7 @@ TOOL_CALLS: dict[str, dict] = {
     "flow_lane": {},
     "flow_projects": {},
     "flow_credits": {},
+    "flow_budget": {"month": "2026-11"},
     # Plan H T2: the filters ride here so the passthrough test proves each one reaches the backend rather than
     # being accepted and dropped, which is how all_versions behaved on 2026-09-13.
     "flow_media": {"project_id": "P", "kind": "video", "since": "2026-09-01", "limit": 5, "brief": True},
@@ -5202,3 +5204,36 @@ def test_a_final_still_needs_its_own_job_id_and_cap(monkeypatch, tmp_path):
 
     assert no_cap.is_error and "max_credits" in _texts([no_cap])[0]
     assert same_id.is_error and reached == []
+
+
+def test_flow_budget_reads_every_ledger_and_one_live_balance(monkeypatch, tmp_path):
+    """Plan AY: the month's spend comes from the ledgers under out/, the balance from one live read."""
+    backend = mcp_server.Backend(out_dir=tmp_path)
+    monkeypatch.setattr(mcp_server, "backend", backend)
+    reads = []
+
+    async def credits(self):
+        reads.append("balance")
+        return {"balance": 100, "raw": [100, 1, 2, 2, None, 100, [1796112586, 0]]}
+
+    monkeypatch.setattr(mcp_server.Backend, "credits", credits)
+    for folder, job_id, spent in (("", "a", 24), ("film", "b", 8)):
+        ledger = gen.Ledger(tmp_path / folder / "ledger.jsonl")
+        ledger.append(job_id, "submitted", kind="video", model="omni-1.2-flash", resolution="720p")
+        ledger.append(job_id, "done", spent=spent)
+    gen.Ledger(tmp_path / "film" / "shots.jsonl").append("b", "draft", project="P", prompt="p", request={})
+
+    answer = _payload(_call("flow_budget", {}))
+
+    assert reads == ["balance"] and answer["balance"] == 100
+    assert answer["spent"] == 32 and answer["jobs_charged"] == 2
+    assert answer["drafts"] == {"credits": 8, "jobs": 1}
+    assert answer["flow_time"]["epoch"] == 1796112586
+
+
+def test_flow_budget_refuses_a_month_it_cannot_read(monkeypatch, tmp_path):
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+
+    result = _call("flow_budget", {"month": "November"})
+
+    assert result.is_error and "YYYY-MM" in _texts([result])[0]

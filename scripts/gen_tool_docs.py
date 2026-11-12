@@ -33,6 +33,7 @@ GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
             "flow_lane",
             "flow_projects",
             "flow_credits",
+            "flow_budget",
             "flow_capabilities",
             "flow_check",
             "flow_media",

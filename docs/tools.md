@@ -2,7 +2,7 @@
 
 Generated from the running server by `scripts/gen_tool_docs.py`; do not edit by hand. Prices are the ones measured on the account this was built for, and they are part of each tool's own description, which is what an agent reads before spending.
 
-**50 tools.**
+**51 tools.**
 
 ## Read, free
 
@@ -25,6 +25,12 @@ List the account's Flow projects (id, title, created). Free.
 **Arguments**: none
 
 Current Flow credit balance. Free.
+
+### `flow_budget`
+
+**Arguments**: `month` (optional)
+
+Where a month's credits went and what the balance still buys: one live read of the balance, and the ledgers under the out folder summed for the month (the current one unless month is given as YYYY-MM): credits spent, split by what was made (kind, model, resolution), drafts and finals, credits charged with no clip, the daily rate so far, and how many 8 s clips the balance buys at Omni 1.2 360p, Omni 1.2 720p and Veo 3.1 Lite on the surveyed table. It counts only what this server's ledgers hold: a clip made by hand in Flow, or by another copy of this repo, is in the balance and not in the split. flow_time is the time Flow sends beside the balance, passed on as it came; what it marks is unmeasured. Free.
 
 ### `flow_capabilities`
 
