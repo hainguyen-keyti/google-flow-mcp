@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 import threading
+import time
 from typing import ClassVar
 
 import pytest
@@ -790,6 +792,10 @@ def test_a_process_that_asked_first_goes_first_when_the_browser_reopens(kept, mo
     session_mod, keeper = kept
     monkeypatch.setattr(session_mod, "WANT_POLL_S", 0.01)
     session_mod.announce(keeper.profile_dir, pid=1)
+    # B asked a second earlier. Two announcements inside one tick of the filesystem's clock carry the same time
+    # (seen on the Linux CI runner, 2026-11-12), and then neither waits and gflow's lease decides.
+    earlier = time.time() - 1
+    os.utime(session_mod._want_file(keeper.profile_dir, 1), (earlier, earlier))
     order = []
 
     async def go():
