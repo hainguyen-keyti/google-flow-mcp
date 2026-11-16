@@ -5315,3 +5315,22 @@ def test_the_editor_tools_need_a_cap_and_hand_it_to_the_driver(monkeypatch, tmp_
 
     done = _call(tool, call | {"max_credits": 12})
     assert not done.is_error and got["max_credits"] == 12, _texts([done])
+
+
+@pytest.mark.parametrize("tool", ["gen_video", "job_submit"])
+def test_a_retry_cannot_change_the_resolution_of_the_job_it_retries(monkeypatch, tmp_path, tool):
+    """Plan AZ, I4: the refused job ran at 360p, so its retry is refused at 720p (named or by default) before any
+    browser, and runs at 360p."""
+    reached = _video_world(monkeypatch, tmp_path, [_submitted(retry_of="am-first", resolution="360p"), PAID])
+    _refused_earlier(tmp_path, resolution="360p")
+    call = {**VIDEO_CALL, "max_credits": 30, "retry_of": "am-first"}
+
+    for n, resolution in enumerate([{"resolution": "720p"}, {}]):
+        refused = _call(tool, {**call, **resolution, "job_id": f"az-res-{n}"})
+        text = _texts([refused])[0]
+        assert refused.is_error and "360p" in text and "720p" in text, text
+    assert reached == [] and mcp_server.backend._retrying == set()
+
+    ran = _call(tool, {**call, "resolution": "360p", "job_id": "az-res-same"})
+    assert not ran.is_error, _texts([ran])
+    assert len(reached) == 1 and reached[0]["resolution"] == "360p"

@@ -416,13 +416,15 @@ class Backend:
         retry_of: str | None = None,
         request: dict[str, str] | None = None,
         claims_by_prompt: bool = False,
+        resolution: str | None = None,
     ) -> Any:
         """One job per job_id through MCP (DECISIONS 2026-09-15), decided before a browser opens: refused while a call
         with that id still runs in this server, and when any ledger under the out folder, or the one out_dir names,
         holds a row for it, `opening` included.
 
         `retry_of` names a job Flow refused. It is vouched for here, off the same ledgers and before a browser opens
-        (plan AM, I-money-4: `outcome.retry_refusal`), and one refused job takes one retry at a time.
+        (plan AM, I-money-4: `outcome.retry_refusal`), and one refused job takes one retry at a time. `resolution`
+        is what this run would be made at, which a retry may not change (plan AZ, I4).
 
         `claims_by_prompt` is a blocking composer run, which takes the one new clip carrying its prompt: it is refused
         while a job that job_submit started with the same project and prompt is not collected (plan AN, I-money-5)."""
@@ -483,7 +485,9 @@ class Backend:
                         f"({', '.join(str(path) for path in held)}), so which run they describe cannot be told and "
                         "it is not retried: tell the owner"
                     )
-                why = outcome_mod.retry_refusal(retry_of, jobs, **(request or {"project": "", "prompt": ""}))
+                why = outcome_mod.retry_refusal(
+                    retry_of, jobs, **(request or {"project": "", "prompt": ""}), resolution=resolution
+                )
                 if why:
                     raise self._not_started(why)
                 self._retrying.add(retry_of)
@@ -953,6 +957,7 @@ class Backend:
             retry_of=options.get("retry_of"),
             request={"project": project, "prompt": prompt},
             claims_by_prompt=True,
+            resolution=options.get("resolution") or video_mod.FIXED["resolution"],
         )
 
     async def job_submit(self, project: str, prompt: str, **options: Any) -> dict[str, Any]:
@@ -978,6 +983,7 @@ class Backend:
                 run,
                 retry_of=options.get("retry_of"),
                 request={"project": project, "prompt": prompt},
+                resolution=options.get("resolution") or video_mod.FIXED["resolution"],
             )
         finally:
             self._submitting.remove(asked)
@@ -1332,7 +1338,7 @@ server = TellingServer(
         "job_id, which the ledger refuses instead of charging twice. Every answer of a real run carries an outcome "
         "{code, charged, retryable, advice} and every error of one opens with it: read charged before anything "
         "else. The one retry under a new job_id the server vouches for is when gen_video or gen_character says "
-        "retryable=yes: call again with the same project and prompt, a new job_id and retry_of set to the refused "
+        "retryable=yes: call again with the same project, prompt and resolution, a new job_id and retry_of set to the refused "
         "job_id. "
         "When model is omitted gen_t2v, gen_i2v and gen_r2v "
         "use omni-1.2-flash at 720p for 8 s (24 credits; Omni 1.2 bills by the second, 1 a second at 360p and 3 at 720p up "
@@ -1382,7 +1388,7 @@ _JOB_ID_RULE = (
 )
 _RETRY_RULE = (
     " When an error says retryable=yes (Flow failed the job and charged nothing, with code AUDIO_FILTERED or "
-    "NO_REASON), it may pass as it is: call again with the same project and prompt, a NEW job_id, and retry_of set "
+    "NO_REASON), it may pass as it is: call again with the same project, prompt and resolution, a NEW job_id, and retry_of set "
     "to the refused job_id. The server checks the ledger before a browser opens: a job is retried once (a second "
     "retry of it is refused once the first has clicked, and while the first runs in this server), and one original "
     f"job gets at most {outcome_mod.MAX_RETRIES} retries; for any other code a new job_id after an error is still "

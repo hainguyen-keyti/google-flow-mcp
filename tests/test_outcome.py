@@ -370,3 +370,24 @@ def test_the_head_of_an_error_carries_the_outcome_in_one_short_line():
     assert outcome.head(outcome.classify(ROWS["gflow_submitted_only"]["rows"])) == (
         "outcome code=UNKNOWN charged=unknown retryable=no"
     )
+
+
+def _job_at(resolution):
+    rows = _job()
+    rows[0]["resolution"] = resolution
+    return rows
+
+
+def test_a_retry_at_another_resolution_is_refused():
+    # Plan AZ, I4 (review of plan AY, N4): project and prompt alone let a retry turn a 360p draft into a 720p clip.
+    said = _refusal({"a": _job_at("360p")}, resolution="720p")
+
+    assert said is not None and "360p" in said and "720p" in said and "same" in said, said
+    assert _refusal({"a": _job_at("720p")}, resolution="360p") is not None
+
+
+def test_a_retry_at_the_same_resolution_runs_and_an_older_row_without_one_is_not_held_to_it():
+    assert _refusal({"a": _job_at("360p")}, resolution="360p") is None
+    # gen_character names no resolution, and rows written before the field existed hold none.
+    assert _refusal({"a": _job_at("360p")}) is None
+    assert _refusal({"a": _job()}, resolution="720p") is None

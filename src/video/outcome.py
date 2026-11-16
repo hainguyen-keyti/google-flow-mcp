@@ -58,7 +58,7 @@ CODES = {
     "browser profile has to cool down",
 }
 _RETRY_HOW = (
-    ": call the same tool again with the same project and prompt, a new job_id and retry_of set to this job_id, at "
+    ": call the same tool again with the same project, prompt and resolution, a new job_id and retry_of set to this job_id, at "
     f"most {MAX_RETRIES} times for one original job"
 )
 _NO_RETRY = ": this tool has no retry the server can vouch for, so tell the owner before starting it again"
@@ -155,13 +155,20 @@ def _retried(rows: list[dict[str, Any]]) -> str | None:
 
 
 def retry_refusal(
-    target: str, jobs: dict[str, list[dict[str, Any]]], *, project: str, prompt: str
+    target: str,
+    jobs: dict[str, list[dict[str, Any]]],
+    *,
+    project: str,
+    prompt: str,
+    resolution: str | None = None,
 ) -> str | None:
     """Why job `target` may not be retried with this project and prompt, or None when it may (I-money-4).
 
     `jobs` holds the rows of every job of every ledger under the out folder, oldest first. A retry is vouched for
     only when the job is a refusal Flow did not charge for and may be retried (`classify`), the request is the one
     that job sent, no other submitted job already retried it, and it is not past the second retry of the original.
+    `resolution` is what the retry would run at: it has to be the one the job's row holds, when the row holds one
+    (plan AZ, I4).
     """
     rows = jobs.get(target) or []
     if not rows:
@@ -183,6 +190,13 @@ def retry_refusal(
         return (
             f"a retry sends the same project and prompt: job {target!r} went to project {sent.get('project')} with "
             f"a prompt starting {str(sent.get('prompt'))[:60]!r}; anything else is a new job with no retry_of"
+        )
+    ran_at = sent.get("resolution")
+    if resolution is not None and ran_at is not None and ran_at != resolution:
+        return (
+            f"a retry sends the same request: job {target!r} ran at {ran_at} and this call would run at "
+            f"{resolution}; pass resolution={ran_at!r} (draft=true for 360p), anything else is a new job with no "
+            "retry_of"
         )
     for other, theirs in jobs.items():
         if other != target and _retried(theirs) == target:
