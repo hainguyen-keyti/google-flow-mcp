@@ -3217,3 +3217,64 @@ def test_save_frame_waits_for_the_frames_own_upload_not_any_reply(monkeypatch):
     asyncio.run(clips.save_frame(session, "P", "m1"))
 
     assert page.log.index("upload answered") < page.log.index("listing read"), page.log
+
+
+# Plan AZ, I1: a paid editor job always leaves an outcome row. An error after the click (the listing read, the balance
+# read) used to leave the job on `submitted`, with no `spent`, until someone ran clip_reconcile.
+
+
+@pytest.mark.parametrize("kind", ["edit", "extend"])
+def test_an_error_in_the_listing_read_after_the_click_still_leaves_an_outcome_row(
+    monkeypatch, tmp_path, kind
+):
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=276)
+    snapshot = clips._snapshot
+    reads = []
+
+    async def dies_after_the_click(session, project_id):
+        reads.append(1)
+        if len(reads) > 1:
+            raise LookupError("Flow says this was not found: the project is not on this account")
+        return await snapshot(session, project_id)
+
+    monkeypatch.setattr(clips, "_snapshot", dies_after_the_click)
+
+    with pytest.raises(LookupError, match="not found"):
+        _run_editor_job(tmp_path, kind=kind)
+
+    rows = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")
+    assert [row["status"] for row in rows][-2:] == ["submitted", "unknown"], rows
+    last = rows[-1]
+    assert "not found" in last["error"] and last["credits_before"] == 300
+    assert last["credits_after"] == 276 and last["spent"] == 24
+
+
+def test_an_error_in_the_balance_read_after_the_click_still_leaves_an_outcome_row(monkeypatch, tmp_path):
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=276)
+    reads = []
+
+    async def credits(session):
+        reads.append(1)
+        if len(reads) > 1:
+            raise TimeoutError("Page.goto: Timeout 60000ms exceeded.")
+        return {"balance": 300}
+
+    monkeypatch.setattr(clips.reader, "credits", credits)
+
+    with pytest.raises(TimeoutError):
+        _run_editor_job(tmp_path)
+
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
+    assert last["status"] == "unknown" and "Timeout" in last["error"]
+    assert last["credits_before"] == 300 and last["credits_after"] is None and "spent" not in last
+
+
+def test_a_job_that_made_nothing_keeps_its_one_failed_row(monkeypatch, tmp_path):
+    """The empty-handed error is raised after the outcome row: it must not be written a second time as unknown."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=280, produces=False)
+
+    with pytest.raises(RuntimeError, match="nothing was generated"):
+        _run_editor_job(tmp_path)
+
+    statuses = [row["status"] for row in gen.Ledger(tmp_path / "ledger.jsonl").rows("j")]
+    assert statuses.count("failed") == 1 and "unknown" not in statuses, statuses

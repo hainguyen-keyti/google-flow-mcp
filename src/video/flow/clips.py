@@ -9,6 +9,7 @@ ledgered like gen jobs (I1, I5)."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import urllib.request
 import uuid
@@ -476,98 +477,136 @@ async def _generate_from_editor(
         credits_before=credits_before,
         editor_model=EDITOR_MODEL if editor_model == "pinned" else editor_model,
     )
-    # Exactly one click, ever. A second click lands in the plain edit box once the editor re-renders and
-    # submits a differently priced job on top (measured 2026-09-13: an extra Omni edit, 20 credits).
-    # Whether the submit worked is decided by the listing and the credit balance below, not by a retry.
-    # Heard from before the click until the outcome row is written: Flow can take the click, charge, and drop
-    # the job with nothing on the page, and its own replies are the only place a reason shows up (measured on
-    # the gen path 2026-09-13). report() and reported_failed() never raise, by design: they run after a click
-    # that already spent money, where an exception would cost the outcome row.
-    # The module, not the name: composer imports clips too, and a name import turns that into a cycle.
-    replies = composer_mod.FlowReplies(editor=True, source_media=media_id)
-    session.page.on("response", replies.on_response)
-    try:
-        frames = await _await_submit(session, lambda: start.click(timeout=8_000))
-        fresh: list[dict[str, Any]] = []
-        scenes_after: set[str] = set()
-        deadline = asyncio.get_running_loop().time() + wait
-        while True:
-            rows, scenes_after = await _snapshot(session, project_id)
-            fresh = new_records(before, rows)
-            # The scene copy of the source shows up first and is already "done": wait for our own record.
-            ours = [r for r in fresh if role_of(r, prompt) == "generated"]
-            # Named only when the listing leaves no choice. An extend whose prompt matches the source's puts the
-            # scene copy in here too, and picking by order would hand the reader the copy (review F1, 2026-09-28).
-            if len(ours) == 1:
-                replies.about(ours[0]["workflow_id"])
-            if ours and all(is_done(r) for r in ours):
-                break
-            # Flow saying it failed ends the wait now; waiting the rest out only delays the same answer.
-            if replies.reported_failed():
-                break
-            if asyncio.get_running_loop().time() >= deadline:
-                break
-            await asyncio.sleep(10)
-        flow = await replies.report()
-    finally:
-        session.page.remove_listener("response", replies.on_response)
-    credits_after = (await reader.credits(session))["balance"]
-    outputs = []
-    for row in fresh:
-        role = role_of(row, prompt)
-        entry: dict[str, Any] = {
-            "media_id": row["id"],
-            "workflow_id": row["workflow_id"],
-            "role": role,
-            "status": row["status"],
-            "path": None,
-        }
-        if role == "generated" and is_done(row):
-            stem = out_dir / (row["id"] if row["id"] != media_id else f"{row['id']}_{row['workflow_id'][:8]}")
-            try:
-                path = await _fetch_with_retry(session.page.request, row, stem)
-                entry["path"] = str(path)
-            except Exception as exc:  # noqa: BLE001
-                entry["error"] = str(exc)[:200]
-        outputs.append(entry)
-    new_scenes = sorted(scenes_after - scenes_before)
-    generated = [o for o in outputs if o["role"] == "generated"]
-    status = (
-        "done" if generated and all(o["path"] for o in generated) else "pending" if generated else "failed"
-    )
-    spent = credits_before - credits_after
-    surprise = price_notice(
-        kind, spent, bool(generated), expected=editor_expected_price(kind, source_rows, media_id)
-    )
-    said = {"balance_moved": surprise} if surprise else {}
-    ledger.append(
-        job_id,
-        status,
-        outputs=outputs,
-        scenes=new_scenes,
-        credits_before=credits_before,
-        credits_after=credits_after,
-        spent=spent,
-        rpcids=sorted(frames),
-        flow=flow,
-        **said,
-    )
-    if not generated:
-        raise RuntimeError(
-            f"{kind}: nothing was generated within {wait:.0f}s, spent {credits_before - credits_after} "
-            f"credits; {composer_mod.flow_said(flow)}; rpcids {sorted(frames)}"
+    settled: list[str] = []
+
+    async def after_the_click() -> dict[str, Any]:
+        # Exactly one click, ever. A second click lands in the plain edit box once the editor re-renders and
+        # submits a differently priced job on top (measured 2026-09-13: an extra Omni edit, 20 credits).
+        # Whether the submit worked is decided by the listing and the credit balance below, not by a retry.
+        # Heard from before the click until the outcome row is written: Flow can take the click, charge, and drop
+        # the job with nothing on the page, and its own replies are the only place a reason shows up (measured on
+        # the gen path 2026-09-13). report() and reported_failed() never raise, by design: they run after a click
+        # that already spent money, where an exception would cost the outcome row.
+        # The module, not the name: composer imports clips too, and a name import turns that into a cycle.
+        replies = composer_mod.FlowReplies(editor=True, source_media=media_id)
+        session.page.on("response", replies.on_response)
+        try:
+            frames = await _await_submit(session, lambda: start.click(timeout=8_000))
+            fresh: list[dict[str, Any]] = []
+            scenes_after: set[str] = set()
+            deadline = asyncio.get_running_loop().time() + wait
+            while True:
+                rows, scenes_after = await _snapshot(session, project_id)
+                fresh = new_records(before, rows)
+                # The scene copy of the source shows up first and is already "done": wait for our own record.
+                ours = [r for r in fresh if role_of(r, prompt) == "generated"]
+                # Named only when the listing leaves no choice. An extend whose prompt matches the source's puts the
+                # scene copy in here too, and picking by order would hand the reader the copy (review F1, 2026-09-28).
+                if len(ours) == 1:
+                    replies.about(ours[0]["workflow_id"])
+                if ours and all(is_done(r) for r in ours):
+                    break
+                # Flow saying it failed ends the wait now; waiting the rest out only delays the same answer.
+                if replies.reported_failed():
+                    break
+                if asyncio.get_running_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(10)
+            flow = await replies.report()
+        finally:
+            session.page.remove_listener("response", replies.on_response)
+        credits_after = (await reader.credits(session))["balance"]
+        outputs = []
+        for row in fresh:
+            role = role_of(row, prompt)
+            entry: dict[str, Any] = {
+                "media_id": row["id"],
+                "workflow_id": row["workflow_id"],
+                "role": role,
+                "status": row["status"],
+                "path": None,
+            }
+            if role == "generated" and is_done(row):
+                stem = out_dir / (
+                    row["id"] if row["id"] != media_id else f"{row['id']}_{row['workflow_id'][:8]}"
+                )
+                try:
+                    path = await _fetch_with_retry(session.page.request, row, stem)
+                    entry["path"] = str(path)
+                except Exception as exc:  # noqa: BLE001
+                    entry["error"] = str(exc)[:200]
+            outputs.append(entry)
+        new_scenes = sorted(scenes_after - scenes_before)
+        generated = [o for o in outputs if o["role"] == "generated"]
+        status = (
+            "done"
+            if generated and all(o["path"] for o in generated)
+            else "pending"
+            if generated
+            else "failed"
         )
-    return {
-        "job_id": job_id,
-        "kind": kind,
-        "status": status,
-        "source_media_id": media_id,
-        "scene_id": new_scenes[0] if new_scenes else None,
-        "outputs": outputs,
-        "credits_before": credits_before,
-        "credits_after": credits_after,
-        **said,
-    }
+        spent = credits_before - credits_after
+        surprise = price_notice(
+            kind, spent, bool(generated), expected=editor_expected_price(kind, source_rows, media_id)
+        )
+        said = {"balance_moved": surprise} if surprise else {}
+        ledger.append(
+            job_id,
+            status,
+            outputs=outputs,
+            scenes=new_scenes,
+            credits_before=credits_before,
+            credits_after=credits_after,
+            spent=spent,
+            rpcids=sorted(frames),
+            flow=flow,
+            **said,
+        )
+        settled.append(status)
+        if not generated:
+            raise RuntimeError(
+                f"{kind}: nothing was generated within {wait:.0f}s, spent {credits_before - credits_after} "
+                f"credits; {composer_mod.flow_said(flow)}; rpcids {sorted(frames)}"
+            )
+        return {
+            "job_id": job_id,
+            "kind": kind,
+            "status": status,
+            "source_media_id": media_id,
+            "scene_id": new_scenes[0] if new_scenes else None,
+            "outputs": outputs,
+            "credits_before": credits_before,
+            "credits_after": credits_after,
+            **said,
+        }
+
+    try:
+        return await after_the_click()
+    except Exception as exc:
+        # A paid job always leaves an outcome row (plan AZ): an error in the wait or in the balance read used to
+        # leave the job on `submitted`, with no bill, until someone ran clip_reconcile.
+        if not settled:
+            await _unknown_row(session, ledger, job_id, kind, credits_before, exc)
+        raise
+
+
+UNKNOWN_BALANCE_S = 60.0
+
+
+async def _unknown_row(
+    session: FlowSession, ledger: gen.Ledger, job_id: str, kind: str, credits_before: int, exc: BaseException
+) -> None:
+    """The outcome row of an editor job that broke after its click: what failed and, when the balance can still be
+    read, what it cost. Never raises: the caller's own error is the one to reach the agent."""
+    fields: dict[str, Any] = {"kind": kind, "error": f"{type(exc).__name__}: {exc}"[:300]}
+    fields["credits_before"], fields["credits_after"] = credits_before, None
+    with contextlib.suppress(Exception):
+        after = (await asyncio.wait_for(reader.credits(session), UNKNOWN_BALANCE_S))["balance"]
+        fields["credits_after"], fields["spent"] = after, credits_before - after
+    try:
+        ledger.append(job_id, "unknown", **fields)
+    except Exception:  # noqa: BLE001
+        return
 
 
 STUCK_STATUSES = ("opening", "submitted")
