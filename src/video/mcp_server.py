@@ -309,9 +309,9 @@ def _transient(exc: BaseException) -> bool:
 
 
 class Backend:
-    def __init__(self, profile: str = "default", out_dir: Path = Path("out")) -> None:
+    def __init__(self, profile: str = "default", out_dir: Path | str = Path("out")) -> None:
         self.profile = profile
-        self.out_dir = out_dir
+        self.out_dir = Path(out_dir)
         self._running: set[str] = set()
         self._retrying: set[str] = set()
         # What each job_submit call still in its session asked for: it has no ledger row until it clicks.

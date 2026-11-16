@@ -5272,3 +5272,12 @@ def test_a_draft_that_cannot_be_recorded_keeps_its_paid_answer(monkeypatch, tmp_
     assert not result.is_error, _texts([result])
     answer = _payload(result)
     assert answer["outcome"]["code"] == "DONE" and "not recorded" in answer["draft_note"]
+
+
+def test_a_backend_given_its_out_folder_as_text_writes_under_it(tmp_path):
+    """Plan AZ: probes and scripts name the out folder as text; the Backend then compared a str with paths and every
+    out_dir check failed on an attribute error. Written by another session in 2026-10 and never committed."""
+    backend = mcp_server.Backend(out_dir=str(tmp_path))
+
+    assert backend._editor_out_dir(None) == tmp_path
+    assert backend._editor_out_dir(str(tmp_path / "film")) == tmp_path / "film"
