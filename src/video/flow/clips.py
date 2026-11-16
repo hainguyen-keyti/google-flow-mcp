@@ -412,7 +412,8 @@ def check_editor_cap(kind: str, expected: int | None, max_credits: int | None) -
         )
     if expected is None and max_credits < (dearest := editor_dearest(kind)):
         raise ValueError(
-            f"{kind}: this clip has no known price (its model key names no length), so the cap must cover the dearest "
+            f"{kind}: this clip has no known price (its model key names no length, or it lists more than one "
+            f"version after an extend or an upscale), so the cap must cover the dearest "
             f"{kind} on the table, {dearest} credits; max_credits is {max_credits}. Nothing was clicked and nothing "
             "was spent"
         )
