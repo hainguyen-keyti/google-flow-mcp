@@ -3430,3 +3430,30 @@ def test_a_ledger_that_cannot_take_the_unknown_row_does_not_replace_the_error(mo
 
     with pytest.raises(LookupError, match="listing is gone"):
         _run_editor_job(tmp_path)
+
+
+@pytest.mark.parametrize("kind", ["extend", "edit"])
+def test_the_public_editor_drivers_hand_every_argument_on(monkeypatch, tmp_path, kind):
+    # Plan AZ mutants: the cap dropped between clips.extend/edit and the driver behind them turned no test red.
+    seen = {}
+
+    async def fake(session, project_id, media_id, prompt, **kwargs):
+        seen.update(kwargs, positional=(session, project_id, media_id, prompt))
+        return {"status": "done"}
+
+    monkeypatch.setattr(clips, "_generate_from_editor", fake)
+
+    asyncio.run(
+        getattr(clips, kind)(
+            "S", "P", "M", "keep going", out_dir=tmp_path, job_id="j", wait=30.0, max_credits=7
+        )
+    )
+
+    assert seen == {
+        "positional": ("S", "P", "M", "keep going"),
+        "kind": kind,
+        "out_dir": tmp_path,
+        "job_id": "j",
+        "wait": 30.0,
+        "max_credits": 7,
+    }
