@@ -839,6 +839,7 @@ class Backend:
         job_id: str | None = None,
         out_dir: str | None = None,
         wait: float = 240.0,
+        max_credits: int | None = None,
     ) -> dict[str, Any]:
         target = self._editor_out_dir(out_dir)
         return await self._spend_once(
@@ -846,7 +847,14 @@ class Backend:
             target,
             lambda: self._with(
                 lambda s: clips_mod.extend(
-                    s, project_id, media_id, prompt, out_dir=target, job_id=job_id, wait=wait
+                    s,
+                    project_id,
+                    media_id,
+                    prompt,
+                    out_dir=target,
+                    job_id=job_id,
+                    wait=wait,
+                    max_credits=max_credits,
                 )
             ),
         )
@@ -859,6 +867,7 @@ class Backend:
         job_id: str | None = None,
         out_dir: str | None = None,
         wait: float = 240.0,
+        max_credits: int | None = None,
     ) -> dict[str, Any]:
         target = self._editor_out_dir(out_dir)
         return await self._spend_once(
@@ -866,7 +875,14 @@ class Backend:
             target,
             lambda: self._with(
                 lambda s: clips_mod.edit(
-                    s, project_id, media_id, prompt, out_dir=target, job_id=job_id, wait=wait
+                    s,
+                    project_id,
+                    media_id,
+                    prompt,
+                    out_dir=target,
+                    job_id=job_id,
+                    wait=wait,
+                    max_credits=max_credits,
                 )
             ),
         )
@@ -2091,25 +2107,35 @@ async def clip_recipe(project_id: str, media_id: str, workflow_id: str | None = 
     description=(
         "Extend a clip. Google retired Veo Extend on 2026-11-05; on build YyfdEJNu4Zk the extend panel shows no model "
         "picker and Flow runs the extend on its own model (the listing names it models/omni_1p5_pro_flow, measured "
-        "2026-11-09), and the ledger row says editor_model absent. It spends credits and is ledgered: two extends "
-        "measured 2026-11-09 each cost 4 credits (a 360p 4 s and a 360p 3 s source). Each came back as a new version "
-        "of the same clip, which this call downloads, but the two differed: on the 4 s source an 8.0 s file, on the "
-        "3 s source a 4.0 s file that does not begin at the source's last frame. So read the file's length and look "
-        "at it before cutting it into a film. When Flow greys Extend out, the call is refused before the click, at "
+        "2026-11-09), and the ledger row says editor_model absent. It spends credits and is ledgered: an extend adds "
+        "4 s and is billed at the source clip's rate by the second, so 4 credits on a 360p clip (paid twice "
+        "2026-11-09) and 12 on a 720p one (paid 2026-11-16, a 3 s source came back 7.0 s). max_credits is required: "
+        "the call is refused before the click, at no cost, when that price is over it, and when the source clip's "
+        "resolution cannot be read the cap has to cover the dearest extend (12). Each extend came back as a new "
+        "version of the same clip, which this call downloads, but they differed: on a 360p 4 s source an 8.0 s "
+        "file, on a 360p 3 s source a 4.0 s file that does not begin at the source's last frame. So read the file's "
+        "length and look at it before cutting it into a film. When Flow greys Extend out, the call is refused before the click, at "
         "no cost; when Flow still makes a scene, scene_id names it for scene_download. "
         "Takes about 2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out "
         "folder. " + _BALANCE_MOVED + _JOB_ID_RULE
     ),
 )
 async def clip_extend(
-    project_id: str, media_id: str, prompt: str, job_id: str, out_dir: str | None = None
+    project_id: str,
+    media_id: str,
+    prompt: str,
+    job_id: str,
+    max_credits: int | None = None,
+    out_dir: str | None = None,
 ) -> str:
     _require(project_id, "project_id")
     _require(media_id, "media_id")
     _require(prompt, "prompt")
     _one_line(prompt, "prompt")
-    _require(job_id, "job_id")
-    return _json(await backend.clip_extend(project_id, media_id, prompt, job_id, out_dir))
+    _paid_run(job_id, max_credits)
+    return _json(
+        await backend.clip_extend(project_id, media_id, prompt, job_id, out_dir, max_credits=max_credits)
+    )
 
 
 @server.tool(
@@ -2121,11 +2147,13 @@ async def clip_extend(
         "follows the source clip's cell: Flow prices an Omni 1.2 edit like a generation, by the second (changelog "
         "2026-11-05), and the edit of a 360p 4 s clip cost 4 credits (paid 2026-11-09). The bill is judged against "
         "the surveyed price of the source clip's own cell (720p 8 s = 24), and balance_moved says when it was not "
-        "that. On Omni 1.1 every edit of a 720p 8 s clip measured here cost 20, while Flow's own price table then "
+        "that. max_credits is required: the edit is refused before the click, at no cost, when the source clip's "
+        "cell costs more than it, and when that cell cannot be read the cap has to cover the dearest cell on the "
+        "table (60). On Omni 1.1 every edit of a 720p 8 s clip measured here cost 20, while Flow's own price table then "
         "listed Omni Flash Edit at 40. "
-        "This tool does not read the live price line before it clicks, so what stands between a "
-        "changed price and a surprise bill is the balance read before and after, answered as credits_before and "
-        "credits_after (the ledger row holds their difference as `spent`). An edit cannot change what is said: it "
+        "This tool does not read the live price line before it clicks, so the cap holds it to the surveyed table, "
+        "and what stands between a price Flow changed since and a surprise bill is the balance read before and "
+        "after, answered as credits_before and credits_after (the ledger row holds their difference as `spent`). An edit cannot change what is said: it "
         "keeps the clip's audio, and a new line asked for in the prompt came out burned in as a subtitle (measured "
         "2026-10-01). Takes about "
         "2-3 min, up to about 7 min when Flow is slow. out_dir, when given, must be inside the out folder. "
@@ -2134,14 +2162,21 @@ async def clip_extend(
     ),
 )
 async def clip_edit(
-    project_id: str, media_id: str, prompt: str, job_id: str, out_dir: str | None = None
+    project_id: str,
+    media_id: str,
+    prompt: str,
+    job_id: str,
+    max_credits: int | None = None,
+    out_dir: str | None = None,
 ) -> str:
     _require(project_id, "project_id")
     _require(media_id, "media_id")
     _require(prompt, "prompt")
     _one_line(prompt, "prompt")
-    _require(job_id, "job_id")
-    return _json(await backend.clip_edit(project_id, media_id, prompt, job_id, out_dir))
+    _paid_run(job_id, max_credits)
+    return _json(
+        await backend.clip_edit(project_id, media_id, prompt, job_id, out_dir, max_credits=max_credits)
+    )
 
 
 async def _gen(kind: str, **kwargs: Any) -> str:

@@ -32,8 +32,8 @@ def _paid_args(tmp_path):
         "gen t2v": ["gen", "t2v", "a boat", "--project", "P"],
         "gen i2v": ["gen", "i2v", frame, "a boat", "--project", "P"],
         "gen r2v": ["gen", "r2v", "a boat", "--ref", ref, "--project", "P"],
-        "flow clip extend": ["flow", "clip", "extend", "P", "M", "keep going"],
-        "flow clip edit": ["flow", "clip", "edit", "P", "M", "red shirt"],
+        "flow clip extend": ["flow", "clip", "extend", "P", "M", "keep going", "--max-credits", "12"],
+        "flow clip edit": ["flow", "clip", "edit", "P", "M", "red shirt", "--max-credits", "24"],
         "flow agent send": ["flow", "agent", "send", "P", "hi"],
     }
 
@@ -171,7 +171,20 @@ def test_gen_goes_through_the_backend_with_the_profile_and_every_option(monkeypa
     ("args", "method", "expected"),
     [
         (
-            ["flow", "clip", "extend", "P", "M", "keep going", "--job", "ext-1", "--wait", "30"],
+            [
+                "flow",
+                "clip",
+                "extend",
+                "P",
+                "M",
+                "keep going",
+                "--job",
+                "ext-1",
+                "--wait",
+                "30",
+                "--max-credits",
+                "12",
+            ],
             "clip_extend",
             {
                 "project_id": "P",
@@ -180,10 +193,11 @@ def test_gen_goes_through_the_backend_with_the_profile_and_every_option(monkeypa
                 "job_id": "ext-1",
                 "out_dir": "out",
                 "wait": 30.0,
+                "max_credits": 12,
             },
         ),
         (
-            ["flow", "clip", "edit", "P", "M", "red shirt", "--job", "edit-1"],
+            ["flow", "clip", "edit", "P", "M", "red shirt", "--job", "edit-1", "--max-credits", "24"],
             "clip_edit",
             {
                 "project_id": "P",
@@ -192,6 +206,7 @@ def test_gen_goes_through_the_backend_with_the_profile_and_every_option(monkeypa
                 "job_id": "edit-1",
                 "out_dir": "out",
                 "wait": 240.0,
+                "max_credits": 24,
             },
         ),
         (
@@ -245,3 +260,25 @@ def test_mcp_run_serves_the_profile_it_is_given(monkeypatch):
     assert result.exit_code == 0, result.output
     assert served == ["acc2"], served
     assert CliRunner().invoke(cli.main, ["mcp", "run"]).exit_code == 0 and served[-1] == "default"
+
+
+@pytest.mark.parametrize("command", ["extend", "edit"])
+def test_the_editor_commands_need_a_cap_and_hand_it_on(monkeypatch, command):
+    """Plan AZ, I2: the CLI's edit and extend take --max-credits like the tools, and refuse without it."""
+    from video import mcp_server
+
+    seen = {}
+
+    async def fake(self, **kwargs):
+        seen.update(kwargs)
+        return {"status": "done"}
+
+    monkeypatch.setattr(mcp_server.Backend, f"clip_{command}", fake)
+    base = ["flow", "clip", command, "P", "M", "keep going", "--job", f"cli-{command}"]
+
+    missing = CliRunner().invoke(cli.main, base)
+    assert missing.exit_code == 2 and "--max-credits" in missing.output and seen == {}
+
+    ran = CliRunner().invoke(cli.main, [*base, "--max-credits", "12"])
+    assert ran.exit_code == 0, ran.output
+    assert seen["max_credits"] == 12

@@ -156,8 +156,10 @@ TOOL_CALLS: dict[str, dict] = {
     "agent_mode": {"project_id": "P", "enabled": True},
     "agent_send": {"project_id": "P", "message": "hello", "job_id": "job-agent"},
     "clip_download": {"project_id": "P", "media_id": "M"},
-    "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going", "job_id": "job-extend"},
-    "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt", "job_id": "job-edit"},
+    "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going", "job_id": "job-extend"}
+    | {"max_credits": 30},
+    "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt", "job_id": "job-edit"}
+    | {"max_credits": 60},
     "clip_reconcile": {"project_id": "P"},
     "clip_recipe": {"project_id": "P", "media_id": "M", "workflow_id": "W"},
     "gen_t2v": {"prompt": "a boat", "project": "P", "job_id": "job-t2v"},
@@ -952,8 +954,10 @@ SPEND_CALLS = {
     "gen_t2v": {"prompt": "a boat", "project": "P", "job_id": "job-t2v"},
     "gen_i2v": {"initial_frame": "/tmp/a.png", "prompt": "a boat", "project": "P", "job_id": "job-i2v"},
     "gen_r2v": {"refs": ["/tmp/a.png"], "prompt": "a boat", "project": "P", "job_id": "job-r2v"},
-    "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going", "job_id": "job-extend"},
-    "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt", "job_id": "job-edit"},
+    "clip_extend": {"project_id": "P", "media_id": "M", "prompt": "keep going", "job_id": "job-extend"}
+    | {"max_credits": 30},
+    "clip_edit": {"project_id": "P", "media_id": "M", "prompt": "change the shirt", "job_id": "job-edit"}
+    | {"max_credits": 60},
     "agent_send": {"project_id": "P", "message": "hello", "job_id": "job-agent"},
     "gen_character": {"prompt": "a boat", "project": "P", "characters": ["E"], "job_id": "job-character"},
     "gen_video": {"prompt": "a boat", "project": "P", "job_id": "job-video", "max_credits": 20},
@@ -969,11 +973,15 @@ def _spending_backend(monkeypatch, tmp_path):
         reached.append("browser")
         return await fn(object())
 
-    async def fake_extend(session, project_id, media_id, prompt, *, out_dir, job_id=None, wait=240.0):
+    async def fake_extend(
+        session, project_id, media_id, prompt, *, out_dir, job_id=None, wait=240.0, max_credits=None
+    ):
         reached.append(("clip_extend", job_id))
         return {"job_id": job_id}
 
-    async def fake_edit(session, project_id, media_id, prompt, *, out_dir, job_id=None, wait=240.0):
+    async def fake_edit(
+        session, project_id, media_id, prompt, *, out_dir, job_id=None, wait=240.0, max_credits=None
+    ):
         reached.append(("clip_edit", job_id))
         return {"job_id": job_id}
 
@@ -5281,3 +5289,29 @@ def test_a_backend_given_its_out_folder_as_text_writes_under_it(tmp_path):
 
     assert backend._editor_out_dir(None) == tmp_path
     assert backend._editor_out_dir(str(tmp_path / "film")) == tmp_path / "film"
+
+
+@pytest.mark.parametrize(("tool", "driver"), [("clip_edit", "edit"), ("clip_extend", "extend")])
+def test_the_editor_tools_need_a_cap_and_hand_it_to_the_driver(monkeypatch, tmp_path, tool, driver):
+    """Plan AZ, I2: clip_edit and clip_extend were the last paid tools with no max_credits."""
+    got = {}
+
+    async def fake_with(self, fn):
+        return await fn(object())
+
+    async def fake_driver(session, project_id, media_id, prompt, **options):
+        got.update(options)
+        return {"job_id": options["job_id"], "status": "done"}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.clips_mod, driver, fake_driver)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+    call = {"project_id": "P", "media_id": "M", "prompt": "make it night", "job_id": f"cap-{driver}"}
+
+    for bad in (call, call | {"max_credits": 0}):
+        refused = _call(tool, bad)
+        assert refused.is_error and "max_credits" in _texts([refused])[0], _texts([refused])
+    assert got == {}
+
+    done = _call(tool, call | {"max_credits": 12})
+    assert not done.is_error and got["max_credits"] == 12, _texts([done])

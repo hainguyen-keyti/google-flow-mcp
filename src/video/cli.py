@@ -436,15 +436,34 @@ def clip_download(project_id: str, media_id: str, quality: str, out_dir: str, pr
     "--job", "job_id", required=True, help="Idempotency key; a used one is refused before a browser opens."
 )
 @click.option("--wait", default=240.0, show_default=True, type=float)
+@click.option(
+    "--max-credits",
+    required=True,
+    type=click.IntRange(min=1),
+    help="The most this call may spend; refused before the click when the clip's price is over it.",
+)
 @click.option("--profile", default="default", show_default=True)
 def clip_extend(
-    project_id: str, media_id: str, prompt: str, out_dir: str, job_id: str, wait: float, profile: str
+    project_id: str,
+    media_id: str,
+    prompt: str,
+    out_dir: str,
+    job_id: str,
+    wait: float,
+    max_credits: int,
+    profile: str,
 ) -> None:
-    """Extend a clip (Veo 3.1 Lite); spends credits, ledgered."""
+    """Extend a clip by 4 s at its own per-second price; spends credits, ledgered."""
     from video.mcp_server import Backend
 
     call = Backend(profile=profile).clip_extend(
-        project_id=project_id, media_id=media_id, prompt=prompt, job_id=job_id, out_dir=out_dir, wait=wait
+        project_id=project_id,
+        media_id=media_id,
+        prompt=prompt,
+        job_id=job_id,
+        out_dir=out_dir,
+        wait=wait,
+        max_credits=max_credits,
     )
     click.echo(json.dumps(_spend(call)))
 
@@ -458,15 +477,34 @@ def clip_extend(
     "--job", "job_id", required=True, help="Idempotency key; a used one is refused before a browser opens."
 )
 @click.option("--wait", default=240.0, show_default=True, type=float)
+@click.option(
+    "--max-credits",
+    required=True,
+    type=click.IntRange(min=1),
+    help="The most this call may spend; refused before the click when the clip's price is over it.",
+)
 @click.option("--profile", default="default", show_default=True)
 def clip_edit(
-    project_id: str, media_id: str, prompt: str, out_dir: str, job_id: str, wait: float, profile: str
+    project_id: str,
+    media_id: str,
+    prompt: str,
+    out_dir: str,
+    job_id: str,
+    wait: float,
+    max_credits: int,
+    profile: str,
 ) -> None:
-    """Video-to-video edit with Omni 1.2 Flash; spends credits, ledgered."""
+    """Video-to-video edit with Omni 1.2 Flash, at the price of the clip's own cell; spends credits, ledgered."""
     from video.mcp_server import Backend
 
     call = Backend(profile=profile).clip_edit(
-        project_id=project_id, media_id=media_id, prompt=prompt, job_id=job_id, out_dir=out_dir, wait=wait
+        project_id=project_id,
+        media_id=media_id,
+        prompt=prompt,
+        job_id=job_id,
+        out_dir=out_dir,
+        wait=wait,
+        max_credits=max_credits,
     )
     click.echo(json.dumps(_spend(call)))
 

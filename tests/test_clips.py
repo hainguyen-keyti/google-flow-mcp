@@ -1811,7 +1811,9 @@ def test_clip_extend_and_edit_cli_print_json(monkeypatch):
     monkeypatch.setattr(mcp_server.Backend, "clip_extend", answered)
     monkeypatch.setattr(mcp_server.Backend, "clip_edit", answered)
     for verb in ("extend", "edit"):
-        result = CliRunner().invoke(cli.main, ["flow", "clip", verb, "p", "m", "keep going", "--job", "j"])
+        result = CliRunner().invoke(
+            cli.main, ["flow", "clip", verb, "p", "m", "keep going", "--job", "j", "--max-credits", "12"]
+        )
         assert result.exit_code == 0, result.output
         assert '"job_id": "j"' in result.output
 
@@ -2462,16 +2464,26 @@ def test_an_editor_job_at_the_measured_price_says_nothing_about_it(monkeypatch, 
     assert last["spent"] == 24, last
 
 
-def test_an_extend_is_judged_against_no_price_until_its_cell_is_measured(monkeypatch, tmp_path):
-    """Plan AW: one Omni 1.2 extend was paid (4 for a 360p 4 s clip), so no price per cell is known; an extend's bill
-    is recorded as spent and said nowhere as a price change, where the old flat 10 flagged every correct bill."""
+def test_an_extend_is_judged_against_four_seconds_of_its_source(monkeypatch, tmp_path):
+    """Plan AW judged an extend against nothing, one having been paid; plan AZ paid a third (720p: 12) and the three
+    agree on 4 s at the clip's rate. The fake's source is 720p, so 12 passes in silence and 24 is said."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=288)
+    assert "balance_moved" not in _run_editor_job(tmp_path, kind="extend")
+
     _spending_and_producing(monkeypatch, tmp_path, before=300, after=276)
-
-    answer = _run_editor_job(tmp_path, kind="extend")
-
-    assert "balance_moved" not in answer, answer
-    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
-    assert last["spent"] == 24 and "balance_moved" not in last, last
+    said = asyncio.run(
+        clips._generate_from_editor(
+            _ListeningSession(),
+            "p",
+            "src",
+            "dress her",
+            kind="extend",
+            out_dir=tmp_path,
+            job_id="j2",
+            wait=5.0,
+        )
+    )["balance_moved"]
+    assert (said["kind"], said["measured"], said["moved"]) == ("extend", 12, 24)
 
 
 def test_a_job_flow_dropped_for_free_is_not_a_balance_moved(monkeypatch, tmp_path):
@@ -3116,11 +3128,6 @@ def test_an_edit_is_expected_to_cost_its_source_clips_cell(key, expected):
     assert clips.editor_expected_price("edit", rows, "src") == expected
 
 
-def test_an_extend_has_no_expected_price_until_one_is_measured_for_its_cell():
-    rows = [{"id": "src", "kind": "video", "model": "macaron_cookie_t2v_4s_360p"}]
-    assert clips.editor_expected_price("extend", rows, "src") is None
-
-
 def test_a_bill_at_the_cells_price_raises_no_notice_and_another_does():
     assert clips.price_notice("edit", 24, expected=24) is None
     said = clips.price_notice("edit", 30, expected=24)
@@ -3278,3 +3285,72 @@ def test_a_job_that_made_nothing_keeps_its_one_failed_row(monkeypatch, tmp_path)
 
     statuses = [row["status"] for row in gen.Ledger(tmp_path / "ledger.jsonl").rows("j")]
     assert statuses.count("failed") == 1 and "unknown" not in statuses, statuses
+
+
+# Plan AZ, I2: the editor shows no price before the click, so the cap is held to the source clip's own cell: an edit
+# costs that cell (paid 2026-11-09), an extend 4 s at the clip's per-second rate (360p 4 twice, 720p 12, paid
+# 2026-11-09 and 2026-11-16).
+
+
+def _capped(tmp_path, kind, cap, job="j"):
+    return asyncio.run(
+        clips._generate_from_editor(
+            _ListeningSession(),
+            "p",
+            "src",
+            "dress her",
+            kind=kind,
+            out_dir=tmp_path,
+            job_id=job,
+            wait=5.0,
+            max_credits=cap,
+        )
+    )
+
+
+@pytest.mark.parametrize(("kind", "price"), [("edit", 24), ("extend", 12)])
+def test_an_editor_job_over_its_cap_is_refused_before_the_click(monkeypatch, tmp_path, kind, price):
+    """The fake's source is an Omni 1.2 720p 8 s clip: its edit is 24, its extend 4 s at 3 a second."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=300 - price)
+
+    with pytest.raises(ValueError, match=f"{price} credits") as refused:
+        _capped(tmp_path, kind, price - 1)
+
+    assert "nothing was" in str(refused.value)
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows() == []
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=300 - price)
+    assert _capped(tmp_path, kind, price, job="j2")["status"] == "done"
+
+
+@pytest.mark.parametrize(("kind", "dearest"), [("edit", 60), ("extend", 12)])
+def test_an_editor_job_on_a_clip_of_no_known_cell_needs_a_cap_that_covers_the_dearest(
+    monkeypatch, tmp_path, kind, dearest
+):
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=290)
+    snapshot = clips._snapshot
+
+    async def a_veo_source(session, project_id):
+        rows, scenes = await snapshot(session, project_id)
+        for row in rows:
+            if row["id"] == "src":
+                row["model"] = "veo_3_1_t2v_lite"
+        return rows, scenes
+
+    monkeypatch.setattr(clips, "_snapshot", a_veo_source)
+
+    with pytest.raises(ValueError, match="no known price"):
+        _capped(tmp_path, kind, dearest - 1)
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows() == []
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=290)
+    snapshot = clips._snapshot
+    monkeypatch.setattr(clips, "_snapshot", a_veo_source)
+    assert _capped(tmp_path, kind, dearest, job="j2")["status"] == "done"
+
+
+def test_an_extend_is_expected_to_cost_four_seconds_of_its_source():
+    rows = [
+        {"id": "a", "kind": "video", "model": "macaron_cookie_t2v_3s_360p"},
+        {"id": "b", "kind": "video", "model": "macaron_cookie_t2v_3s"},
+    ]
+    assert clips.editor_expected_price("extend", rows, "a") == 4
+    assert clips.editor_expected_price("extend", rows, "b") == 12

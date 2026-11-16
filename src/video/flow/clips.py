@@ -357,24 +357,59 @@ _WHY_DEFAULT = (
 )
 
 
+# An extend adds this many seconds at the source clip's own per-second rate: 4 credits on two 360p clips (2026-11-09)
+# and 12 on a 720p one, which came back 7.0 s for a 3 s source (2026-11-16).
+EXTEND_SECONDS = 4
+
+
 def editor_expected_price(kind: str, rows: list[dict[str, Any]], media_id: str) -> int | None:
-    """An edit's price is the surveyed price of its source clip's cell (Omni 1.2 bills an edit like a generation, by
-    the second), read off the length and resolution its model key names; None when the key names no length or the
-    cell has no price, and for an extend, whose price per cell was never measured."""
+    """What an edit or an extend is expected to cost, off the source clip's own cell: an edit costs that cell (Omni
+    1.2 bills an edit like a generation, by the second), an extend EXTEND_SECONDS at the clip's resolution. The length
+    and resolution are read off the clip's model key; None when the key names no length or the cell has no price."""
     from video.flow import video as video_mod  # composer imports this module, and video imports composer
 
-    if kind != "edit":
+    if kind not in ("edit", "extend"):
         return None
-    # It runs after the money is gone, so it never raises: an error here cost an outcome row on 2026-09-13.
+    # It also runs after the money is gone, so it never raises: an error here cost an outcome row on 2026-09-13.
     try:
         key = next((row.get("model") for row in rows if row.get("id") == media_id and row.get("model")), None)
         length = video_mod.KEY_LENGTH.search(key or "")
         if not key or length is None:
             return None
         resolution = "360p" if key.endswith("_360p") else "720p"
-        return video_mod.price(video_mod.EDIT_MODEL, resolution, int(length.group(1)), 1)
+        seconds = int(length.group(1)) if kind == "edit" else EXTEND_SECONDS
+        return video_mod.price(video_mod.EDIT_MODEL, resolution, seconds, 1)
     except Exception:  # noqa: BLE001
         return None
+
+
+def editor_dearest(kind: str) -> int:
+    """The most an edit or an extend can cost on the surveyed table: the bound for a clip whose cell is unknown."""
+    from video.flow import video as video_mod
+
+    cells = video_mod.VIDEO["models"][video_mod.EDIT_MODEL]["price_x1"]
+    if kind == "extend":
+        return max(price for cell, price in cells.items() if cell.endswith(f" {EXTEND_SECONDS}s"))
+    return max(cells.values())
+
+
+def check_editor_cap(kind: str, expected: int | None, max_credits: int | None) -> None:
+    """Refuse, before the click and before any ledger row, an editor job whose bill would pass the caller's cap. The
+    editor shows no price to read, so the bill is the source clip's cell, and an unknown cell is bounded by the
+    dearest one."""
+    if max_credits is None:
+        return
+    if expected is not None and expected > max_credits:
+        raise ValueError(
+            f"{kind}: this clip's {kind} costs {expected} credits on the surveyed table, over max_credits "
+            f"{max_credits}; nothing was clicked and nothing was spent"
+        )
+    if expected is None and max_credits < (dearest := editor_dearest(kind)):
+        raise ValueError(
+            f"{kind}: this clip has no known price (its model key names no length), so the cap must cover the dearest "
+            f"{kind} on the table, {dearest} credits; max_credits is {max_credits}. Nothing was clicked and nothing "
+            "was spent"
+        )
 
 
 def price_notice(
@@ -415,6 +450,7 @@ async def _generate_from_editor(
     out_dir: Path,
     job_id: str | None,
     wait: float,
+    max_credits: int | None = None,
 ) -> dict[str, Any]:
     # _prompt_ready types with keyboard.type, which presses Enter for a newline before any `submitted` row exists.
     if "\n" in prompt or "\r" in prompt:
@@ -426,6 +462,7 @@ async def _generate_from_editor(
     rows, scenes_before = await _snapshot(session, project_id)
     # The source as listed before the click: its new version shares its media id (review of plan AW, N1).
     source_rows = list(rows)
+    check_editor_cap(kind, editor_expected_price(kind, source_rows, media_id), max_credits)
     before = {r["workflow_id"] for r in rows}
     credits_before = (await reader.credits(session))["balance"]
 
@@ -803,9 +840,18 @@ async def extend(
     out_dir: Path,
     job_id: str | None = None,
     wait: float = 240.0,
+    max_credits: int | None = None,
 ) -> dict[str, Any]:
     return await _generate_from_editor(
-        session, project_id, media_id, prompt, kind="extend", out_dir=out_dir, job_id=job_id, wait=wait
+        session,
+        project_id,
+        media_id,
+        prompt,
+        kind="extend",
+        out_dir=out_dir,
+        job_id=job_id,
+        wait=wait,
+        max_credits=max_credits,
     )
 
 
@@ -818,9 +864,18 @@ async def edit(
     out_dir: Path,
     job_id: str | None = None,
     wait: float = 240.0,
+    max_credits: int | None = None,
 ) -> dict[str, Any]:
     return await _generate_from_editor(
-        session, project_id, media_id, prompt, kind="edit", out_dir=out_dir, job_id=job_id, wait=wait
+        session,
+        project_id,
+        media_id,
+        prompt,
+        kind="edit",
+        out_dir=out_dir,
+        job_id=job_id,
+        wait=wait,
+        max_credits=max_credits,
     )
 
 
