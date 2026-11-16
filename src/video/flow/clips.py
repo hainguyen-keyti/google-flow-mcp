@@ -365,16 +365,22 @@ EXTEND_SECONDS = 4
 def editor_expected_price(kind: str, rows: list[dict[str, Any]], media_id: str) -> int | None:
     """What an edit or an extend is expected to cost, off the source clip's own cell: an edit costs that cell (Omni
     1.2 bills an edit like a generation, by the second), an extend EXTEND_SECONDS at the clip's resolution. The length
-    and resolution are read off the clip's model key; None when the key names no length or the cell has no price."""
+    and resolution are read off the clip's model key; None when the key names no length, the cell has no price, or
+    the clip lists more than one version."""
     from video.flow import video as video_mod  # composer imports this module, and video imports composer
 
     if kind not in ("edit", "extend"):
         return None
     # It also runs after the money is gone, so it never raises: an error here cost an outcome row on 2026-09-13.
     try:
-        key = next((row.get("model") for row in rows if row.get("id") == media_id and row.get("model")), None)
-        length = video_mod.KEY_LENGTH.search(key or "")
-        if not key or length is None:
+        # An extended or upscaled clip lists one row per version under one id, in no fixed order (measured
+        # 2026-11-16), and its length is then no longer the first key's: nothing is quoted for it.
+        keys = {row.get("model") for row in rows if row.get("id") == media_id and row.get("model")}
+        if len(keys) != 1:
+            return None
+        (key,) = keys
+        length = video_mod.KEY_LENGTH.search(key)
+        if length is None:
             return None
         resolution = "360p" if key.endswith("_360p") else "720p"
         seconds = int(length.group(1)) if kind == "edit" else EXTEND_SECONDS

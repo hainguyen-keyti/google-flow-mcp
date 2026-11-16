@@ -3354,3 +3354,21 @@ def test_an_extend_is_expected_to_cost_four_seconds_of_its_source():
     ]
     assert clips.editor_expected_price("extend", rows, "a") == 4
     assert clips.editor_expected_price("extend", rows, "b") == 12
+
+
+@pytest.mark.parametrize("kind", ["edit", "extend"])
+@pytest.mark.parametrize("flip", [False, True], ids=["original first", "extended first"])
+def test_a_clip_with_more_than_one_version_has_no_known_price(kind, flip):
+    """Plan AZ, I2, measured on the live listing 2026-11-16: an extended clip lists one row per version under one id
+    (the original's key, then models/omni_1p5_pro_flow), in no fixed order. The first row decided the price, so a
+    720p clip grown to 7 s was quoted as its 3 s original. Its length is no longer the key's, so nothing is quoted."""
+    versions = [
+        {"id": "a", "kind": "video", "model": "macaron_cookie_t2v_3s"},
+        {"id": "a", "kind": "video", "model": "models/omni_1p5_pro_flow"},
+    ]
+    rows = [*(reversed(versions) if flip else versions), {"id": "b", "kind": "video", "model": "x_t2v_8s"}]
+
+    assert clips.editor_expected_price(kind, rows, "a") is None
+    # The same key listed twice is still one version.
+    twice = [versions[0], dict(versions[0])]
+    assert clips.editor_expected_price(kind, twice, "a") is not None
