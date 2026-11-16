@@ -627,8 +627,8 @@ async def _generate_from_editor(
 
     try:
         return await after_the_click()
-    except BaseException as exc:
-        # BaseException: a client that gives up cancels the call, and the click is paid for all the same.
+    except (Exception, asyncio.CancelledError) as exc:
+        # CancelledError too: a client that gives up cancels the call, and the click is paid for all the same.
         # A paid job always leaves an outcome row (plan AZ): an error in the wait or in the balance read used to
         # leave the job on `submitted`, with no bill, until someone ran clip_reconcile.
         if not settled:
