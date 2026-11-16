@@ -161,8 +161,12 @@ mặt, tay và món đồ.
   `clip_edit`, `agent_send` (có thể tốn). **Cả 6 đã chạy thật qua MCP ngày 2026-09-16**, mỗi tool đúng một lần, số dư
   kẹp hai đầu: t2v omni-flash 15, t2v veo-lite 10, `clip_edit` 20, `clip_extend` 10, `gen_r2v` 12; `agent_send` một
   tin nhắn thường **0**; `gen_i2v` khi đó vẫn hỏng ở bước chọn khung đầu (**0** credit, dòng sổ `failed`); nó chạy được lần đầu ngày 2026-09-18 sau khi nâng gflow lên 0.78.0, **15** credit.
-  **`clip_extend` chỉ chạy trên clip Veo**: trên clip omni-flash, Flow hiện mục `Extend (Veo 3.1 - Lite)` xám và tool
-  nói thẳng điều đó thay vì chờ hết giờ. Cả 6 tool **bắt buộc `job_id`**: job mới thì id mới, gọi lại cùng job
+  Các số của ngày đó là giá cũ. Từ 2026-11 (Omni 1.2): `clip_edit` tốn đúng ô của clip nguồn (clip 360p 4 s: 4,
+  clip 360p 3 s: 3, đo 2026-11-09 và 2026-11-16), `clip_extend` thêm 4 s theo giá giây của clip (360p: 4, 720p: 12,
+  đo 2026-11-09 và 2026-11-16; Veo Extend đã bị Google bỏ ngày 2026-11-05). Hai tool này **bắt buộc `max_credits`**:
+  giá vượt trần thì bị từ chối trước cú bấm, 0 credit; clip đã extend hay upscale (nhiều phiên bản dưới một id) thì
+  không biết giá, trần phải phủ ô đắt nhất (edit 60, extend 12). Hỏng sau cú bấm vẫn để lại dòng sổ `unknown` kèm
+  lỗi và số dư đọc được. Cả 6 tool **bắt buộc `job_id`**: job mới thì id mới, gọi lại cùng job
   thì giữ id. Trước khi mở trình duyệt, MCP từ chối `job_id` đã có BẤT KỲ dòng nào (kể cả `opening`) trong mọi file
   `ledger.jsonl` dưới `out/`, kèm lời dặn soát `flow_media` và `flow_credits`, nên gọi lại không bao giờ trả tiền hai
   lần. `job_id` đang chạy ở một lời gọi khác cũng bị từ chối, với lời dặn khác hẳn: chờ lời gọi đó xong rồi gọi lại
@@ -429,8 +433,9 @@ quan sát ghi ra `out/canary_<thời-gian>.json` để so bằng mắt khi cần
   1.1 Flash = 20, Omni Flash 10 s = 15, `--count 2` = 20, ảnh Nano Banana 2.1 = 0, upscale 1080p = 0, r2v Omni
   Flash 8 s = 12 (đo 2026-09-15, 292 s đầu cuối qua MCP), `gen i2v` omni-flash 10 s = 15 (đo 2026-09-18 qua MCP, 105 s).
   Bảng giá chính thức của Flow lệch ở hai chỗ: Omni Flash Edit ghi **40** trong khi đo được 20 nhiều lần, và **4K
-  chỉ có từ gói Ultra** (50 credit), tài khoản này là Pro. Mô tả tool nói cả hai con số, và `clip_edit` KHÔNG đọc
-  dòng giá trước khi bấm (khác `gen_character`), nên chốt chặn duy nhất của nó là số dư đọc trước và sau.
+  chỉ có từ gói Ultra** (50 credit), tài khoản này là Pro. Mô tả tool nói cả hai con số, và `clip_edit`, `clip_extend` KHÔNG đọc
+  dòng giá trước khi bấm (khác `gen_character`): chốt chặn là `max_credits` so với bảng giá đã survey, rồi số dư đọc
+  trước và sau.
 - Thao tác tốn credit chỉ bấm "Start generation" ĐÚNG MỘT LẦN. Bấm lại khi tưởng cú trước hụt là cách
   nhanh nhất để trả tiền hai lần: đo 2026-09-13, cú thứ hai rơi vào ô prompt thường và cộng thêm một
   Omni edit 20 credit lên trên extend 10 credit (hoá đơn 30). Thành hay bại đọc ở listing và số dư.

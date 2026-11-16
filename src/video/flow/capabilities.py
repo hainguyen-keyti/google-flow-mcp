@@ -123,6 +123,17 @@ def capabilities() -> dict[str, Any]:
                 "clip_edit": clips.MEASURED_PRICE["edit"],
                 "agent_send": clips.MEASURED_PRICE["agent"],
             },
-            "notes": {"agent_send": clips._WHY["agent"]},
+            "notes": {
+                "agent_send": clips._WHY["agent"],
+                "clip_edit": (
+                    "the figure is the edit of a 360p 4 s clip; an edit costs its source clip's own cell on the "
+                    "omni-1.2-flash table (720p 8 s: 24), and clip_edit refuses over max_credits before the click"
+                ),
+                "clip_extend": (
+                    "the figure is the extend of a 360p clip; an extend adds 4 s at the source clip's rate (720p: "
+                    "12, paid 2026-11-16). An extend whose result passes 10 s was never paid here, and Flow's "
+                    "generations cost double for each second past 10, so its bill may be higher than quoted"
+                ),
+            },
         },
     }

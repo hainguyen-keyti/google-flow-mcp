@@ -1,6 +1,6 @@
 {
- "build": "YyfdEJNu4Zk.2018.O",
- "measured": "2026-11-09",
+ "build": "mUc0tlLxreo.2018.O",
+ "measured": "2026-11-16",
  "routes": {
   "character page": {
    "labels": [
@@ -337,8 +337,8 @@
   },
   "clip editor menu Select model family": {
    "labels": [
-    "volume_up Omni 1.1 Flash Leaving Dec 5",
-    "volume_up Omni 1.2 Flash"
+    "Omni 1.1 Flash Leaving Dec 5",
+    "Omni 1.2 Flash"
    ],
    "selectors": {
     "flow.agent.CHIP": 0,
@@ -616,9 +616,9 @@
     "flow.ingredients.SLIDER": 0,
     "flow.ingredients.SLIDER_LABEL": 0,
     "flow.lane.NEW_PROJECT_BUTTON": 1,
-    "flow.projects.GRID_READY": 12,
+    "flow.projects.GRID_READY": 13,
     "flow.projects.PROJECT_READY": 0,
-    "flow.reader.GRID_READY": 12,
+    "flow.reader.GRID_READY": 13,
     "flow.reader.PROJECT_READY": 0,
     "flow.scenes.BUILDER": 0,
     "flow.scenes.CLIPS": 0,
@@ -631,7 +631,7 @@
     "flow.uploads.PROJECT_READY": 0,
     "flow.uploads.SIDEBAR": 0,
     "session.COMPOSER_READY": 0,
-    "session.GRID_READY": 12,
+    "session.GRID_READY": 13,
     "session.NEW_PROJECT_BUTTON": 1,
     "session.PROJECT_READY": 0
    }

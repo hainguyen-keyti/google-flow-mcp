@@ -95,7 +95,14 @@ def test_a_price_never_paid_here_is_marked_and_a_caveat_is_carried():
         capabilities.CHARACTER_UNMEASURED
     )
     assert set(capabilities.CHARACTER_UNMEASURED) < set(models), "some are measured, or the mark says nothing"
-    assert answer["editor"]["notes"] == {"agent_send": clips._WHY["agent"]}
+    notes = answer["editor"]["notes"]
+    assert (
+        set(notes) == {"agent_send", "clip_edit", "clip_extend"}
+        and notes["agent_send"] == clips._WHY["agent"]
+    )
+    # Review of plan AZ, finding 5: the two figures are 360p measurements, and the tools quote by the clip's cell.
+    assert "source clip's own cell" in notes["clip_edit"] and "max_credits" in notes["clip_edit"]
+    assert "4 s at the source clip's rate" in notes["clip_extend"] and "past 10" in notes["clip_extend"]
     # The guard counts characters and images together (ingredients.resolve), which the number alone does not say.
     assert "together" in answer["video"]["caps_note"] and "character" in answer["video"]["caps_note"]
     # No date is claimed for a part that carries none.

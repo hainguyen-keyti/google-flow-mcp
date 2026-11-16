@@ -3372,3 +3372,61 @@ def test_a_clip_with_more_than_one_version_has_no_known_price(kind, flip):
     # The same key listed twice is still one version.
     twice = [versions[0], dict(versions[0])]
     assert clips.editor_expected_price(kind, twice, "a") is not None
+
+
+def test_a_version_row_that_names_no_model_still_makes_the_price_unknown():
+    # Review of plan AZ, finding 1: distinct non-empty keys alone let a second version with no key pass as one.
+    rows = [
+        {"id": "a", "kind": "video", "model": "macaron_cookie_t2v_3s"},
+        {"id": "a", "kind": "video", "model": None},
+    ]
+
+    assert clips.editor_expected_price("edit", rows, "a") is None
+    assert clips.editor_expected_price("extend", list(reversed(rows)), "a") is None
+
+
+def test_a_call_cancelled_after_the_click_still_leaves_an_outcome_row(monkeypatch, tmp_path):
+    # Review of plan AZ, finding 2: a client that gives up cancels the call, which no `except Exception` sees.
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=276)
+    snapshot = clips._snapshot
+    reads = []
+
+    async def cancelled_after_the_click(session, project_id):
+        reads.append(1)
+        if len(reads) > 1:
+            raise asyncio.CancelledError
+        return await snapshot(session, project_id)
+
+    monkeypatch.setattr(clips, "_snapshot", cancelled_after_the_click)
+
+    with pytest.raises(asyncio.CancelledError):
+        _run_editor_job(tmp_path)
+
+    last = gen.Ledger(tmp_path / "ledger.jsonl").rows("j")[-1]
+    assert last["status"] == "unknown" and "CancelledError" in last["error"] and last["spent"] == 24, last
+
+
+def test_a_ledger_that_cannot_take_the_unknown_row_does_not_replace_the_error(monkeypatch, tmp_path):
+    # Review of plan AZ, finding 4: the comment said so and no test did.
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=276)
+    snapshot = clips._snapshot
+    reads = []
+
+    async def dies_after_the_click(session, project_id):
+        reads.append(1)
+        if len(reads) > 1:
+            raise LookupError("the listing is gone")
+        return await snapshot(session, project_id)
+
+    append = gen.Ledger.append
+
+    def full_disk(self, job_id, status, **fields):
+        if status == "unknown":
+            raise OSError("No space left on device")
+        return append(self, job_id, status, **fields)
+
+    monkeypatch.setattr(clips, "_snapshot", dies_after_the_click)
+    monkeypatch.setattr(gen.Ledger, "append", full_disk)
+
+    with pytest.raises(LookupError, match="listing is gone"):
+        _run_editor_job(tmp_path)

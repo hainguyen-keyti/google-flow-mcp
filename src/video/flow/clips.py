@@ -341,8 +341,9 @@ async def _download_upsampled(
 # when the agent generated nothing. Flow's own table says Omni Flash Edit costs 40, and the editor publishes no
 # price the driver can read before the click (probe 2026-09-28: the line appears only while hovering Start, and
 # it read 12 on a clip whose edit charged 20), so the balance on both sides is all there is.
-# On Omni 1.2 (paid run 2026-11-09) an edit and an extend of a 360p 4 s clip each cost 4; an edit is judged against
-# its own clip's cell (editor_expected_price), and an extend, whose price per cell nobody has measured, against none.
+# On Omni 1.2 (paid run 2026-11-09) an edit and an extend of a 360p 4 s clip each cost 4, the figures kept here. A
+# job is judged against editor_expected_price: an edit against its own clip's cell, an extend against 4 s at the
+# clip's rate (720p: 12, paid 2026-11-16).
 MEASURED_PRICE = {"extend": 4, "edit": 4, "agent": 0}
 _FROM_TABLE = object()
 _WHY = {
@@ -375,8 +376,8 @@ def editor_expected_price(kind: str, rows: list[dict[str, Any]], media_id: str) 
     try:
         # An extended or upscaled clip lists one row per version under one id, in no fixed order (measured
         # 2026-11-16), and its length is then no longer the first key's: nothing is quoted for it.
-        keys = {row.get("model") for row in rows if row.get("id") == media_id and row.get("model")}
-        if len(keys) != 1:
+        keys = {row.get("model") for row in rows if row.get("id") == media_id}
+        if len(keys) != 1 or None in keys:
             return None
         (key,) = keys
         length = video_mod.KEY_LENGTH.search(key)
@@ -626,7 +627,8 @@ async def _generate_from_editor(
 
     try:
         return await after_the_click()
-    except Exception as exc:
+    except BaseException as exc:
+        # BaseException: a client that gives up cancels the call, and the click is paid for all the same.
         # A paid job always leaves an outcome row (plan AZ): an error in the wait or in the balance read used to
         # leave the job on `submitted`, with no bill, until someone ran clip_reconcile.
         if not settled:

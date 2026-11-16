@@ -186,6 +186,7 @@ These are not suggestions; they are enforced in code and pinned by tests.
 - `clip_edit` and `clip_extend` do not read the live price line before clicking, unlike `gen_character`. Their
   guard is `max_credits` against the surveyed table (refused before the click when the price is over it, or when
   the clip's cell cannot be read and the cap does not cover the dearest one), then the balance read before and after.
+  The cap is asked for by the MCP tools and the CLI; the story pipeline calls the driver itself and passes none.
 - Flow's Agent mode (the "Agent" chip in the prompt bar) blocks generation while on. The five gflow MCP tools and
   `gen_character` turn it off first and back on after (about 19 s, or 35 s when it was on); the CLI and the editor
   tools (`clip_extend`, `clip_edit`) do not, so turn it off with `agent_mode` before using them.
