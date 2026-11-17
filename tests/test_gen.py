@@ -606,22 +606,14 @@ def test_the_cli_spends_on_the_profile_it_was_given(monkeypatch, tmp_path):
     assert handed["profile"] == "acc2" and set(handed) == {"profile", "read_credits"}, handed
 
 
-def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
-    """The mechanical form of plan R's invariant, read from the source so a new caller is covered the day it is
-    written: every call to run_job in src/ hands over ONE profile and nothing else that could carry a second account,
-    no `read_credits=`, no `runner=`, no `**kwargs`, and run_job is never passed around under another name (review
-    of plan R: a regex scan let 7 of 8 such mutants through).
-
-    One exception, decided by the owner on 2026-11-17 (plan BB): `Backend.generate` hands `read_credits=balance`, a
-    reader that goes through the server's own session. It is allowed in that one function, under that one name, and
-    the function may not name a profile anywhere but `self.profile`; that the reader reads on the served profile is
-    pinned by behaviour in test_mcp_server."""
+def _run_job_scan(sources):
+    """Every call of run_job in `sources` (path -> text): the offenders, the files that call it, and the functions
+    holding the one allowed `read_credits=balance`."""
     import ast
 
-    src = Path(__file__).resolve().parents[1] / "src"
     offenders, found, allowed = [], set(), []
-    for path in src.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    for path, text in sources.items():
+        tree = ast.parse(text)
         called = set()
         owner = {
             id(inner): outer
@@ -633,13 +625,13 @@ def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
             if isinstance(node, ast.Call):
                 name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
                 if name == "run_job":
-                    found.add(str(path.relative_to(src)))
+                    found.add(path)
                     called.add(id(node.func))
                     for keyword in node.keywords:
                         inside = owner.get(id(node))
                         if (
                             keyword.arg == "read_credits"
-                            and str(path.relative_to(src)) == "video/mcp_server.py"
+                            and path == "video/mcp_server.py"
                             and inside is not None
                             and isinstance(keyword.value, ast.Name)
                             and keyword.value.id == "balance"
@@ -647,31 +639,102 @@ def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
                             allowed.append(inside)
                             continue
                         if keyword.arg in (None, "read_credits", "runner"):
-                            offenders.append(
-                                f"{path.relative_to(src)}:{node.lineno} passes {keyword.arg or '**'}"
-                            )
+                            offenders.append(f"{path}:{node.lineno} passes {keyword.arg or '**'}")
         for node in ast.walk(tree):
             if isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in called:
                 name = getattr(node, "attr", None) or getattr(node, "id", None)
                 if name == "run_job" and not isinstance(getattr(node, "ctx", None), ast.Store):
-                    offenders.append(f"{path.relative_to(src)}:{node.lineno} uses run_job without calling it")
+                    offenders.append(f"{path}:{node.lineno} uses run_job without calling it")
+    return offenders, found, allowed
+
+
+def _profiles_named(function):
+    import ast
+
+    profiles = [
+        ast.unparse(node)
+        for node in ast.walk(function)
+        if isinstance(node, ast.Attribute) and node.attr == "profile"
+    ]
+    sessions = [
+        ast.unparse(node)
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", getattr(node.func, "attr", "")) == "FlowSession"
+    ]
+    return profiles, sessions
+
+
+def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
+    """The mechanical form of plan R's invariant, read from the source so a new caller is covered the day it is
+    written: every call to run_job in src/ hands over ONE profile and nothing else that could carry a second account,
+    no `read_credits=`, no `runner=`, no `**kwargs`, and run_job is never passed around under another name (review
+    of plan R: a regex scan let 7 of 8 such mutants through).
+
+    One exception, decided by the owner on 2026-11-17 (plan BB): `Backend.generate` hands `read_credits=balance`, a
+    reader that goes through the server's own session. It is allowed in that one function, under that one name, and
+    the function may not name a profile anywhere but `self.profile`; that the reader reads on the served profile is
+    pinned by behaviour in test_mcp_server."""
+    src = Path(__file__).resolve().parents[1] / "src"
+    sources = {str(path.relative_to(src)): path.read_text(encoding="utf-8") for path in src.rglob("*.py")}
+    offenders, found, allowed = _run_job_scan(sources)
+
     # The ruler: the Backend's call is the one every tool and, since plan AQ, every CLI command goes through.
     assert "video/mcp_server.py" in found, f"the scan found run_job calls only in {sorted(found)}"
     assert offenders == [], offenders
     assert len(allowed) == 1, "the one exception is one call"
     # Inside that function the only profile there is, is the server's.
-    profiles = [
-        ast.unparse(node)
-        for node in ast.walk(allowed[0])
-        if isinstance(node, ast.Attribute) and node.attr == "profile"
-    ]
-    named = [
-        ast.unparse(node)
-        for node in ast.walk(allowed[0])
-        if isinstance(node, ast.Call)
-        and getattr(node.func, "id", getattr(node.func, "attr", "")) == "FlowSession"
-    ]
-    assert profiles and set(profiles) == {"self.profile"} and named == [], (profiles, named)
+    profiles, sessions = _profiles_named(allowed[0])
+    assert profiles and set(profiles) == {"self.profile"} and sessions == [], (profiles, sessions)
+
+
+ALLOWED = """
+class Backend:
+    async def generate(self):
+        async def balance():
+            return 1
+        return await gen_mod.run_job(job, target, profile=self.profile, read_credits=balance)
+"""
+
+
+@pytest.mark.parametrize(
+    ("path", "text", "says"),
+    [
+        ("video/mcp_server.py", ALLOWED.replace("def generate", "def other"), "passes read_credits"),
+        ("video/cli.py", ALLOWED, "passes read_credits"),
+        (
+            "video/mcp_server.py",
+            ALLOWED.replace("read_credits=balance", "read_credits=reader"),
+            "passes read_credits",
+        ),
+        (
+            "video/mcp_server.py",
+            ALLOWED.replace("read_credits=balance", "read_credits=make()"),
+            "passes read_credits",
+        ),
+        ("video/mcp_server.py", ALLOWED.replace("read_credits=balance", "runner=balance"), "passes runner"),
+        ("video/mcp_server.py", ALLOWED.replace("read_credits=balance", "**options"), "passes **"),
+        ("video/mcp_server.py", ALLOWED + "go = gen_mod.run_job\n", "without calling it"),
+    ],
+    ids=["another function", "another file", "another name", "a call", "a runner", "kwargs", "passed around"],
+)
+def test_the_scan_of_run_job_callers_catches_what_it_says_it_catches(path, text, says):
+    # The ruler measured on source it has never seen (rule 10): the one allowed shape passes, every near miss does not.
+    clean, _, allowed = _run_job_scan({"video/mcp_server.py": ALLOWED})
+    assert clean == [] and len(allowed) == 1
+
+    offenders, _, _ = _run_job_scan({path: text})
+    assert offenders and says in offenders[0], offenders
+
+
+def test_the_allowed_reader_function_may_name_no_other_profile():
+    _, _, allowed = _run_job_scan({"video/mcp_server.py": ALLOWED})
+    assert _profiles_named(allowed[0]) == (["self.profile"], [])
+
+    drifted = ALLOWED.replace("return 1", "return await read(FlowSession(other.profile))")
+    _, _, allowed = _run_job_scan({"video/mcp_server.py": drifted})
+    profiles, sessions = _profiles_named(allowed[0])
+    assert set(profiles) != {"self.profile"} and sessions, (profiles, sessions)
 
 
 def test_the_argv_a_paid_call_records_names_the_account_it_spends_on(tmp_path):
