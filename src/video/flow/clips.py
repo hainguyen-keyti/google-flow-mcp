@@ -375,12 +375,16 @@ EDIT_QUOTED_TO_S = 10
 
 def _edit_seconds(keys: list[str], extends: int) -> tuple[str, int] | None:
     """The original key of a clip and the seconds its edit is billed for, or None when its versions are not ones an
-    edit was paid on: one original, any edits and upscales, at most one extend, and no more than 10 s in all."""
+    edit was paid on: one original, any edits, upscales of a 360p original, at most one extend of a 360p original,
+    and no more than 10 s in all. The upscale and the extend were paid on 360p clips only."""
     from video.flow import video as video_mod
 
     originals = [key for key in keys if video_mod.KEY_LENGTH.search(key)]
     later = [key for key in keys if key not in originals and key != EXTEND_KEY]
     if len(originals) != 1 or extends > 1:
+        return None
+    small = originals[0].endswith("_360p")
+    if not small and (extends or any(key.startswith(UPSCALE_KEY) for key in later)):
         return None
     if any(not key.startswith(UPSCALE_KEY) and EDIT_WORD not in key.split("_") for key in later):
         return None
@@ -411,8 +415,10 @@ def editor_expected_price(kind: str, rows: list[dict[str, Any]], media_id: str) 
                 return None
             seconds = EXTEND_SECONDS
         else:
-            extends = {row.get("workflow_id") for row in versions if row.get("model") == EXTEND_KEY}
-            found = _edit_seconds(sorted(keys), len(extends))
+            # One extend can be listed twice under its workflow; a row that names none counts on its own.
+            flows = [row.get("workflow_id") for row in versions if row.get("model") == EXTEND_KEY]
+            extends = len({flow for flow in flows if flow}) + sum(1 for flow in flows if not flow)
+            found = _edit_seconds(sorted(keys), extends)
             if found is None:
                 return None
             key, seconds = found

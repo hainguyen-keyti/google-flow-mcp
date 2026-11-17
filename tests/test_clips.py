@@ -3368,8 +3368,8 @@ def test_a_clip_with_more_than_one_version_has_no_known_price(kind, flip):
     ]
     rows = [*(reversed(versions) if flip else versions), {"id": "b", "kind": "video", "model": "x_t2v_8s"}]
 
-    # Plan BA: an edit of a clip extended once was paid (2026-11-17) and is quoted; its extend was not.
-    assert clips.editor_expected_price(kind, rows, "a") == (21 if kind == "edit" else None)
+    # Plan BA: the edit of a clip extended once was paid at 360p only (2026-11-17); this one is 720p.
+    assert clips.editor_expected_price(kind, rows, "a") is None
     # The same key listed twice is still one version.
     twice = [versions[0], dict(versions[0])]
     assert clips.editor_expected_price(kind, twice, "a") is not None
@@ -3476,8 +3476,18 @@ EXTENDED = {"id": "a", "kind": "video", "model": "models/omni_1p5_pro_flow", "wo
         ([ORIGINAL, UPSCALED], 3),
         ([ORIGINAL, EXTENDED], 7),
         ([ORIGINAL, EXTENDED, EDITED, UPSCALED], 7),
+        ([ORIGINAL, EXTENDED, dict(EXTENDED)], 7),
+        ([{**ORIGINAL, "model": "macaron_cookie_i2v_8s"}, {**EDITED, "model": "macaron_cookie_edit"}], 24),
     ],
-    ids=["edited", "edited twice", "upscaled", "extended once", "extended, edited and upscaled"],
+    ids=[
+        "edited",
+        "edited twice",
+        "upscaled",
+        "extended once",
+        "extended, edited and upscaled",
+        "one extend listed twice",
+        "edited at 720p",
+    ],
 )
 def test_an_edit_of_a_clip_with_measured_versions_is_quoted_what_was_paid(versions, price):
     other = {"id": "b", "kind": "video", "model": "macaron_cookie_i2v_8s"}
@@ -3495,6 +3505,10 @@ def test_an_edit_of_a_clip_with_measured_versions_is_quoted_what_was_paid(versio
         [ORIGINAL, {**ORIGINAL, "model": "macaron_cookie_t2v_4s_360p", "workflow_id": "w5"}],
         [{**ORIGINAL, "model": "macaron_cookie_t2v_2s_360p"}, EXTENDED, {**EXTENDED, "workflow_id": "w3"}],
         [ORIGINAL, {**EDITED, "model": "macaron_cookie_credited_360p"}],
+        [ORIGINAL, {**EXTENDED, "workflow_id": None}, {**EXTENDED, "workflow_id": None}],
+        [{**ORIGINAL, "model": "macaron_cookie_t2v_3s"}, {**UPSCALED, "model": "omni_upsampler_720p"}],
+        [{**ORIGINAL, "model": "macaron_cookie_t2v_3s"}, EXTENDED],
+        [ORIGINAL, {**UPSCALED, "model": "omni_something_else"}],
     ],
     ids=[
         "extended twice",
@@ -3504,6 +3518,10 @@ def test_an_edit_of_a_clip_with_measured_versions_is_quoted_what_was_paid(versio
         "two originals",
         "extended twice within 10 s",
         "a key that only contains the letters of edit",
+        "two extends that name no workflow",
+        "an upscale of a 720p clip",
+        "extended once at 720p",
+        "a key that only starts like an upscale",
     ],
 )
 def test_an_edit_of_a_clip_with_versions_nobody_paid_for_stays_unquoted(versions):
@@ -3522,3 +3540,16 @@ def test_the_public_editor_drivers_cannot_be_called_with_no_cap(tmp_path, kind):
     # Plan BA, I1 (review of plan AZ, finding 3): the story pipeline paid for edits with no cap at all.
     with pytest.raises(TypeError, match="max_credits"):
         getattr(clips, kind)("S", "P", "M", "keep going", out_dir=tmp_path, job_id="j")
+
+
+def test_the_pipelines_cap_lets_the_edit_of_a_clip_with_no_known_cell_through(monkeypatch, tmp_path):
+    """Review of plan BA, finding 1: the pipeline's clips are veo-lite, whose key names no length, so their edit has
+    no known price and the driver asks for a cap that covers the dearest cell. A cap of 24 refused every one."""
+    from video.story import pipeline
+
+    rows = [{"id": "m", "kind": "video", "model": "veo_3_1_i2v_lite", "workflow_id": "w"}]
+    expected = clips.editor_expected_price("edit", rows, "m")
+
+    assert expected is None
+    clips.check_editor_cap("edit", expected, pipeline.EDIT_CAP)
+    assert pipeline.EDIT_CAP == clips.editor_dearest("edit")

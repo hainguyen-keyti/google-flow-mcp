@@ -164,9 +164,10 @@ mặt, tay và món đồ.
   Các số của ngày đó là giá cũ. Từ 2026-11 (Omni 1.2): `clip_edit` tốn đúng ô của clip nguồn (clip 360p 4 s: 4,
   clip 360p 3 s: 3, đo 2026-11-09 và 2026-11-16), `clip_extend` thêm 4 s theo giá giây của clip (360p: 4, 720p: 12,
   đo 2026-11-09 và 2026-11-16; Veo Extend đã bị Google bỏ ngày 2026-11-05). Hai tool này **bắt buộc `max_credits`**:
-  giá vượt trần thì bị từ chối trước cú bấm, 0 credit; edit clip đã edit hay đã upscale vẫn tính
-  đúng ô của clip, clip đã extend một lần tính số giây gốc cộng 4 (đo 2026-11-17 trên clip 360p 3 s: 3, 3 và 7);
-  clip extend hai lần, vượt 10 s, hay có loại phiên bản chưa từng đo thì không biết giá, trần phải phủ ô đắt nhất
+  giá vượt trần thì bị từ chối trước cú bấm, 0 credit; edit clip đã edit vẫn tính đúng ô của
+  clip, clip 360p đã upscale cũng vậy, clip 360p đã extend một lần tính số giây gốc cộng 4 (đo 2026-11-17 trên clip
+  360p 3 s: 3, 3 và 7); clip 720p đã extend hay upscale, clip extend hai lần, vượt 10 s, hay có loại phiên bản chưa
+  từng đo thì không biết giá, trần phải phủ ô đắt nhất
   (edit 60); extend trên clip nhiều phiên bản chưa đo, trần phải phủ 12. Hỏng sau cú bấm vẫn để lại dòng sổ `unknown` kèm
   lỗi và số dư đọc được. Cả 6 tool **bắt buộc `job_id`**: job mới thì id mới, gọi lại cùng job
   thì giữ id. Trước khi mở trình duyệt, MCP từ chối `job_id` đã có BẤT KỲ dòng nào (kể cả `opening`) trong mọi file

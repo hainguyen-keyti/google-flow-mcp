@@ -77,9 +77,10 @@ def test_run2_sends_every_shot_down_the_route_measured_for_it(monkeypatch, tmp_p
     # The last three shots are edits of the mirror clip, not generations at all.
     assert jobs[-3:] == ["tryon2-05", "tryon2-05b", "tryon2-06"]
     assert len(result["shots"]) == len(shots2.SHOTS) + shots2.EXTRA_TAKES
-    # Plan BA, I1: every edit the pipeline pays for carries a cap, the cell of the 720p 8 s clip it edits. Both of
-    # its call sites are in this run: a shot made by editing, and the edit that dresses a generated shot.
-    assert len(caps) == 4 and {cap for _, cap in caps} == {24}, caps
+    # Plan BA, I1: every edit the pipeline pays for carries a cap. Its clips are veo-lite, whose edit has no known
+    # price, so the cap is the dearest cell. Both call sites are in this run: a shot made by editing, and the edit
+    # that dresses a generated shot.
+    assert len(caps) == 4 and {cap for _, cap in caps} == {60}, caps
     assert any(job.endswith("-edit") for job, _ in caps) and any(not job.endswith("-edit") for job, _ in caps)
 
 

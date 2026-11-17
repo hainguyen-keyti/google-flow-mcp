@@ -9,7 +9,6 @@ from typing import Any
 from video import gen, post
 from video.flow import clips, composer
 from video.flow import uploads as uploads_mod
-from video.flow import video as video_mod
 from video.story import persona, product, shots, shots2
 
 PRICE_PER_SHOT = 10
@@ -35,8 +34,9 @@ def dress_prompt(motion: str = "") -> str:
 
 
 EDIT_PROMPT = dress_prompt()
-# Every clip this pipeline edits is one it made at 720p for 8 s, and an edit costs its clip's cell.
-EDIT_CAP = video_mod.price(video_mod.EDIT_MODEL, "720p", 8, 1)
+# The clips this pipeline edits are veo-lite ones, whose model key names no length: their edit has no known price,
+# so the driver asks for a cap that covers the dearest cell.
+EDIT_CAP = clips.editor_dearest("edit")
 
 
 def job_state(ledger: gen.Ledger, job_id: str) -> str:

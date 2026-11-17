@@ -186,9 +186,10 @@ These are not suggestions; they are enforced in code and pinned by tests.
 - `clip_edit` and `clip_extend` do not read the live price line before clicking, unlike `gen_character`. Their
   guard is `max_credits` against the surveyed table (refused before the click when the price is over it, or when
   the clip's cell cannot be read and the cap does not cover the dearest one), then the balance read before and after.
-  The drivers themselves take no call without a cap, and the story pipeline passes the cell of the 720p 8 s clip it
-  edits (24). An edit of a clip that was edited or upscaled before is quoted the clip's own cell, and of one extended
-  once its seconds plus 4 (paid 2026-11-17: 3, 3 and 7 on 360p 3 s clips); other shapes need a cap of 60.
+  The drivers themselves take no call without a cap, and the story pipeline, whose veo-lite clips have no known
+  edit price, passes the dearest cell (60). An edit of a clip that was edited before is quoted the clip's own cell;
+  so is a 360p clip that was upscaled, and a 360p clip extended once is quoted its seconds plus 4 (paid 2026-11-17:
+  3, 3 and 7 on 360p 3 s clips); other shapes need a cap of 60.
 - Flow's Agent mode (the "Agent" chip in the prompt bar) blocks generation while on. The five gflow MCP tools and
   `gen_character` turn it off first and back on after (about 19 s, or 35 s when it was on); the CLI and the editor
   tools (`clip_extend`, `clip_edit`) do not, so turn it off with `agent_mode` before using them.
