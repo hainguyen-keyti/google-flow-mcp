@@ -34,8 +34,11 @@ from video.session import PROJECT_READY, FlowSession
 
 PRICE_RE = re.compile(r"generating will use\s+(\d+)\s+credit", re.IGNORECASE)
 SETTINGS = "button[aria-label*='Settings trigger'], .settings-trigger-button"
+# The exact label: `aria-label*='ngredient'` also matched an attached chip, whose label is "Ingredient", and a click
+# on a chip removes it (read 2026-10-01, the label again 2026-11-17).
 INGREDIENTS = (
-    "flow-prompt-box button[aria-label*='ngredient'], flow-base-prompt-box button[aria-label*='ngredient']"
+    "flow-prompt-box button[aria-label='Add ingredients to the prompt box'], "
+    "flow-base-prompt-box button[aria-label='Add ingredients to the prompt box']"
 )
 _OVERLAY_TEXT_JS = """() => [...document.querySelectorAll('.cdk-overlay-pane, [role=menu], [role=dialog]')]
   .filter(e => e.offsetParent !== null)
@@ -764,6 +767,44 @@ _LEFT_JS = """() => ({
 })"""
 
 
+START = "flow-prompt-box button[aria-label='Start generation']"
+START_TRIAL_MS = 8_000
+
+
+async def _price_again(session: FlowSession) -> int | None:
+    """The live price, read once more and nothing written: the pane is opened, read and closed (plan BB)."""
+    page = session.page
+    text = await _open_settings(page, "recheck")
+    await page.keyboard.press("Escape")
+    await page.wait_for_timeout(1_500)
+    return price_from(text)
+
+
+async def _start_ready(page: Any, start: Any) -> None:
+    """Refuse, with no click made, a Start generation button that a click could not reach.
+
+    Playwright's trial click runs every check a click runs and stops short of the click (measured 2026-11-17: it
+    passes on a free button, and times out on a covered and on a disabled one). Before plan BB the real click met the
+    cover, timed out, and the job was recorded `unknown` with "credits may already be spent" though nothing was
+    clicked."""
+    try:
+        await start.click(trial=True, timeout=START_TRIAL_MS)
+    except PlaywrightTimeoutError as exc:
+        cover = None
+        with contextlib.suppress(Exception):
+            cover = await overlays.covering(page, START)
+        if cover:
+            where = cover["tag"] + (f"#{cover['id']}" if cover.get("id") else "")
+            raise LookupError(
+                f"Start generation is covered by {where}, which says {cover['text']!r}; nothing was clicked and "
+                "nothing was spent"
+            ) from None
+        raise LookupError(
+            "Start generation could not be clicked (it is not enabled, or never held still): "
+            f"{str(exc).split('Call log:')[0].strip()[:120]}; nothing was clicked and nothing was spent"
+        ) from None
+
+
 async def _submit(
     session: FlowSession,
     project_id: str,
@@ -834,12 +875,29 @@ async def _submit(
             )
         confirm = await configure(session, mode=mode, aspect=aspect, count=f"x{count}", label="confirm")
         checked = await verify(session) if verify is not None else {}
+        # Plan BB: `verify` takes a few seconds, so the price is read once more, and the click is tried without being
+        # made, while a refusal still costs nothing and writes no row.
+        box_was = await session.page.evaluate(_LEFT_JS)
+        again = await _price_again(session)
+        if again != confirm["price"]:
+            raise RuntimeError(
+                f"refusing to submit: the composer quoted {confirm['price']} credits and, read again right before "
+                f"the click, {again}; a setting moved or Flow changed its price in between; nothing was clicked"
+            )
+        if await session.page.evaluate(_LEFT_JS) != box_was:
+            raise RuntimeError(
+                "refusing to submit: the prompt box changed while the price was read again, so what would be sent "
+                "is no longer what was checked; nothing was clicked"
+            )
+        start = session.page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
+        await _start_ready(session.page, start)
         if dry_run:
             await clear_prompt(session)
             return {
                 "dry_run": True,
                 "kind": kind,
                 "quoted_credits": confirm["price"],
+                "price_read_again": again,
                 "expected_credits": expected_credits,
                 "price_ok": (
                     confirm["price"] == expected_credits
@@ -870,7 +928,6 @@ async def _submit(
             await clear_prompt(session)
         raise
 
-    start = session.page.get_by_role("button", name=re.compile("Start generation", re.IGNORECASE)).first
     ledger.append(
         job_id,
         "submitted",

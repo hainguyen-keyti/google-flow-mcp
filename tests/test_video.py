@@ -103,7 +103,12 @@ def _counted(monkeypatch, log, prices):
         log.append(f"configure {label} {count}")
         return {"applied": {}, "price": prices[0] if label == "pre" else prices[1], "settings_text": ""}
 
+    async def read_again(session):
+        log.append("price again")
+        return prices[1]
+
     monkeypatch.setattr(composer, "configure", configure)
+    monkeypatch.setattr(composer, "_price_again", read_again)
 
 
 def test_submit_sets_the_count_at_both_settings_passes(monkeypatch, tmp_path):

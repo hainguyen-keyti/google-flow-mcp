@@ -1139,13 +1139,21 @@ class Backend:
             refs=[Path(r) for r in refs or []],
         )
         target = self._editor_out_dir(out_dir)
+        standing: list[str] = []
+
+        async def balance() -> int:
+            # Read in the server's own session (plan BB): the same profile as the job, and a cookie notice met here
+            # reaches this tool's answer. gen.read_credits_live opened a session nobody heard from.
+            read = self._kept(await self._with(reader.credits))
+            standing.extend(left for left in read.pop("notices_left_standing", []) if left not in standing)
+            return read["balance"]
 
         async def run() -> dict[str, Any]:
             was_on = await self._agent_off(
                 project, resolution if kind in gen_mod.VIDEO_KINDS else None, model=model, aspect=aspect
             )
             try:
-                result = await gen_mod.run_job(job, target, profile=self.profile)
+                result = await gen_mod.run_job(job, target, profile=self.profile, read_credits=balance)
             except BaseException as failed:
                 if was_on:
                     await self._agent_restore(project)
@@ -1170,6 +1178,8 @@ class Backend:
                 await self._image_media_ids(project, result.get("outputs") or [])
             # The sessions above answer to this method only, so what they pressed is said here.
             self._tell(result)
+            if standing:
+                result["notices_left_standing"] = [*result.get("notices_left_standing", []), *standing]
             return result
 
         # The id the job really runs under, minted above when the caller gave none, so its outcome can be read.
@@ -2352,8 +2362,8 @@ def _character_prices() -> str:
         "listing, and a clip that dropped or gained a reference is an error even though it was paid. It spends "
         "credits and is ledgered, at x1, 8 s by default, on the surveyed table (flow_capabilities answers it as data): "
         + _character_prices()
-        + ". The live price line is read first and a different price is refused "
-        "before the click. dry_run=true returns the quote and the chips, clicks nothing, writes no ledger row, leaves "
+        + ". The live price line is read first, and again after the chips are checked, and a different price is "
+        "refused before the click; so is a Start generation button that something covers. dry_run=true returns the quote and the chips, clicks nothing, writes no ledger row, leaves "
         "the composer empty and needs no job_id (each chip's id is the character's entity id or the image's workflow "
         "id). out_dir puts the clip and its ledger in a folder of your own, which keeps one film's takes together; "
         "it must be inside out/, and a job_id is refused when ANY ledger under out/ already holds it, that folder's "
@@ -2576,8 +2586,11 @@ def _shot_done(
         " resolution and duration apply to omni-1.2-flash only (defaults 720p and 8 s; 3-15 s where the account's slider reaches 15, else 3-10 s, set "
         "on the composer's Length slider and read back before the click). The money guard is Flow's own "
         "price line, read right before the single click: a real run needs max_credits and is refused when the live "
-        "price is over it; dry_run=true reads that price and the settings for free, clicks nothing and needs no job_id "
-        "or max_credits. Every setting is read back before the click, and the submit request is checked afterwards "
+        "price is over it. The price is read twice, the second time after every other check, and a price that "
+        "changed in between is refused; Start generation is then tried without being clicked, and a button "
+        "something covers is refused with what covers it, before any ledger row and at no cost. dry_run=true "
+        "reads that price (price_read_again is the second read) and the settings for free, clicks nothing and "
+        "needs no job_id or max_credits. Every setting is read back before the click, and the submit request is checked afterwards "
         "for the mode and length asked: a mismatch is reported as an error even though it was paid. x2-x4 return "
         "every clip in outputs. Flow's Agent mode is turned off for the run and put back after. out_dir must be "
         "inside out/. Allow 3-8 min for a real run, 1-2 min for a dry run."

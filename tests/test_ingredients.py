@@ -1901,15 +1901,21 @@ def test_type_prompt_by_default_clicks_the_box_before_each_attempt():
 
 
 class _Start:
-    def __init__(self, log):
+    def __init__(self, log, page=None):
         self.log = log
+        self.page = page
 
     @property
     def first(self):
         return self
 
-    async def click(self, timeout=None):
-        self.log.append("click")
+    async def click(self, timeout=None, trial=False):
+        if not trial:
+            self.log.append("click")
+            return
+        self.log.append("trial")
+        if self.page is not None and self.page.start_blocked:
+            raise PlaywrightTimeoutError("Locator.click: Timeout 8000ms exceeded.")
 
 
 class _Box:
@@ -1925,6 +1931,7 @@ class _SubmitPage:
         self.mentions = 0
         self.shots = []
         self.screenshot_error = None
+        self.start_blocked = False
 
     async def wait_for_timeout(self, ms):
         return None
@@ -1934,7 +1941,7 @@ class _SubmitPage:
 
     def get_by_role(self, role, name=None):
         assert role == "button" and name.search("Start generation")
-        return _Start(self.log)
+        return _Start(self.log, self)
 
     async def screenshot(self, path=None):
         self.shots.append(path)
@@ -2004,6 +2011,8 @@ def _install(
     fetch_error=None,
     balance_reads=(200, 188, 188),
     replies=None,
+    price_again=None,
+    moves_the_box=False,
 ):
     seen_before = [_video("w-before", "old")] if before is None else before
     listings = iter([seen_before, *([[*seen_before, *fresh]] * 20)])
@@ -2041,6 +2050,12 @@ def _install(
         log.append(f"type click={click}")
         return True
 
+    async def read_again(session):
+        log.append("price again")
+        if moves_the_box:
+            session.page.mentions += 1
+        return confirm if price_again is None else price_again
+
     async def await_submit(session, click, *, settle=30.0, patience=90.0):
         statuses = [row["status"] for row in gen.Ledger(tmp_path / "ledger.jsonl").rows()]
         log.append(f"ledger at click {statuses}")
@@ -2065,6 +2080,7 @@ def _install(
     monkeypatch.setattr(composer, "clear_prompt", clear_prompt)
     monkeypatch.setattr(composer, "configure", configure)
     monkeypatch.setattr(composer, "_type_prompt", type_prompt)
+    monkeypatch.setattr(composer, "_price_again", read_again, raising=False)
     monkeypatch.setattr(composer.clips, "_await_submit", await_submit)
     monkeypatch.setattr(composer, "_notice", notice)
     monkeypatch.setattr(composer, "fetch_720", fetch_720)
@@ -2107,6 +2123,12 @@ def test_submit_writes_the_intent_row_before_the_click_and_the_outcome_after(mon
         "setup",
         "type click=True",
         "configure confirm",
+        # Plan BB: the box is read, the price read once more, the box read again, and Start tried without a click,
+        # all before the intent row.
+        "left read",
+        "price again",
+        "left read",
+        "trial",
         "ledger at click ['submitted']",
         "click",
     ]
@@ -2189,6 +2211,8 @@ def test_submit_dry_run_never_clicks_never_reads_the_balance_and_writes_no_ledge
         "dry_run": True,
         "kind": "character",
         "quoted_credits": 12,
+        # Plan BB: the price is read twice, and a dry run says the second read as well.
+        "price_read_again": 12,
         "expected_credits": 12,
         "price_ok": True,
         # The bar is read too: images and voices are chips there, not mentions (review of plan AL, 2026-10-02).
@@ -5055,3 +5079,134 @@ def test_the_money_cap_holds_at_its_boundary():
         composer.ensure_within(11, 10)
     with pytest.raises(RuntimeError, match="could not read"):
         composer.ensure_within(None, 10)
+
+
+# Plan BB: the checks between the last settings pass and the click.
+
+
+def _refused_before_the_click(tmp_path, log):
+    assert gen.Ledger(tmp_path / "ledger.jsonl").rows() == [], "a job that was never clicked has no row"
+    assert "click" not in log and log[-1] == "clear", log
+
+
+def test_a_start_button_that_cannot_be_clicked_is_refused_before_any_row(monkeypatch, tmp_path):
+    """D2 (review of plan AL): a click that timed out on a covered button was recorded `unknown` with "credits may
+    already be spent", though no click was made."""
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    session = _SubmitSession(log)
+    session.page.start_blocked = True
+
+    async def covering(page, selector):
+        assert selector == composer.START
+        return {"tag": "div", "id": "promo", "text": "Try the new model"}
+
+    monkeypatch.setattr(composer.overlays, "covering", covering)
+
+    with pytest.raises(LookupError) as refused:
+        _submit(session, tmp_path, log)
+
+    said = str(refused.value)
+    assert "div#promo" in said and "Try the new model" in said and "nothing was clicked" in said, said
+    _refused_before_the_click(tmp_path, log)
+
+
+def test_a_start_button_blocked_by_nothing_that_can_be_named_is_refused_too(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    session = _SubmitSession(log)
+    session.page.start_blocked = True
+
+    async def covering(page, selector):
+        return None
+
+    monkeypatch.setattr(composer.overlays, "covering", covering)
+
+    with pytest.raises(LookupError, match="nothing was clicked"):
+        _submit(session, tmp_path, log)
+
+    _refused_before_the_click(tmp_path, log)
+
+
+@pytest.mark.parametrize("again", [15, 9, None])
+def test_a_price_that_changed_since_it_was_checked_is_refused_before_the_click(monkeypatch, tmp_path, again):
+    """D3 (review of plan AL): the price was read, then `verify` ran for a few seconds, then the click."""
+    log = []
+    _install(monkeypatch, tmp_path, log)
+    monkeypatch.setattr(composer, "_price_again", _reads_price(log, again), raising=False)
+
+    with pytest.raises(RuntimeError) as refused:
+        _submit(_SubmitSession(log), tmp_path, log)
+
+    said = str(refused.value)
+    assert "12" in said and str(again) in said and "nothing was clicked" in said, said
+    _refused_before_the_click(tmp_path, log)
+
+
+def _reads_price(log, price):
+    async def read(session):
+        log.append("price again")
+        return price
+
+    return read
+
+
+def test_a_prompt_box_that_changed_while_the_price_was_read_again_is_refused(monkeypatch, tmp_path):
+    # I3: the second read opens the settings pane; what it leaves in the box has to be what verify read.
+    log = []
+    _install(monkeypatch, tmp_path, log, moves_the_box=True)
+
+    with pytest.raises(RuntimeError, match="prompt box changed"):
+        _submit(_SubmitSession(log), tmp_path, log)
+
+    _refused_before_the_click(tmp_path, log)
+
+
+def test_the_second_price_read_comes_after_verify(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log, fresh=[_video("w-new", f"Thu {PROMPT}")])
+
+    async def verify(session):
+        log.append("verify")
+        return {}
+
+    _submit(_SubmitSession(log), tmp_path, log, verify=verify)
+
+    order = [log.index(step) for step in ("configure confirm", "verify", "price again", "trial", "click")]
+    assert order == sorted(order), log
+
+
+def test_a_dry_run_makes_both_checks_and_says_the_second_price(monkeypatch, tmp_path):
+    log = []
+    _install(monkeypatch, tmp_path, log)
+
+    answer = _submit(_SubmitSession(log), tmp_path, log, dry_run=True)
+
+    assert answer["price_read_again"] == 12 and "trial" in log and "click" not in log, (answer, log)
+
+
+class _PanePage:
+    def __init__(self):
+        self.pressed, self.waited = [], []
+        self.keyboard = self
+
+    async def press(self, key):
+        self.pressed.append(key)
+
+    async def wait_for_timeout(self, ms):
+        self.waited.append(ms)
+
+
+def test_the_second_price_read_opens_the_pane_reads_and_closes_it(monkeypatch):
+    opened = []
+
+    async def open_settings(page, label="settings"):
+        opened.append(label)
+        return "Video | Generating will use 27 credits"
+
+    monkeypatch.setattr(composer, "_open_settings", open_settings)
+    page = _PanePage()
+
+    price = asyncio.run(composer._price_again(type("S", (), {"page": page})()))
+
+    assert price == 27 and opened == ["recheck"] and page.pressed == ["Escape"]

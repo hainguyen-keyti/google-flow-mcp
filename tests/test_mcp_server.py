@@ -2992,7 +2992,52 @@ def test_the_mcp_generate_path_spends_on_the_profile_it_reads_the_balance_on(mon
     with_client(fn)
 
     assert handed.get("profile") == "acc2", handed
-    assert "read_credits" not in handed, "a second, separate profile for the reads is how the two drift apart"
+    # Plan BB, I4 and I5: the reads go through the server's own session, on the server's profile, so the account
+    # cannot drift from the job's and a cookie notice pressed during a read reaches an answer.
+    through = []
+
+    async def fake_with(self, fn):
+        through.append((self.profile, fn))
+        return {"balance": 77}
+
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    assert asyncio.run(handed["read_credits"]()) == 77
+    assert through == [("acc2", mcp_server.reader.credits)], through
+
+
+def test_a_notice_met_during_a_balance_read_of_a_gflow_job_is_in_the_tools_answer(monkeypatch, tmp_path):
+    """Plan BB, I5 (re-review of plan AL): the reads inside gen.run_job opened sessions of their own, so a cookie
+    notice pressed or left standing there was written to stderr and to no answer."""
+
+    async def fake_run_job(job, out_dir, *, read_credits, **kwargs):
+        before = await read_credits()
+        after = await read_credits()
+        return {"job_id": job.job_id, "outputs": [], "credits_before": before, "credits_after": after}
+
+    reads = iter(
+        [
+            {"balance": 50, "dismissed_notices": ["pressed OK, got it"]},
+            {"balance": 50, "notices_left_standing": ["a notice the driver could not press"]},
+        ]
+    )
+
+    async def fake_with(self, fn):
+        if fn is mcp_server.reader.credits:
+            return dict(next(reads))
+        return {"was": False, "enabled": False}
+
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+
+    async def fn(session):
+        return await session.call_tool("gen_t2i", {"prompt": "a boat", "project": "P", "job_id": "job-bb-n"})
+
+    answer = _payload(with_client(fn))
+
+    assert answer["credits_before"] == 50 and answer["credits_after"] == 50
+    assert answer["dismissed_notices"] == ["pressed OK, got it"], answer
+    assert answer["notices_left_standing"] == ["a notice the driver could not press"], answer
 
 
 def _dummy_value(prop):

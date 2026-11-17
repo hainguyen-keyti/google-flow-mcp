@@ -418,3 +418,24 @@ def test_renditions_that_all_answer_400_fall_back_to_the_editor_too(monkeypatch,
 
     assert editor == [("P", "M1", "720p", tmp_path / "M1_ab", "W2")], editor
     assert out == tmp_path / "M1_ab" / "M1_720p.mp4"
+
+
+def test_the_ingredients_button_is_found_by_its_own_label_and_never_a_chip():
+    """Plan BB, D1 ($0 probes 2026-10-01 and 2026-11-17): an attached chip's label is "Ingredient", and a click on
+    a chip removes it. The selector matched any label containing "ngredient"."""
+    import re
+
+    from video.flow import composer, ingredients
+
+    def matches(selector, label):
+        exact = re.search(r"aria-label='([^']*)'", selector)
+        partly = re.search(r"aria-label\*='([^']*)'", selector)
+        assert exact or partly, selector
+        return label == exact.group(1) if exact else partly.group(1) in label
+
+    parts = [part.strip() for part in composer.INGREDIENTS.split(",")]
+    assert parts and all(part.startswith(("flow-prompt-box ", "flow-base-prompt-box ")) for part in parts)
+    for part in parts:
+        assert matches(part, "Add ingredients to the prompt box"), part
+        assert not matches(part, "Ingredient"), part
+    assert ingredients.ADD in parts
