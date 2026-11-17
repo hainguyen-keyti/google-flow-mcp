@@ -4,7 +4,6 @@ guard serializes concurrent calls (I4). Generate tools spend credits and are led
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -1150,8 +1149,12 @@ class Backend:
             # The kept Chrome is given back at once: gflow is another process on this profile and waited the whole
             # idle time for it (measured 2026-11-17: 197 s for a free image against 98 s). A browser that will not
             # close costs the read nothing: run_job writes no outcome row when its second read raises.
-            with contextlib.suppress(Exception):
+            try:
                 await self.close()
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).warning(
+                    "giving the kept browser back failed (%s)", type(exc).__name__
+                )
             return read["balance"]
 
         async def run() -> dict[str, Any]:

@@ -802,9 +802,13 @@ async def _start_ready(page: Any, start: Any) -> None:
                 f"Start generation is covered by {where}, which says {cover['text']!r}; nothing was clicked and "
                 "nothing was spent"
             ) from None
-        # Playwright's own last words say which it was: not visible, not enabled, not stable.
+        # Playwright's own words say which it was: something in the way, or not visible, not enabled, not stable.
+        # Its log repeats "element is visible, enabled and stable" before every retry, which is not the reason.
         log = [line.strip(" -") for line in str(exc).split("Call log:")[-1].splitlines() if line.strip(" -")]
-        seen = next((line for line in reversed(log) if line.startswith("element is")), log[-1] if log else "")
+        told = [
+            line for line in log if "intercepts pointer events" in line or line.startswith("element is not")
+        ]
+        seen = told[-1] if told else (log[-1] if log else "")
         raise LookupError(
             f"Start generation could not be clicked ({seen[:120] or 'no reason given'}); nothing was clicked and "
             "nothing was spent"

@@ -5245,3 +5245,45 @@ def test_the_cover_of_start_is_looked_for_in_both_prompt_boxes():
         "flow-prompt-box",
         "flow-base-prompt-box",
     ]
+
+
+@pytest.mark.parametrize(
+    ("log", "says"),
+    [
+        (
+            (
+                "    - element is visible, enabled and stable\n    - scrolling into view if needed\n"
+                '    - <div class="toast">Saved</div> intercepts pointer events\n    - retrying click action\n'
+                "    - element is visible, enabled and stable\n"
+            ),
+            "intercepts pointer events",
+        ),
+        ("    - element is not visible\n    - retrying click action\n", "element is not visible"),
+        ("    - element is visible, enabled and stable\n    - waiting 20ms\n", "waiting 20ms"),
+    ],
+    ids=["something intercepts", "not visible", "nothing says why"],
+)
+def test_a_start_refusal_with_no_cover_named_quotes_the_line_that_says_why(monkeypatch, tmp_path, log, says):
+    """Scoped re-review of plan BB: the last "element is ..." line won, and under a cover that nobody could name it
+    reads "element is visible, enabled and stable", which says the opposite of what happened."""
+    steps = []
+    _install(monkeypatch, tmp_path, steps)
+
+    class Blocked(_Start):
+        async def click(self, timeout=None, trial=False):
+            raise PlaywrightTimeoutError(f"Locator.click: Timeout 8000ms exceeded.\nCall log:\n{log}")
+
+    session = _SubmitSession(steps)
+    session.page.get_by_role = lambda role, name=None: Blocked(steps, session.page)
+
+    async def covering(page, selector):
+        return None
+
+    monkeypatch.setattr(composer.overlays, "covering", covering)
+
+    with pytest.raises(LookupError) as refused:
+        _submit(session, tmp_path, steps)
+
+    said = str(refused.value)
+    assert says in said and "nothing was clicked" in said, said
+    assert "visible, enabled and stable" not in said, said

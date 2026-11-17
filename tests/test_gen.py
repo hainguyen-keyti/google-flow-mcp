@@ -684,6 +684,19 @@ def _reader_faults(function):
                 faults.append(f"balance calls {called}")
     if sessions != ["self._with(reader.credits)"]:
         faults.append(f"balance reads through {sessions}")
+    # What it hands back is that read's own balance, not a second read made beside it.
+    reads = [
+        ast.unparse(node.targets[0])
+        for node in ast.walk(readers[0])
+        if isinstance(node, ast.Assign) and "self._with(reader.credits)" in ast.unparse(node.value)
+    ]
+    returns = [
+        ast.unparse(node.value)
+        for node in ast.walk(readers[0])
+        if isinstance(node, ast.Return) and node.value
+    ]
+    if len(reads) != 1 or returns != [f"{reads[0]}['balance']"]:
+        faults.append(f"balance returns {returns} from reads {reads}")
     return faults
 
 
@@ -754,8 +767,17 @@ READ = "self._kept(await self._with(reader.credits))"
         (ALLOWED.replace(READ, "self._with(other.credits)"), "reads through"),
         (ALLOWED.replace("profile=self.profile", 'profile="acc2"'), "profile='acc2'"),
         (ALLOWED.replace("profile=self.profile, ", ""), "profile=None"),
+        (ALLOWED.replace('return read["balance"]', "return await other_credits('acc2')"), "balance returns"),
     ],
-    ids=["its own session", "rebound", "another backend", "another read", "another profile", "no profile"],
+    ids=[
+        "its own session",
+        "rebound",
+        "another backend",
+        "another read",
+        "another profile",
+        "no profile",
+        "a second read handed back",
+    ],
 )
 def test_the_allowed_reader_is_held_to_a_read_through_the_servers_own_session(text, says):
     # Review of plan BB, finding 2: each of these read the balance on a second account and the scan flagged none.
