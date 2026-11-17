@@ -1,5 +1,5 @@
 {
- "measured": "2026-11-09",
+ "measured": "2026-11-17",
  "rpcs": {
   "HTrJv": {
    "view": "project",
@@ -179,11 +179,990 @@
            "null"
           ]
          },
-         [
-          [
-           "int"
+         {
+          "*": [
+           {
+            "any": [
+             "bool",
+             "int"
+            ]
+           }
           ]
-         ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "opt": [
+           [
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              "int",
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            },
+            {
+             "opt": {
+              "*": [
+               {
+                "any": [
+                 "int",
+                 "null"
+                ]
+               },
+               "int",
+               {
+                "any": [
+                 "absent",
+                 "int"
+                ]
+               }
+              ]
+             }
+            }
+           ]
+          ]
+         }
         ]
        },
        {
@@ -198,6 +1177,19 @@
          [
           "str"
          ]
+        ]
+       },
+       {
+        "any": [
+         "absent",
+         "null"
+        ]
+       },
+       {
+        "opt": [
+         "int",
+         "int",
+         "int"
         ]
        }
       ]
@@ -357,7 +1349,104 @@
             "int"
            ]
           }
-         ]
+         ],
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "null"
+          ]
+         },
+         {
+          "opt": [
+           [
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              },
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            },
+            {
+             "*": [
+              {
+               "any": [
+                "int",
+                "null"
+               ]
+              },
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              },
+              {
+               "any": [
+                "absent",
+                "int"
+               ]
+              }
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "opt": [
+           "int",
+           "int",
+           "int"
+          ]
+         },
+         {
+          "any": [
+           "absent",
+           "int"
+          ]
+         }
         ]
        ],
        {
@@ -605,7 +1694,12 @@
        "null",
        "null",
        "null",
-       "url",
+       {
+        "any": [
+         "null",
+         "url"
+        ]
+       },
        [
         {
          "opt": {
@@ -690,6 +1784,18 @@
           "absent",
           "int"
          ]
+        },
+        {
+         "any": [
+          "absent",
+          "int"
+         ]
+        },
+        {
+         "any": [
+          "absent",
+          "uuid"
+         ]
         }
        ],
        "null",
@@ -699,7 +1805,12 @@
         ]
        },
        "int",
-       "url",
+       {
+        "any": [
+         "absent",
+         "url"
+        ]
+       },
        {
         "any": [
          "absent",
@@ -850,6 +1961,41 @@
         "null",
         [
          "url"
+        ]
+       ]
+      },
+      {
+       "any": [
+        "absent",
+        "null"
+       ]
+      },
+      {
+       "any": [
+        "absent",
+        "null"
+       ]
+      },
+      {
+       "opt": [
+        [
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         "null",
+         "str",
+         "str",
+         "str",
+         "str",
+         "str",
+         [
+          [
+           "str",
+           "str"
+          ]
+         ]
         ]
        ]
       }
@@ -1557,43 +2703,60 @@
      "str",
      "uuid"
     ],
-    "null",
-    "null",
-    "null",
-    [
-     "null",
-     "null",
-     {
-      "*": [
-       {
-        "any": [
-         "null",
-         "str"
-        ]
-       },
-       "int",
-       "int",
-       {
-        "any": [
-         "absent",
-         "str"
-        ]
-       }
-      ]
-     },
-     {
-      "any": [
-       "absent",
-       "null"
-      ]
-     },
-     {
-      "any": [
-       "absent",
-       "int"
-      ]
-     }
-    ]
+    {
+     "any": [
+      "absent",
+      "null"
+     ]
+    },
+    {
+     "any": [
+      "absent",
+      "null"
+     ]
+    },
+    {
+     "any": [
+      "absent",
+      "null"
+     ]
+    },
+    {
+     "opt": [
+      "null",
+      "null",
+      {
+       "*": [
+        {
+         "any": [
+          "null",
+          "str"
+         ]
+        },
+        "int",
+        "int",
+        {
+         "any": [
+          "absent",
+          "str"
+         ]
+        }
+       ]
+      },
+      {
+       "any": [
+        "absent",
+        "null"
+       ]
+      },
+      {
+       "any": [
+        "absent",
+        "int"
+       ]
+      }
+     ]
+    }
    ]
   },
   "nzlxg": {
@@ -1665,7 +2828,20 @@
       {
        "any": [
         "absent",
-        "int"
+        "int",
+        "null"
+       ]
+      },
+      {
+       "any": [
+        "absent",
+        "str"
+       ]
+      },
+      {
+       "any": [
+        "absent",
+        "str"
        ]
       }
      ]

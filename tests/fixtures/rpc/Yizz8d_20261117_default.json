@@ -1,0 +1,21 @@
+{
+ "view": "grid",
+ "payload": [
+  null,
+  "<text>",
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  [
+   "MODEL",
+   "AGENT"
+  ],
+  false,
+  false
+ ]
+}

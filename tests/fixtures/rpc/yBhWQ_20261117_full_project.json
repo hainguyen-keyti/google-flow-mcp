@@ -1,0 +1,39 @@
+{
+ "view": "project",
+ "payload": [
+  [
+   [
+    "veo_3_1_upsampler_1080p",
+    1
+   ],
+   [
+    "macaron_cookie",
+    1
+   ],
+   [
+    "omni_upsampler_360p",
+    1
+   ],
+   [
+    "veo_3_1_quality",
+    1
+   ],
+   [
+    "upsample_2k",
+    1
+   ],
+   [
+    "<text>",
+    1
+   ],
+   [
+    "veo_3_1_lite",
+    1
+   ],
+   [
+    "veo_3_1_fast",
+    1
+   ]
+  ]
+ ]
+}
