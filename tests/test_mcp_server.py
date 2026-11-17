@@ -5379,3 +5379,48 @@ def test_a_retry_cannot_change_the_resolution_of_the_job_it_retries(monkeypatch,
     ran = _call(tool, {**call, "resolution": "360p", "job_id": "az-res-same"})
     assert not ran.is_error, _texts([ran])
     assert len(reached) == 1 and reached[0]["resolution"] == "360p"
+
+
+def test_the_kept_browser_is_given_back_after_a_balance_read_so_gflow_does_not_wait_for_it(
+    monkeypatch, tmp_path
+):
+    """Plan BB, measured 2026-11-17 on one free gen_t2i each: 98 s before the reads went through the server's session,
+    197 s after. The server keeps its Chrome for 2 min after a call, and gflow, another process on the same profile,
+    waited for it. So each read gives the browser back."""
+    steps = []
+
+    class Keeper:
+        async def run(self, fn):
+            steps.append("read")
+            return {"balance": 61}
+
+        async def close(self):
+            steps.append("closed")
+
+    async def fake_run_job(job, out_dir, *, read_credits, **kwargs):
+        before = await read_credits()
+        steps.append("gflow")
+        return {
+            "job_id": job.job_id,
+            "outputs": [],
+            "credits_before": before,
+            "credits_after": await read_credits(),
+        }
+
+    backend = mcp_server.Backend(out_dir=tmp_path)
+    backend._keeper = Keeper()
+    monkeypatch.setattr(mcp_server.gen_mod, "run_job", fake_run_job)
+    monkeypatch.setattr(mcp_server, "backend", backend)
+
+    async def agent_off(self, project, resolution=None, model=None, aspect=None):
+        return False
+
+    monkeypatch.setattr(mcp_server.Backend, "_agent_off", agent_off)
+
+    async def fn(session):
+        return await session.call_tool("gen_t2i", {"prompt": "a boat", "project": "P", "job_id": "job-bb-k"})
+
+    answer = _payload(with_client(fn))
+
+    assert answer["credits_before"] == 61
+    assert steps[:3] == ["read", "closed", "gflow"], steps

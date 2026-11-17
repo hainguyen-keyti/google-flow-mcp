@@ -1146,6 +1146,9 @@ class Backend:
             # reaches this tool's answer. gen.read_credits_live opened a session nobody heard from.
             read = self._kept(await self._with(reader.credits))
             standing.extend(left for left in read.pop("notices_left_standing", []) if left not in standing)
+            # The kept Chrome is given back at once: gflow is another process on this profile and waited the whole
+            # idle time for it (measured 2026-11-17: 197 s for a free image against 98 s).
+            await self.close()
             return read["balance"]
 
         async def run() -> dict[str, Any]:
