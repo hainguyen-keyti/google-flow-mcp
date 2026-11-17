@@ -3368,7 +3368,8 @@ def test_a_clip_with_more_than_one_version_has_no_known_price(kind, flip):
     ]
     rows = [*(reversed(versions) if flip else versions), {"id": "b", "kind": "video", "model": "x_t2v_8s"}]
 
-    assert clips.editor_expected_price(kind, rows, "a") is None
+    # Plan BA: an edit of a clip extended once was paid (2026-11-17) and is quoted; its extend was not.
+    assert clips.editor_expected_price(kind, rows, "a") == (21 if kind == "edit" else None)
     # The same key listed twice is still one version.
     twice = [versions[0], dict(versions[0])]
     assert clips.editor_expected_price(kind, twice, "a") is not None
@@ -3457,3 +3458,63 @@ def test_the_public_editor_drivers_hand_every_argument_on(monkeypatch, tmp_path,
         "wait": 30.0,
         "max_credits": 7,
     }
+
+
+# Plan BA, paid on default 2026-11-17 (project 230dbf4f): the edit of a 360p 3 s clip that had been edited cost 3,
+# of one that had been upscaled to 720p cost 3, and of one that had been extended once cost 7 (3 s + 4 s).
+ORIGINAL = {"id": "a", "kind": "video", "model": "macaron_cookie_t2v_3s_360p", "workflow_id": "w0"}
+EDITED = {"id": "a", "kind": "video", "model": "macaron_cookie_edit_360p", "workflow_id": "w1"}
+UPSCALED = {"id": "a", "kind": "video", "model": "omni_upsampler_360p", "workflow_id": "w0_720p_upsampled"}
+EXTENDED = {"id": "a", "kind": "video", "model": "models/omni_1p5_pro_flow", "workflow_id": "w2"}
+
+
+@pytest.mark.parametrize(
+    ("versions", "price"),
+    [
+        ([ORIGINAL, EDITED], 3),
+        ([ORIGINAL, EDITED, {**EDITED, "workflow_id": "w9"}], 3),
+        ([ORIGINAL, UPSCALED], 3),
+        ([ORIGINAL, EXTENDED], 7),
+        ([ORIGINAL, EXTENDED, EDITED, UPSCALED], 7),
+    ],
+    ids=["edited", "edited twice", "upscaled", "extended once", "extended, edited and upscaled"],
+)
+def test_an_edit_of_a_clip_with_measured_versions_is_quoted_what_was_paid(versions, price):
+    other = {"id": "b", "kind": "video", "model": "macaron_cookie_i2v_8s"}
+    for rows in (versions, list(reversed(versions))):
+        assert clips.editor_expected_price("edit", [other, *rows, other], "a") == price, rows
+
+
+@pytest.mark.parametrize(
+    "versions",
+    [
+        [ORIGINAL, EXTENDED, {**EXTENDED, "workflow_id": "w3"}],
+        [{**ORIGINAL, "model": "macaron_cookie_i2v_8s_360p"}, EXTENDED],
+        [ORIGINAL, {**EDITED, "model": "some_new_tool_360p"}],
+        [EDITED, UPSCALED],
+        [ORIGINAL, {**ORIGINAL, "model": "macaron_cookie_t2v_4s_360p", "workflow_id": "w5"}],
+    ],
+    ids=[
+        "extended twice",
+        "extended past 10 s",
+        "a version of an unknown kind",
+        "no original",
+        "two originals",
+    ],
+)
+def test_an_edit_of_a_clip_with_versions_nobody_paid_for_stays_unquoted(versions):
+    for rows in (versions, list(reversed(versions))):
+        assert clips.editor_expected_price("edit", rows, "a") is None, rows
+
+
+@pytest.mark.parametrize("versions", [[ORIGINAL, EDITED], [ORIGINAL, UPSCALED], [ORIGINAL, EXTENDED]])
+def test_an_extend_of_a_clip_with_several_versions_stays_unquoted(versions):
+    # No extend of such a clip was paid, and an extend past 10 s may be billed double.
+    assert clips.editor_expected_price("extend", versions, "a") is None
+
+
+@pytest.mark.parametrize("kind", ["extend", "edit"])
+def test_the_public_editor_drivers_cannot_be_called_with_no_cap(tmp_path, kind):
+    # Plan BA, I1 (review of plan AZ, finding 3): the story pipeline paid for edits with no cap at all.
+    with pytest.raises(TypeError, match="max_credits"):
+        getattr(clips, kind)("S", "P", "M", "keep going", out_dir=tmp_path, job_id="j")

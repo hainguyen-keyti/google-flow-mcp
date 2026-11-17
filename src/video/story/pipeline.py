@@ -9,6 +9,7 @@ from typing import Any
 from video import gen, post
 from video.flow import clips, composer
 from video.flow import uploads as uploads_mod
+from video.flow import video as video_mod
 from video.story import persona, product, shots, shots2
 
 PRICE_PER_SHOT = 10
@@ -34,6 +35,8 @@ def dress_prompt(motion: str = "") -> str:
 
 
 EDIT_PROMPT = dress_prompt()
+# Every clip this pipeline edits is one it made at 720p for 8 s, and an edit costs its clip's cell.
+EDIT_CAP = video_mod.price(video_mod.EDIT_MODEL, "720p", 8, 1)
 
 
 def job_state(ledger: gen.Ledger, job_id: str) -> str:
@@ -203,7 +206,14 @@ async def _edit_shot(
     ledger = gen.Ledger(Path(out_dir) / "ledger.jsonl")
     attempt = free_editor_job(ledger, job_id)
     edited = await clips.edit(
-        session, project_id, media_id, prompt, out_dir=out_dir, job_id=attempt, wait=wait
+        session,
+        project_id,
+        media_id,
+        prompt,
+        out_dir=out_dir,
+        job_id=attempt,
+        wait=wait,
+        max_credits=EDIT_CAP,
     )
     produced = [o for o in edited.get("outputs", []) if o.get("path")]
     if not produced:
@@ -567,6 +577,7 @@ async def run2(
                     out_dir=out_dir,
                     job_id=f"{job}-edit",
                     wait=wait,
+                    max_credits=EDIT_CAP,
                 )
                 produced = [o for o in edited.get("outputs", []) if o.get("path")]
                 if produced:

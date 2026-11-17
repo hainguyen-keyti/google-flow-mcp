@@ -363,28 +363,60 @@ _WHY_DEFAULT = (
 EXTEND_SECONDS = 4
 
 
+# The model keys of a clip's later versions, as the listing names them (read 2026-11-17). A clip lists one row per
+# version under one id, in no fixed order, and no row says a length.
+UPSCALE_KEY = "omni_upsampler"
+EXTEND_KEY = "models/omni_1p5_pro_flow"
+EDIT_WORD = "edit"
+# Paid 2026-11-17 on 360p 3 s clips: the edit of an edited clip cost 3 and of an upscaled one 3 (the original's
+# cell), of a clip extended once 7 (the original's 3 s and the extend's 4 s, though the edited file ran 3.97 s).
+EDIT_QUOTED_TO_S = 10
+
+
+def _edit_seconds(keys: list[str], extends: int) -> tuple[str, int] | None:
+    """The original key of a clip and the seconds its edit is billed for, or None when its versions are not ones an
+    edit was paid on: one original, any edits and upscales, at most one extend, and no more than 10 s in all."""
+    from video.flow import video as video_mod
+
+    originals = [key for key in keys if video_mod.KEY_LENGTH.search(key)]
+    later = [key for key in keys if key not in originals and key != EXTEND_KEY]
+    if len(originals) != 1 or extends > 1:
+        return None
+    if any(not key.startswith(UPSCALE_KEY) and EDIT_WORD not in key.split("_") for key in later):
+        return None
+    seconds = int(video_mod.KEY_LENGTH.search(originals[0]).group(1)) + extends * EXTEND_SECONDS
+    return (originals[0], seconds) if seconds <= EDIT_QUOTED_TO_S else None
+
+
 def editor_expected_price(kind: str, rows: list[dict[str, Any]], media_id: str) -> int | None:
     """What an edit or an extend is expected to cost, off the source clip's own cell: an edit costs that cell (Omni
     1.2 bills an edit like a generation, by the second), an extend EXTEND_SECONDS at the clip's resolution. The length
-    and resolution are read off the clip's model key; None when the key names no length, the cell has no price, or
-    the clip lists more than one version."""
+    and resolution are read off the clip's model key. None when the key names no length or the cell has no price;
+    for a clip that lists several versions, an edit is quoted where one was paid (`_edit_seconds`) and an extend is
+    not quoted."""
     from video.flow import video as video_mod  # composer imports this module, and video imports composer
 
     if kind not in ("edit", "extend"):
         return None
     # It also runs after the money is gone, so it never raises: an error here cost an outcome row on 2026-09-13.
     try:
-        # An extended or upscaled clip lists one row per version under one id, in no fixed order (measured
-        # 2026-11-16), and its length is then no longer the first key's: nothing is quoted for it.
-        keys = {row.get("model") for row in rows if row.get("id") == media_id}
-        if len(keys) != 1 or None in keys:
+        versions = [row for row in rows if row.get("id") == media_id]
+        keys = {row.get("model") for row in versions}
+        if not keys or None in keys:
             return None
-        (key,) = keys
-        length = video_mod.KEY_LENGTH.search(key)
-        if length is None:
-            return None
+        if kind == "extend":
+            # No extend of a clip with several versions was paid: its length is no longer its first key's.
+            (key,) = keys if len(keys) == 1 else (None,)
+            if key is None or video_mod.KEY_LENGTH.search(key) is None:
+                return None
+            seconds = EXTEND_SECONDS
+        else:
+            extends = {row.get("workflow_id") for row in versions if row.get("model") == EXTEND_KEY}
+            found = _edit_seconds(sorted(keys), len(extends))
+            if found is None:
+                return None
+            key, seconds = found
         resolution = "360p" if key.endswith("_360p") else "720p"
-        seconds = int(length.group(1)) if kind == "edit" else EXTEND_SECONDS
         return video_mod.price(video_mod.EDIT_MODEL, resolution, seconds, 1)
     except Exception:  # noqa: BLE001
         return None
@@ -413,8 +445,8 @@ def check_editor_cap(kind: str, expected: int | None, max_credits: int | None) -
         )
     if expected is None and max_credits < (dearest := editor_dearest(kind)):
         raise ValueError(
-            f"{kind}: this clip has no known price (its model key names no length, or it lists more than one "
-            f"version after an extend or an upscale), so the cap must cover the dearest "
+            f"{kind}: this clip has no known price (its model key names no length, or it lists versions no {kind} "
+            f"was ever paid on), so the cap must cover the dearest "
             f"{kind} on the table, {dearest} credits; max_credits is {max_credits}. Nothing was clicked and nothing "
             "was spent"
         )
@@ -849,7 +881,7 @@ async def extend(
     out_dir: Path,
     job_id: str | None = None,
     wait: float = 240.0,
-    max_credits: int | None = None,
+    max_credits: int,
 ) -> dict[str, Any]:
     return await _generate_from_editor(
         session,
@@ -873,7 +905,7 @@ async def edit(
     out_dir: Path,
     job_id: str | None = None,
     wait: float = 240.0,
-    max_credits: int | None = None,
+    max_credits: int,
 ) -> dict[str, Any]:
     return await _generate_from_editor(
         session,

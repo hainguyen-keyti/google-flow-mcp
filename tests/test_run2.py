@@ -6,6 +6,7 @@ from video.story import pipeline, shots2
 
 def test_run2_sends_every_shot_down_the_route_measured_for_it(monkeypatch, tmp_path):
     calls: list[tuple[str, str]] = []
+    caps: list[tuple[str, object]] = []
 
     async def fake_persona(session, project_id, **kwargs):
         return {"entity_id": "e", "name": "Mai", "created": False}
@@ -27,6 +28,7 @@ def test_run2_sends_every_shot_down_the_route_measured_for_it(monkeypatch, tmp_p
 
     async def fake_edit(session, project_id, media_id, prompt, **kwargs):
         calls.append(("edit", kwargs.get("job_id", "")))
+        caps.append((kwargs.get("job_id", ""), kwargs.get("max_credits")))
         return {"outputs": [{"media_id": media_id, "path": str(tmp_path / "edited.mp4")}], "spent": 20}
 
     async def fake_extend(session, project_id, media_id, prompt, **kwargs):
@@ -75,6 +77,10 @@ def test_run2_sends_every_shot_down_the_route_measured_for_it(monkeypatch, tmp_p
     # The last three shots are edits of the mirror clip, not generations at all.
     assert jobs[-3:] == ["tryon2-05", "tryon2-05b", "tryon2-06"]
     assert len(result["shots"]) == len(shots2.SHOTS) + shots2.EXTRA_TAKES
+    # Plan BA, I1: every edit the pipeline pays for carries a cap, the cell of the 720p 8 s clip it edits. Both of
+    # its call sites are in this run: a shot made by editing, and the edit that dresses a generated shot.
+    assert len(caps) == 4 and {cap for _, cap in caps} == {24}, caps
+    assert any(job.endswith("-edit") for job, _ in caps) and any(not job.endswith("-edit") for job, _ in caps)
 
 
 def test_run2_continues_the_chain_from_the_first_take_not_the_spare(monkeypatch, tmp_path):
