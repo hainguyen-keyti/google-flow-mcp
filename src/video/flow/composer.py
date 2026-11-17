@@ -767,7 +767,10 @@ _LEFT_JS = """() => ({
 })"""
 
 
-START = "flow-prompt-box button[aria-label='Start generation']"
+START = (
+    "flow-prompt-box button[aria-label='Start generation'], "
+    "flow-base-prompt-box button[aria-label='Start generation']"
+)
 START_TRIAL_MS = 8_000
 
 
@@ -799,9 +802,12 @@ async def _start_ready(page: Any, start: Any) -> None:
                 f"Start generation is covered by {where}, which says {cover['text']!r}; nothing was clicked and "
                 "nothing was spent"
             ) from None
+        # Playwright's own last words say which it was: not visible, not enabled, not stable.
+        log = [line.strip(" -") for line in str(exc).split("Call log:")[-1].splitlines() if line.strip(" -")]
+        seen = next((line for line in reversed(log) if line.startswith("element is")), log[-1] if log else "")
         raise LookupError(
-            "Start generation could not be clicked (it is not enabled, or never held still): "
-            f"{str(exc).split('Call log:')[0].strip()[:120]}; nothing was clicked and nothing was spent"
+            f"Start generation could not be clicked ({seen[:120] or 'no reason given'}); nothing was clicked and "
+            "nothing was spent"
         ) from None
 
 

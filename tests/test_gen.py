@@ -648,6 +648,45 @@ def _run_job_scan(sources):
     return offenders, found, allowed
 
 
+def _reader_faults(function):
+    """What makes the allowed `balance` reader something other than a read through the server's own session
+    (review of plan BB): the job is handed another profile, `balance` is bound twice, or its body reads any other way."""
+    import ast
+
+    faults = []
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "attr", getattr(node.func, "id", "")) == "run_job"
+        ):
+            given = {keyword.arg: ast.unparse(keyword.value) for keyword in node.keywords}
+            if given.get("profile") != "self.profile":
+                faults.append(f"run_job gets profile={given.get('profile')}")
+    readers = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "balance"
+    ]
+    stores = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Name) and node.id == "balance" and isinstance(node.ctx, ast.Store)
+    ]
+    if len(readers) != 1 or stores:
+        return [*faults, f"balance is defined {len(readers)} times and assigned {len(stores)} times"]
+    sessions = []
+    for node in ast.walk(readers[0]):
+        if isinstance(node, ast.Call):
+            called = ast.unparse(node.func)
+            if called.endswith("._with"):
+                sessions.append(ast.unparse(node))
+            if called.split(".")[-1] in ("read_credits_live", "FlowSession", "run_gflow"):
+                faults.append(f"balance calls {called}")
+    if sessions != ["self._with(reader.credits)"]:
+        faults.append(f"balance reads through {sessions}")
+    return faults
+
+
 def _profiles_named(function):
     import ast
 
@@ -686,15 +725,46 @@ def test_no_caller_reads_the_balance_on_a_profile_of_its_own():
     # Inside that function the only profile there is, is the server's.
     profiles, sessions = _profiles_named(allowed[0])
     assert profiles and set(profiles) == {"self.profile"} and sessions == [], (profiles, sessions)
+    assert _reader_faults(allowed[0]) == []
 
 
 ALLOWED = """
 class Backend:
     async def generate(self):
         async def balance():
-            return 1
+            read = self._kept(await self._with(reader.credits))
+            return read["balance"]
         return await gen_mod.run_job(job, target, profile=self.profile, read_credits=balance)
 """
+READ = "self._kept(await self._with(reader.credits))"
+
+
+@pytest.mark.parametrize(
+    ("text", "says"),
+    [
+        (ALLOWED.replace(READ, '{"balance": await gen_mod.read_credits_live("acc2")}'), "read_credits_live"),
+        (
+            ALLOWED.replace(
+                "        return await gen_mod",
+                "        balance = other_reader('acc2')\n        return await gen_mod",
+            ),
+            "assigned 1",
+        ),
+        (ALLOWED.replace(READ, "self.other._with(reader.credits)"), "reads through"),
+        (ALLOWED.replace(READ, "self._with(other.credits)"), "reads through"),
+        (ALLOWED.replace("profile=self.profile", 'profile="acc2"'), "profile='acc2'"),
+        (ALLOWED.replace("profile=self.profile, ", ""), "profile=None"),
+    ],
+    ids=["its own session", "rebound", "another backend", "another read", "another profile", "no profile"],
+)
+def test_the_allowed_reader_is_held_to_a_read_through_the_servers_own_session(text, says):
+    # Review of plan BB, finding 2: each of these read the balance on a second account and the scan flagged none.
+    _, _, allowed = _run_job_scan({"video/mcp_server.py": ALLOWED})
+    assert _reader_faults(allowed[0]) == []
+
+    _, _, allowed = _run_job_scan({"video/mcp_server.py": text})
+    faults = _reader_faults(allowed[0])
+    assert faults and any(says in fault for fault in faults), faults
 
 
 @pytest.mark.parametrize(
@@ -731,7 +801,7 @@ def test_the_allowed_reader_function_may_name_no_other_profile():
     _, _, allowed = _run_job_scan({"video/mcp_server.py": ALLOWED})
     assert _profiles_named(allowed[0]) == (["self.profile"], [])
 
-    drifted = ALLOWED.replace("return 1", "return await read(FlowSession(other.profile))")
+    drifted = ALLOWED.replace('return read["balance"]', "return await read(FlowSession(other.profile))")
     _, _, allowed = _run_job_scan({"video/mcp_server.py": drifted})
     profiles, sessions = _profiles_named(allowed[0])
     assert set(profiles) != {"self.profile"} and sessions, (profiles, sessions)

@@ -1932,6 +1932,7 @@ class _SubmitPage:
         self.shots = []
         self.screenshot_error = None
         self.start_blocked = False
+        self.text = ""
 
     async def wait_for_timeout(self, ms):
         return None
@@ -1971,7 +1972,7 @@ class _SubmitPage:
     async def evaluate(self, script, arg=None):
         assert script == composer._LEFT_JS
         self.log.append("left read")
-        return {"mentions": self.mentions, "bar": 0, "text": ""}
+        return {"mentions": self.mentions, "bar": 0, "text": self.text}
 
 
 class _SubmitSession:
@@ -2052,7 +2053,9 @@ def _install(
 
     async def read_again(session):
         log.append("price again")
-        if moves_the_box:
+        if moves_the_box == "text":
+            session.page.text = "a prompt the pane's Escape cut short"
+        elif moves_the_box:
             session.page.mentions += 1
         return confirm if price_again is None else price_again
 
@@ -5151,10 +5154,11 @@ def _reads_price(log, price):
     return read
 
 
-def test_a_prompt_box_that_changed_while_the_price_was_read_again_is_refused(monkeypatch, tmp_path):
+@pytest.mark.parametrize("moved", [True, "text"], ids=["a chip", "the text alone"])
+def test_a_prompt_box_that_changed_while_the_price_was_read_again_is_refused(monkeypatch, tmp_path, moved):
     # I3: the second read opens the settings pane; what it leaves in the box has to be what verify read.
     log = []
-    _install(monkeypatch, tmp_path, log, moves_the_box=True)
+    _install(monkeypatch, tmp_path, log, moves_the_box=moved)
 
     with pytest.raises(RuntimeError, match="prompt box changed"):
         _submit(_SubmitSession(log), tmp_path, log)
@@ -5210,3 +5214,34 @@ def test_the_second_price_read_opens_the_pane_reads_and_closes_it(monkeypatch):
     price = asyncio.run(composer._price_again(type("S", (), {"page": page})()))
 
     assert price == 27 and opened == ["recheck"] and page.pressed == ["Escape"]
+
+
+def test_a_start_button_that_is_not_covered_says_what_playwright_saw(monkeypatch, tmp_path):
+    # Review of plan BB, finding 5: a missing, a disabled and an unstable button all read the same.
+    log = []
+    _install(monkeypatch, tmp_path, log)
+
+    class Disabled(_Start):
+        async def click(self, timeout=None, trial=False):
+            raise PlaywrightTimeoutError(
+                "Locator.click: Timeout 8000ms exceeded.\nCall log:\n  - waiting for the button\n"
+                "    - element is not enabled\n    - retrying click action (trial run)\n"
+            )
+
+    session = _SubmitSession(log)
+    session.page.get_by_role = lambda role, name=None: Disabled(log, session.page)
+
+    async def covering(page, selector):
+        return None
+
+    monkeypatch.setattr(composer.overlays, "covering", covering)
+
+    with pytest.raises(LookupError, match="element is not enabled"):
+        _submit(session, tmp_path, log)
+
+
+def test_the_cover_of_start_is_looked_for_in_both_prompt_boxes():
+    assert [part.strip().split(" ")[0] for part in composer.START.split(",")] == [
+        "flow-prompt-box",
+        "flow-base-prompt-box",
+    ]

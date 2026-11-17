@@ -3016,8 +3016,8 @@ def test_a_notice_met_during_a_balance_read_of_a_gflow_job_is_in_the_tools_answe
 
     reads = iter(
         [
-            {"balance": 50, "dismissed_notices": ["pressed OK, got it"]},
-            {"balance": 50, "notices_left_standing": ["a notice the driver could not press"]},
+            {"balance": 50, "dismissed_notices": ["pressed OK, got it"], "notices_left_standing": ["a bar"]},
+            {"balance": 50, "notices_left_standing": ["a bar", "a notice the driver could not press"]},
         ]
     )
 
@@ -3037,7 +3037,8 @@ def test_a_notice_met_during_a_balance_read_of_a_gflow_job_is_in_the_tools_answe
 
     assert answer["credits_before"] == 50 and answer["credits_after"] == 50
     assert answer["dismissed_notices"] == ["pressed OK, got it"], answer
-    assert answer["notices_left_standing"] == ["a notice the driver could not press"], answer
+    # Both reads' standing notices, each said once.
+    assert answer["notices_left_standing"] == ["a bar", "a notice the driver could not press"], answer
 
 
 def _dummy_value(prop):
@@ -5392,10 +5393,12 @@ def test_the_kept_browser_is_given_back_after_a_balance_read_so_gflow_does_not_w
     class Keeper:
         async def run(self, fn):
             steps.append("read")
-            return {"balance": 61}
+            return {"balance": 0}
 
         async def close(self):
             steps.append("closed")
+            # A browser that will not close must not cost a paid job its balance (review of plan BB, finding 1).
+            raise RuntimeError("Target page, context or browser has been closed")
 
     async def fake_run_job(job, out_dir, *, read_credits, **kwargs):
         before = await read_credits()
@@ -5422,5 +5425,5 @@ def test_the_kept_browser_is_given_back_after_a_balance_read_so_gflow_does_not_w
 
     answer = _payload(with_client(fn))
 
-    assert answer["credits_before"] == 61
-    assert steps[:3] == ["read", "closed", "gflow"], steps
+    assert answer["credits_before"] == 0 and answer["credits_after"] == 0, answer
+    assert steps == ["read", "closed", "gflow", "read", "closed"], steps
