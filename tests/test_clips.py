@@ -3493,6 +3493,8 @@ def test_an_edit_of_a_clip_with_measured_versions_is_quoted_what_was_paid(versio
         [ORIGINAL, {**EDITED, "model": "some_new_tool_360p"}],
         [EDITED, UPSCALED],
         [ORIGINAL, {**ORIGINAL, "model": "macaron_cookie_t2v_4s_360p", "workflow_id": "w5"}],
+        [{**ORIGINAL, "model": "macaron_cookie_t2v_2s_360p"}, EXTENDED, {**EXTENDED, "workflow_id": "w3"}],
+        [ORIGINAL, {**EDITED, "model": "macaron_cookie_credited_360p"}],
     ],
     ids=[
         "extended twice",
@@ -3500,6 +3502,8 @@ def test_an_edit_of_a_clip_with_measured_versions_is_quoted_what_was_paid(versio
         "a version of an unknown kind",
         "no original",
         "two originals",
+        "extended twice within 10 s",
+        "a key that only contains the letters of edit",
     ],
 )
 def test_an_edit_of_a_clip_with_versions_nobody_paid_for_stays_unquoted(versions):
