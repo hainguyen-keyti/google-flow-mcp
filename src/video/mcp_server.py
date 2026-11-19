@@ -1148,7 +1148,7 @@ class Backend:
             standing.extend(left for left in read.pop("notices_left_standing", []) if left not in standing)
             # The kept Chrome is given back at once: gflow is another process on this profile and waited the whole
             # idle time for it (measured 2026-11-17: 197 s for a free image against 98 s). A browser that will not
-            # close costs the read nothing: run_job writes no outcome row when its second read raises.
+            # close costs the read nothing: a second read that raises leaves the job's bill unknown (plan BC).
             try:
                 await self.close()
             except Exception as exc:  # noqa: BLE001
@@ -2133,13 +2133,14 @@ async def clip_recipe(project_id: str, media_id: str, workflow_id: str | None = 
         "Extend a clip. Google retired Veo Extend on 2026-11-05; on build YyfdEJNu4Zk the extend panel shows no model "
         "picker and Flow runs the extend on its own model (the listing names it models/omni_1p5_pro_flow, measured "
         "2026-11-09), and the ledger row says editor_model absent. It spends credits and is ledgered: an extend adds "
-        "4 s and is billed at the source clip's rate by the second, so 4 credits on a 360p clip (paid twice "
-        "2026-11-09) and 12 on a 720p one (paid 2026-11-16, a 3 s source came back 7.0 s). max_credits is required: "
-        "the call is refused before the click, at no cost, when that price is over it; when the source clip's "
-        "model key names no length, or the clip already lists more than one version (it was extended, edited or "
-        "upscaled before; no extend of such a clip was paid here), the cap has to cover the dearest extend (12). An extend whose result passes 10 s was never paid "
-        "here, and Flow's generations cost double for each second past 10, so its bill may be higher than quoted: "
-        "read credits_before and credits_after. Each extend came back as a new "
+        "4 s and is quoted the omni-1.2-flash table's price of the seconds it adds, so 4 credits on a 360p clip "
+        "(paid twice 2026-11-09) and 12 on a 720p one (paid 2026-11-16, a 3 s source came back 7.0 s) while the "
+        "result stays within 10 s. Seconds landing past 10 are quoted at the table's double rate (a 720p 8 s clip: "
+        "18, a 10 s one: 24), a bound no paid run has checked: read credits_before and credits_after. max_credits is "
+        "required: the call is refused before the click, at no cost, when that price is over it; when the source "
+        "clip's model key names no length, its result would pass the table's 15 s, or the clip already lists more "
+        "than one version (it was extended, edited or upscaled before; no extend of such a clip was paid here), the "
+        "cap has to cover the dearest extend (24). Each extend came back as a new "
         "version of the same clip, which this call downloads, but they differed: on a 360p 4 s source an 8.0 s "
         "file, on a 360p 3 s source a 4.0 s file that does not begin at the source's last frame. So read the file's "
         "length and look at it before cutting it into a film. When Flow greys Extend out, the call is refused before the click, at "

@@ -2466,8 +2466,9 @@ def test_an_editor_job_at_the_measured_price_says_nothing_about_it(monkeypatch, 
 
 def test_an_extend_is_judged_against_four_seconds_of_its_source(monkeypatch, tmp_path):
     """Plan AW judged an extend against nothing, one having been paid; plan AZ paid a third (720p: 12) and the three
-    agree on 4 s at the clip's rate. The fake's source is 720p, so 12 passes in silence and 24 is said."""
-    _spending_and_producing(monkeypatch, tmp_path, before=300, after=288)
+    agree on 4 s at the clip's rate. Plan BC: an extend is judged against the table's price of the 4 s it adds. The
+    fake's source is a 720p 8 s clip, whose 4 s land on seconds 9 to 12, so 18 passes in silence and 24 is said."""
+    _spending_and_producing(monkeypatch, tmp_path, before=300, after=282)
     assert "balance_moved" not in _run_editor_job(tmp_path, kind="extend")
 
     _spending_and_producing(monkeypatch, tmp_path, before=300, after=276)
@@ -2483,7 +2484,7 @@ def test_an_extend_is_judged_against_four_seconds_of_its_source(monkeypatch, tmp
             wait=5.0,
         )
     )["balance_moved"]
-    assert (said["kind"], said["measured"], said["moved"]) == ("extend", 12, 24)
+    assert (said["kind"], said["measured"], said["moved"]) == ("extend", 18, 24)
 
 
 def test_a_job_flow_dropped_for_free_is_not_a_balance_moved(monkeypatch, tmp_path):
@@ -3308,9 +3309,10 @@ def _capped(tmp_path, kind, cap, job="j"):
     )
 
 
-@pytest.mark.parametrize(("kind", "price"), [("edit", 24), ("extend", 12)])
+@pytest.mark.parametrize(("kind", "price"), [("edit", 24), ("extend", 18)])
 def test_an_editor_job_over_its_cap_is_refused_before_the_click(monkeypatch, tmp_path, kind, price):
-    """The fake's source is an Omni 1.2 720p 8 s clip: its edit is 24, its extend 4 s at 3 a second."""
+    """The fake's source is an Omni 1.2 720p 8 s clip: its edit is 24, its extend the table's price of seconds 9 to
+    12 (plan BC), 42 - 24 = 18."""
     _spending_and_producing(monkeypatch, tmp_path, before=300, after=300 - price)
 
     with pytest.raises(ValueError, match=f"{price} credits") as refused:
@@ -3322,7 +3324,7 @@ def test_an_editor_job_over_its_cap_is_refused_before_the_click(monkeypatch, tmp
     assert _capped(tmp_path, kind, price, job="j2")["status"] == "done"
 
 
-@pytest.mark.parametrize(("kind", "dearest"), [("edit", 60), ("extend", 12)])
+@pytest.mark.parametrize(("kind", "dearest"), [("edit", 60), ("extend", 24)])
 def test_an_editor_job_on_a_clip_of_no_known_cell_needs_a_cap_that_covers_the_dearest(
     monkeypatch, tmp_path, kind, dearest
 ):
@@ -3553,3 +3555,62 @@ def test_the_pipelines_cap_lets_the_edit_of_a_clip_with_no_known_cell_through(mo
     assert expected is None
     clips.check_editor_cap("edit", expected, pipeline.EDIT_CAP)
     assert pipeline.EDIT_CAP == clips.editor_dearest("edit")
+
+
+def _table_price(resolution, seconds):
+    from video.flow import video
+
+    return video.price(video.EDIT_MODEL, resolution, seconds, 1)
+
+
+@pytest.mark.parametrize(
+    ("key", "quote"),
+    [
+        # The paid ones (2026-11-09, 2026-11-16): 4 s at the clip's rate, every second under 10.
+        ("macaron_cookie_t2v_3s_360p", 4),
+        ("macaron_cookie_t2v_3s", 12),
+        ("macaron_cookie_t2v_6s", 12),
+        # Seconds landing past 10 cost what the table charges there: twice the rate.
+        ("macaron_cookie_t2v_7s", 15),
+        ("macaron_cookie_t2v_8s_360p", 6),
+        ("macaron_cookie_t2v_8s", 18),
+        ("macaron_cookie_t2v_10s", 24),
+        ("macaron_cookie_t2v_11s", 24),
+        # Past the table's 15 s: unquoted, bounded by the dearest extend.
+        ("macaron_cookie_t2v_12s", None),
+        ("macaron_cookie_t2v_15s_360p", None),
+    ],
+)
+def test_an_extend_is_quoted_the_table_price_of_the_seconds_it_adds(key, quote):
+    """Plan BC, I2: an extend was quoted 4 s at the clip's own rate whatever its length, so the extend of a 720p
+    10 s clip was quoted 12 while the table charges 24 for seconds 11 to 14, and a cap of 12 let it through."""
+    rows = [{"id": "a", "kind": "video", "model": key}]
+
+    assert clips.editor_expected_price("extend", rows, "a") == quote
+    if quote is not None:
+        resolution = "360p" if key.endswith("_360p") else "720p"
+        length = int(re.search(r"_(\d+)s", key).group(1))
+        assert quote == _table_price(resolution, length + 4) - _table_price(resolution, length)
+
+
+def test_the_dearest_extend_is_the_dearest_four_seconds_the_table_can_add():
+    from video.flow import video
+
+    cells = video.VIDEO["models"][video.EDIT_MODEL]["price_x1"]
+    added = []
+    for cell in cells:
+        resolution, seconds = cell.split()
+        grown = _table_price(resolution, int(seconds.rstrip("s")) + 4)
+        if grown is not None:
+            added.append(grown - cells[cell])
+
+    assert clips.editor_dearest("extend") == max(added) == 24
+
+
+def test_an_extend_over_its_cap_on_a_long_clip_is_refused_before_the_click():
+    rows = [{"id": "a", "kind": "video", "model": "macaron_cookie_t2v_10s"}]
+
+    with pytest.raises(ValueError, match="costs 24 credits") as refused:
+        clips.check_editor_cap("extend", clips.editor_expected_price("extend", rows, "a"), 12)
+
+    assert "nothing was clicked" in str(refused.value)

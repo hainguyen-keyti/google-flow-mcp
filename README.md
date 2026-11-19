@@ -101,7 +101,7 @@ and Veo 3.1 Quality leave Flow on 2026-12-05, and every tool here refuses them a
 | `gen_t2v` / `gen_i2v` / `gen_r2v`, omni-1.2-flash (the default, 720p 8 s; `gen_i2v` takes an end frame up to 10 s) | by the second as above: 24 by default |
 | `gen_character` (video starring a project character, or project images alone), omni-1.2-flash at 720p, 3-15 s | 3 a second up to 10 s, 6 past it: 24 at 8 s, *unmeasured* |
 | `gen_character`, veo-lite | 10 |
-| `clip_extend` (Flow's own model; Google retired Veo Extend on 2026-11-05), `max_credits` required | 4 s at the source clip's rate: 4 on a 360p clip, 12 on a 720p one (measured 2026-11-09 and 2026-11-16) |
+| `clip_extend` (Flow's own model; Google retired Veo Extend on 2026-11-05), `max_credits` required | the table's price of the 4 s it adds: 4 on a 360p clip, 12 on a 720p one while the result stays within 10 s (measured 2026-11-09 and 2026-11-16); seconds past 10 quoted at the double rate (720p 10 s: 24), *unmeasured*; a clip of no known price needs a cap of 24 |
 | `clip_edit` (Omni 1.2 Flash, set in the editor's model picker), `max_credits` required | the source clip's own cell (a 360p 4 s clip: 4, measured 2026-11-09) |
 | `gen_t2i` / `gen_i2i` (Nano Banana 2.1, the model Flow offers in place of 2 since 2026-10-07) | 0 credits, but a daily image quota |
 | `clip_download` at 1080p, or at 720p on a 360p clip (its upscale, measured 2026-10-03; a 360p clip has no 1080p and is refused with what its menu offers) | 0 |

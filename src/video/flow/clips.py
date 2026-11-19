@@ -342,8 +342,8 @@ async def _download_upsampled(
 # price the driver can read before the click (probe 2026-09-28: the line appears only while hovering Start, and
 # it read 12 on a clip whose edit charged 20), so the balance on both sides is all there is.
 # On Omni 1.2 (paid run 2026-11-09) an edit and an extend of a 360p 4 s clip each cost 4, the figures kept here. A
-# job is judged against editor_expected_price: an edit against its own clip's cell, an extend against 4 s at the
-# clip's rate (720p: 12, paid 2026-11-16).
+# job is judged against editor_expected_price: an edit against its own clip's cell, an extend against the table's
+# price of the 4 s it adds (720p 3 s: 12, paid 2026-11-16; seconds past 10 at the double rate, plan BC, unpaid).
 MEASURED_PRICE = {"extend": 4, "edit": 4, "agent": 0}
 _FROM_TABLE = object()
 _WHY = {
@@ -358,8 +358,8 @@ _WHY_DEFAULT = (
 )
 
 
-# An extend adds this many seconds at the source clip's own per-second rate: 4 credits on two 360p clips (2026-11-09)
-# and 12 on a 720p one, which came back 7.0 s for a 3 s source (2026-11-16).
+# An extend adds this many seconds, billed as the table bills them: 4 credits on two 360p clips (2026-11-09) and 12 on
+# a 720p one, which came back 7.0 s for a 3 s source (2026-11-16); none whose result passed 10 s was paid.
 EXTEND_SECONDS = 4
 
 
@@ -394,10 +394,10 @@ def _edit_seconds(keys: list[str], extends: int) -> tuple[str, int] | None:
 
 def editor_expected_price(kind: str, rows: list[dict[str, Any]], media_id: str) -> int | None:
     """What an edit or an extend is expected to cost, off the source clip's own cell: an edit costs that cell (Omni
-    1.2 bills an edit like a generation, by the second), an extend EXTEND_SECONDS at the clip's resolution. The length
-    and resolution are read off the clip's model key. None when the key names no length or the cell has no price;
-    for a clip that lists several versions, an edit is quoted where one was paid (`_edit_seconds`) and an extend is
-    not quoted."""
+    1.2 bills an edit like a generation, by the second), an extend the table's price of the EXTEND_SECONDS it adds
+    (`_extend_price`). The length and resolution are read off the clip's model key. None when the key names no
+    length or the table has no price; for a clip that lists several versions, an edit is quoted where one was paid
+    (`_edit_seconds`) and an extend is not quoted."""
     from video.flow import video as video_mod  # composer imports this module, and video imports composer
 
     if kind not in ("edit", "extend"):
@@ -411,21 +411,31 @@ def editor_expected_price(kind: str, rows: list[dict[str, Any]], media_id: str) 
         if kind == "extend":
             # No extend of a clip with several versions was paid: its length is no longer its first key's.
             (key,) = keys if len(keys) == 1 else (None,)
-            if key is None or video_mod.KEY_LENGTH.search(key) is None:
+            length = None if key is None else video_mod.KEY_LENGTH.search(key)
+            if length is None:
                 return None
-            seconds = EXTEND_SECONDS
-        else:
-            # One extend can be listed twice under its workflow; a row that names none counts on its own.
-            flows = [row.get("workflow_id") for row in versions if row.get("model") == EXTEND_KEY]
-            extends = len({flow for flow in flows if flow}) + sum(1 for flow in flows if not flow)
-            found = _edit_seconds(sorted(keys), extends)
-            if found is None:
-                return None
-            key, seconds = found
+            return _extend_price("360p" if key.endswith("_360p") else "720p", int(length.group(1)))
+        # One extend can be listed twice under its workflow; a row that names none counts on its own.
+        flows = [row.get("workflow_id") for row in versions if row.get("model") == EXTEND_KEY]
+        extends = len({flow for flow in flows if flow}) + sum(1 for flow in flows if not flow)
+        found = _edit_seconds(sorted(keys), extends)
+        if found is None:
+            return None
+        key, seconds = found
         resolution = "360p" if key.endswith("_360p") else "720p"
         return video_mod.price(video_mod.EDIT_MODEL, resolution, seconds, 1)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _extend_price(resolution: str, length: int) -> int | None:
+    """What the table charges for the EXTEND_SECONDS an extend adds to a clip of `length` s: the seconds landing past
+    10 cost what the table charges there, twice the rate (plan BC). None past the table's longest cell."""
+    from video.flow import video as video_mod
+
+    grown = video_mod.price(video_mod.EDIT_MODEL, resolution, length + EXTEND_SECONDS, 1)
+    own = video_mod.price(video_mod.EDIT_MODEL, resolution, length, 1)
+    return None if grown is None or own is None else grown - own
 
 
 def editor_dearest(kind: str) -> int:
@@ -434,7 +444,13 @@ def editor_dearest(kind: str) -> int:
 
     cells = video_mod.VIDEO["models"][video_mod.EDIT_MODEL]["price_x1"]
     if kind == "extend":
-        return max(price for cell, price in cells.items() if cell.endswith(f" {EXTEND_SECONDS}s"))
+        added = []
+        for cell in cells:
+            resolution, seconds = cell.split()
+            price = _extend_price(resolution, int(seconds.rstrip("s")))
+            if price is not None:
+                added.append(price)
+        return max(added)
     return max(cells.values())
 
 

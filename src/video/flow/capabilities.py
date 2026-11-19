@@ -130,9 +130,10 @@ def capabilities() -> dict[str, Any]:
                     "omni-1.2-flash table (720p 8 s: 24), and clip_edit refuses over max_credits before the click"
                 ),
                 "clip_extend": (
-                    "the figure is the extend of a 360p clip; an extend adds 4 s at the source clip's rate (720p: "
-                    "12, paid 2026-11-16). An extend whose result passes 10 s was never paid here, and Flow's "
-                    "generations cost double for each second past 10, so its bill may be higher than quoted"
+                    "the figure is the extend of a 360p clip; an extend adds 4 s and is quoted the table's price "
+                    "of the seconds it adds (720p 3 s: 12, paid 2026-11-16). Seconds landing past 10 are quoted at "
+                    "the table's double rate (720p 10 s: 24), a bound no paid run has checked; a clip of no known "
+                    "price needs a cap of 24"
                 ),
             },
         },

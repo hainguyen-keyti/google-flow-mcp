@@ -162,13 +162,16 @@ mặt, tay và món đồ.
   kẹp hai đầu: t2v omni-flash 15, t2v veo-lite 10, `clip_edit` 20, `clip_extend` 10, `gen_r2v` 12; `agent_send` một
   tin nhắn thường **0**; `gen_i2v` khi đó vẫn hỏng ở bước chọn khung đầu (**0** credit, dòng sổ `failed`); nó chạy được lần đầu ngày 2026-09-18 sau khi nâng gflow lên 0.78.0, **15** credit.
   Các số của ngày đó là giá cũ. Từ 2026-11 (Omni 1.2): `clip_edit` tốn đúng ô của clip nguồn (clip 360p 4 s: 4,
-  clip 360p 3 s: 3, đo 2026-11-09 và 2026-11-16), `clip_extend` thêm 4 s theo giá giây của clip (360p: 4, 720p: 12,
-  đo 2026-11-09 và 2026-11-16; Veo Extend đã bị Google bỏ ngày 2026-11-05). Hai tool này **bắt buộc `max_credits`**:
+  clip 360p 3 s: 3, đo 2026-11-09 và 2026-11-16), `clip_extend` thêm 4 s và được báo giá theo bảng cho đúng mấy giây
+  thêm vào (360p: 4, 720p: 12 khi kết quả không vượt 10 s, đo 2026-11-09 và 2026-11-16; giây vượt 10 báo theo giá gấp
+  đôi của bảng, clip 720p 10 s: 24, chưa đo; Veo Extend đã bị Google bỏ ngày 2026-11-05). Hai tool này **bắt buộc
+  `max_credits`**:
   giá vượt trần thì bị từ chối trước cú bấm, 0 credit; edit clip đã edit vẫn tính đúng ô của
   clip, clip 360p đã upscale cũng vậy, clip 360p đã extend một lần tính số giây gốc cộng 4 (đo 2026-11-17 trên clip
   360p 3 s: 3, 3 và 7); clip 720p đã extend hay upscale, clip extend hai lần, vượt 10 s, hay có loại phiên bản chưa
   từng đo thì không biết giá, trần phải phủ ô đắt nhất
-  (edit 60); extend trên clip nhiều phiên bản chưa đo, trần phải phủ 12. Hỏng sau cú bấm vẫn để lại dòng sổ `unknown` kèm
+  (edit 60); extend trên clip nhiều phiên bản hay clip mà kết quả vượt 15 s thì chưa biết giá, trần phải phủ 24. Hỏng
+  sau cú bấm vẫn để lại dòng sổ `unknown` kèm
   lỗi và số dư đọc được. Cả 6 tool **bắt buộc `job_id`**: job mới thì id mới, gọi lại cùng job
   thì giữ id. Trước khi mở trình duyệt, MCP từ chối `job_id` đã có BẤT KỲ dòng nào (kể cả `opening`) trong mọi file
   `ledger.jsonl` dưới `out/`, kèm lời dặn soát `flow_media` và `flow_credits`, nên gọi lại không bao giờ trả tiền hai
