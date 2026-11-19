@@ -5427,3 +5427,46 @@ def test_the_kept_browser_is_given_back_after_a_balance_read_so_gflow_does_not_w
 
     assert answer["credits_before"] == 0 and answer["credits_after"] == 0, answer
     assert steps == ["read", "closed", "gflow", "read", "closed"], steps
+
+
+def test_a_gflow_job_that_exited_0_is_answered_done_with_its_outputs_when_the_balance_after_fails(
+    monkeypatch, tmp_path
+):
+    """Plan BC, I1, through the served tool and the real gen.run_job: the image is made and paid, so the answer is
+    the image and a DONE outcome with the charge unknown, not an error that hides the path."""
+    stdout = (Path(__file__).parent / "fixtures" / "gflow" / "t2i.json").read_text(encoding="utf-8")
+
+    async def fake_gflow(argv, profile="default"):
+        return 0, stdout, ""
+
+    reads = iter([{"balance": 50}, RuntimeError("Timeout 30000ms exceeded")])
+
+    async def fake_with(self, fn):
+        if fn is mcp_server.reader.credits:
+            answer = next(reads)
+            if isinstance(answer, BaseException):
+                raise answer
+            return dict(answer)
+        return {"was": False, "enabled": False}
+
+    async def no_listing(self, project, outputs):
+        return None
+
+    monkeypatch.setattr(mcp_server.gen_mod, "run_gflow", fake_gflow)
+    monkeypatch.setattr(mcp_server.Backend, "_with", fake_with)
+    monkeypatch.setattr(mcp_server.Backend, "_image_media_ids", no_listing)
+    monkeypatch.setattr(mcp_server, "backend", mcp_server.Backend(out_dir=tmp_path))
+
+    async def fn(session):
+        return await session.call_tool("gen_t2i", {"prompt": "a boat", "project": "P", "job_id": "job-bc-s"})
+
+    result = with_client(fn)
+
+    assert not result.is_error, "".join(getattr(c, "text", "") for c in result.content)
+    answer = _payload(result)
+    made = mcp_server.gen_mod.parse_result("t2i", stdout)
+    assert [o["path"] for o in answer["outputs"]] == [o["path"] for o in made], answer
+    assert (answer["credits_before"], answer["credits_after"]) == (50, None)
+    assert (answer["outcome"]["code"], answer["outcome"]["charged"]) == ("DONE", None), answer["outcome"]
+    rows = mcp_server.gen_mod.Ledger(tmp_path / "ledger.jsonl").rows("job-bc-s")
+    assert [row["status"] for row in rows] == ["submitted", "done"]

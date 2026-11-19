@@ -175,12 +175,14 @@ async def _generate_with_product(
     )
     result = await gen.run_job(job, out_dir, profile="default")
     outputs = result.get("outputs") or []
+    before, after = result["credits_before"], result["credits_after"]
     return {
         "job_id": job_id,
         "kind": "product",
         "media_id": outputs[0]["media_id"] if outputs else None,
         "path": outputs[0]["path"] if outputs else None,
-        "spent": result["credits_before"] - result["credits_after"],
+        # None when the balance after the job could not be read (plan BC): the clip is made, the bill unknown.
+        "spent": None if after is None else before - after,
     }
 
 

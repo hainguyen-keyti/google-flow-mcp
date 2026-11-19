@@ -49,3 +49,32 @@ def test_check_resumable_returns_only_the_jobs_left_to_run(tmp_path):
     ledger = gen.Ledger(tmp_path / "ledger.jsonl")
     ledger.append("tryon-01", "done", path="a.mp4")
     assert pipeline.check_resumable(ledger, ["tryon-01", "tryon-02"]) == ["tryon-02"]
+
+
+@pytest.mark.parametrize("after, spent", [(830, 10), (None, None)])
+def test_a_product_shot_says_what_it_spent_and_none_when_the_balance_after_is_unknown(
+    monkeypatch, tmp_path, after, spent
+):
+    """Plan BC: run_job answers a made and paid job with credits_after None when the read after it fails; the
+    product shot keeps its clip and says the bill is unknown instead of subtracting None."""
+    import asyncio
+    from pathlib import Path
+
+    async def fake_run_job(job, out_dir, **kwargs):
+        return {
+            "job_id": job.job_id,
+            "outputs": [{"media_id": "m-1", "path": "out/p.mp4"}],
+            "credits_before": 840,
+            "credits_after": after,
+        }
+
+    monkeypatch.setattr(pipeline.gen, "run_job", fake_run_job)
+    monkeypatch.setattr(pipeline.product, "check_image", lambda: Path("product.png"))
+
+    shot = asyncio.run(
+        pipeline._generate_with_product(
+            None, "P", prompt="the dress", job_id="prod-1", out_dir=tmp_path, wait=0
+        )
+    )
+
+    assert (shot["media_id"], shot["path"], shot["spent"]) == ("m-1", "out/p.mp4", spent)

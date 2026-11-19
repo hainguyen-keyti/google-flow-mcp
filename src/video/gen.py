@@ -319,8 +319,50 @@ async def run_job(
                 f"region. ({summary})"
             )
         raise RuntimeError(f"gflow {job.kind} exit {code} ({problem.get('error_class', '?')}): {summary}")
-    outputs = parse_result(job.kind, stdout)
-    after = await read_credits()
+    # gflow exited 0, so Flow may have made and billed the job: from here every way out settles it (plan BC, I1).
+    try:
+        outputs = parse_result(job.kind, stdout)
+    except Exception as unreadable:
+        reason = redact_error_detail(f"{type(unreadable).__name__}: {unreadable}")[:300]
+        cancelled: asyncio.CancelledError | None = None
+        try:
+            after = await read_credits()
+        except asyncio.CancelledError as stop:
+            after, cancelled = None, stop
+        except Exception:  # noqa: BLE001
+            after = None
+        bill = {"spent": before - after} if after is not None else {}
+        ledger.append(
+            job.job_id,
+            "unknown",
+            exit_code=0,
+            error=reason,
+            credits_before=before,
+            credits_after=after,
+            **bill,
+        )
+        if cancelled is not None:
+            raise cancelled
+        raise RuntimeError(
+            f"gflow {job.kind} exited 0 but its result could not be read or reported a failure ({reason}), so Flow "
+            "may have made and billed it: check flow_media and flow_credits, and never run it again under a new job_id"
+        ) from unreadable
+    try:
+        after = await read_credits()
+    except (Exception, asyncio.CancelledError) as unread:
+        # Made and paid: the outputs are kept and answered, only the bill is unknown. A cancelled call goes on
+        # being cancelled once the row is written (review of plan BC, note 2).
+        ledger.append(job.job_id, "done", outputs=outputs, credits_before=before, credits_after=None)
+        if isinstance(unread, asyncio.CancelledError):
+            raise
+        return {
+            "job_id": job.job_id,
+            "outputs": outputs,
+            "credits_before": before,
+            "credits_after": None,
+            "balance_after_unread": f"{type(unread).__name__}: the balance could not be read after the job, so "
+            "what it cost is unknown; read flow_credits",
+        }
     ledger.append(
         job.job_id, "done", outputs=outputs, credits_before=before, credits_after=after, spent=before - after
     )

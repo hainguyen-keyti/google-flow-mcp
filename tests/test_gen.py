@@ -991,3 +991,162 @@ def test_a_failed_run_keeps_no_call_log_in_its_row_or_its_error(tmp_path):
     for leak in ("Call log", "s3cret", "h1"):
         assert leak not in said and leak not in row, (said, row)
     assert "Timeout 8000ms" in said
+
+
+def _t2i_stdout():
+    return (FIXTURES / "t2i.json").read_text(encoding="utf-8")
+
+
+def _reads(*answers):
+    """A balance reader answering in turn: an int is a balance, an exception is raised."""
+    queue = list(answers)
+
+    async def read_credits():
+        answer = queue.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    return read_credits
+
+
+def test_a_job_that_exited_0_settles_done_with_its_outputs_when_the_balance_after_cannot_be_read(tmp_path):
+    """Plan BC, I1: gflow exited 0, so the image is made and paid; a failed read after it must not lose it."""
+    from video import outcome
+
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+    runner = FakeRunner(ledger, _t2i_stdout(), "job-bc1")
+
+    result = asyncio.run(
+        gen.run_job(
+            job(job_id="job-bc1", kind="t2i", model="nano2"),
+            tmp_path,
+            ledger=ledger,
+            runner=runner,
+            read_credits=_reads(840, ConnectionError("the page went away")),
+        )
+    )
+
+    expected = gen.parse_result("t2i", _t2i_stdout())
+    assert result["outputs"] == expected
+    assert (result["credits_before"], result["credits_after"]) == (840, None)
+    assert "ConnectionError" in result["balance_after_unread"]
+    rows = ledger.rows("job-bc1")
+    assert [row["status"] for row in rows] == ["submitted", "done"]
+    assert rows[-1]["outputs"] == expected
+    assert (rows[-1]["credits_before"], rows[-1]["credits_after"]) == (840, None)
+    assert rows[-1].get("spent") is None
+    said = outcome.classify(rows)
+    assert (said["code"], said["charged"]) == ("DONE", None)
+
+
+@pytest.mark.parametrize(
+    "stdout, reason",
+    [
+        ("gflow printed this, not JSON", "JSONDecodeError"),
+        (json.dumps({"status": "fail", "error": {"title": "quota"}}), "reported failure"),
+    ],
+)
+def test_a_job_that_exited_0_with_a_result_that_cannot_be_read_settles_unknown_with_the_reason(
+    tmp_path, stdout, reason
+):
+    """Plan BC, I1: exit 0 and a result nobody can read may still be a made and billed job: never a bare submit."""
+    from video import outcome
+
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+
+    with pytest.raises(RuntimeError) as failed:
+        asyncio.run(
+            gen.run_job(
+                job(job_id="job-bc2", kind="t2i", model="nano2"),
+                tmp_path,
+                ledger=ledger,
+                runner=FakeRunner(ledger, stdout, "job-bc2"),
+                read_credits=_reads(840, 830),
+            )
+        )
+
+    said = str(failed.value)
+    assert "exited 0" in said and "flow_media" in said and "new job_id" in said, said
+    rows = ledger.rows("job-bc2")
+    assert [row["status"] for row in rows] == ["submitted", "unknown"]
+    assert reason in rows[-1]["error"], rows[-1]
+    assert (rows[-1]["credits_before"], rows[-1]["credits_after"], rows[-1]["spent"]) == (840, 830, 10)
+    told = outcome.classify(rows)
+    assert (told["code"], told["charged"]) == ("UNKNOWN", 10)
+
+
+def test_a_call_cancelled_during_the_balance_read_after_exit_0_still_settles_done(tmp_path):
+    """Review of plan BC, note 2: a client that gives up cancels the call, which no `except Exception` sees; the
+    image is made and paid, so its row is written before the cancellation goes on."""
+    import asyncio as _asyncio
+
+    from video import outcome
+
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+
+    with pytest.raises(_asyncio.CancelledError):
+        asyncio.run(
+            gen.run_job(
+                job(job_id="job-bc4", kind="t2i", model="nano2"),
+                tmp_path,
+                ledger=ledger,
+                runner=FakeRunner(ledger, _t2i_stdout(), "job-bc4"),
+                read_credits=_reads(840, _asyncio.CancelledError()),
+            )
+        )
+
+    rows = ledger.rows("job-bc4")
+    assert [row["status"] for row in rows] == ["submitted", "done"]
+    assert rows[-1]["outputs"] == gen.parse_result("t2i", _t2i_stdout())
+    told = outcome.classify(rows)
+    assert (told["code"], told["charged"]) == ("DONE", None)
+
+
+def test_a_call_cancelled_while_reading_the_balance_of_an_unreadable_result_settles_unknown_and_stays_cancelled(
+    tmp_path,
+):
+    """Re-review of plan BC: the cancellation must go on as itself once the `unknown` row is written."""
+    import asyncio as _asyncio
+
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+
+    with pytest.raises(_asyncio.CancelledError):
+        asyncio.run(
+            gen.run_job(
+                job(job_id="job-bc5", kind="t2i", model="nano2"),
+                tmp_path,
+                ledger=ledger,
+                runner=FakeRunner(ledger, "not JSON", "job-bc5"),
+                read_credits=_reads(840, _asyncio.CancelledError()),
+            )
+        )
+
+    rows = ledger.rows("job-bc5")
+    assert [row["status"] for row in rows] == ["submitted", "unknown"]
+    assert (rows[-1]["credits_before"], rows[-1]["credits_after"]) == (840, None)
+    assert "spent" not in rows[-1]
+
+
+def test_a_result_that_cannot_be_read_and_a_balance_that_cannot_be_read_still_settle_unknown(tmp_path):
+    from video import outcome
+
+    ledger = gen.Ledger(tmp_path / "ledger.jsonl")
+
+    with pytest.raises(RuntimeError, match="exited 0"):
+        asyncio.run(
+            gen.run_job(
+                job(job_id="job-bc3", kind="t2i", model="nano2"),
+                tmp_path,
+                ledger=ledger,
+                runner=FakeRunner(ledger, "not JSON", "job-bc3"),
+                read_credits=_reads(840, TimeoutError("read timed out")),
+            )
+        )
+
+    rows = ledger.rows("job-bc3")
+    assert [row["status"] for row in rows] == ["submitted", "unknown"]
+    assert (rows[-1]["credits_before"], rows[-1]["credits_after"]) == (840, None)
+    assert "spent" not in rows[-1]
+    told = outcome.classify(rows)
+    assert (told["code"], told["charged"]) == ("UNKNOWN", None)
